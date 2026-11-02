@@ -153,6 +153,8 @@ The test apps (`hello`, `gfx_demo`, `audio_test`, `input_test`, `thread_test`, `
 
 ## Hardware
 
+Experimental Elecrow AIO and Waveshare Nano + 4.3-inch DSI BSPs are also available; see [board details and validation status](docs/PAX_BOARDS.md).
+
 Three boards are supported. All run the same apps from the same SD card. Adding a board:
 [docs/PORTING_GUIDE.md](docs/PORTING_GUIDE.md).
 

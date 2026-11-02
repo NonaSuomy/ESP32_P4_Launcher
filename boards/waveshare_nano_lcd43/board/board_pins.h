@@ -1,0 +1,40 @@
+// SPDX-License-Identifier: MIT
+#pragma once
+#define BOARD_ID "waveshare_nano_lcd43"
+#define BOARD_NAME "Waveshare ESP32-P4 Nano + Raspberry Pi DSI 4.3-inch"
+#define BOARD_AIO 0
+#define BOARD_LCD_H_RES 800
+#define BOARD_LCD_V_RES 480
+#define BOARD_LCD_ROT 0
+#define BOARD_TP_I2C_SDA 7
+#define BOARD_TP_I2C_SCL 8
+#define BOARD_I2C_PORT 1
+#define BOARD_AUDIO_RATE 48000
+#define BOARD_I2S_MCLK 13
+#define BOARD_I2S_BCLK 12
+#define BOARD_I2S_WS 10
+#define BOARD_I2S_DOUT 9
+#define BOARD_AUDIO_PA 53
+#define BOARD_PA_ACTIVE 1
+#define BOARD_SD_SLOT 0
+#define BOARD_SD_POWER 45
+#define BOARD_SD_CLK 43
+#define BOARD_SD_CMD 44
+#define BOARD_SD_D0 39
+#define BOARD_LCD_BL_GPIO -1
+#define BOARD_LCD_RST_GPIO -1
+#define BOARD_DSI_LANES 1
+#define BOARD_DSI_MBPS 800
+#define BOARD_PCLK 26
+#define BOARD_HPW 2
+#define BOARD_HBP 46
+#define BOARD_HFP 2
+#define BOARD_VPW 2
+#define BOARD_VBP 21
+#define BOARD_VFP 7
+/* IP101 RMII: external 50 MHz input, shared by the AIO and Nano. */
+#define BOARD_ETH_MDC 31
+#define BOARD_ETH_MDIO 52
+#define BOARD_ETH_RESET 51
+#define BOARD_ETH_CLOCK 50
+#define BOARD_ETH_PHY_ADDR 1

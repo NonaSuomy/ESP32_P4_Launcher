@@ -117,13 +117,13 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         }
         s_state = LX_NET_CONNECTING;
         post(CMD_RETRY);
-    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+    } else if (base == IP_EVENT && (id == IP_EVENT_STA_GOT_IP || id == IP_EVENT_ETH_GOT_IP)) {
         const ip_event_got_ip_t *ev = data;
-        snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&ev->ip_info.ip));
+        if(id==IP_EVENT_STA_GOT_IP)snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&ev->ip_info.ip));
         s_retries = 0;
-        s_state = LX_NET_CONNECTED;
+        if(id==IP_EVENT_STA_GOT_IP)s_state = LX_NET_CONNECTED;
         wifi_ap_record_t ap;            /* the C6 may rejoin a network it saved itself (another firmware's) */
-        if (!s_ssid[0] && esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
+        if (id==IP_EVENT_STA_GOT_IP && !s_ssid[0] && esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
             snprintf(s_ssid, sizeof(s_ssid), "%s", (char *)ap.ssid);
         ESP_LOGI(TAG, "connected to %s, %s", s_ssid, s_ip);
         esp_netif_dns_info_t dns = { 0 };
@@ -132,7 +132,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         esp_netif_dns_info_t backup = { .ip.type = ESP_IPADDR_TYPE_V4 };
         backup.ip.u_addr.ip4.addr = ESP_IP4TOADDR(1, 1, 1, 1);
         esp_netif_set_dns_info(ev->esp_netif, dns.ip.u_addr.ip4.addr ? ESP_NETIF_DNS_BACKUP : ESP_NETIF_DNS_MAIN, &backup);
-        if (s_save) {
+        if (id==IP_EVENT_STA_GOT_IP && s_save) {
             s_save = false;
             creds_save(true);
         }
@@ -148,8 +148,6 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 static bool radio_start(void)
 {
     if (s_started) return true;
-    esp_netif_init();
-    esp_event_loop_create_default();
     esp_netif_create_default_wifi_sta();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_err_t e = esp_wifi_init(&cfg);
@@ -277,6 +275,12 @@ static void net_task(void *arg)
 
 esp_err_t lx_net_init(void)
 {
+    esp_netif_init();
+    esp_err_t loop=esp_event_loop_create_default();
+    if(loop!=ESP_OK && loop!=ESP_ERR_INVALID_STATE)return loop;
+    esp_event_handler_register(IP_EVENT,IP_EVENT_ETH_GOT_IP,on_event,NULL);
+    esp_err_t wired=bsp_ethernet_init();
+    if(wired!=ESP_OK && wired!=ESP_ERR_NOT_SUPPORTED)ESP_LOGW(TAG,"Ethernet init: %s",esp_err_to_name(wired));
     creds_load();
     if (k_zones[s_tz].posix) {
         setenv("TZ", k_zones[s_tz].posix, 1);
@@ -289,9 +293,9 @@ esp_err_t lx_net_init(void)
     return ESP_OK;
 }
 
-lx_net_state_t lx_net_state(void) { return s_state; }
-const char *lx_net_ssid(void)     { return s_ssid; }
-const char *lx_net_ip(void)       { return s_ip; }
+lx_net_state_t lx_net_state(void) { return bsp_ethernet_ip()[0]?LX_NET_CONNECTED:s_state; }
+const char *lx_net_ssid(void)     { return bsp_ethernet_ip()[0]?"Ethernet":s_ssid; }
+const char *lx_net_ip(void)       { const char *eth=bsp_ethernet_ip();return eth[0]?eth:s_ip; }
 
 void lx_net_scan(void)
 {

@@ -48,6 +48,11 @@ const bsp_info_t *bsp_info(void);
 esp_err_t bsp_sdcard_mount(const char *mount_point);
 bool      bsp_sdcard_mounted(void);
 
+/* Optional wired network; call after esp_netif/event-loop initialization.
+ * Returns NOT_SUPPORTED on boards without it. The IP string is empty until DHCP. */
+esp_err_t bsp_ethernet_init(void);
+const char *bsp_ethernet_ip(void);
+
 /* ── Display ───────────────────────────────────────────────────────────────
  * The panel scans out one of bsp_display_fb_count() RGB565 framebuffers
  * (display_w x display_h, native orientation, DMA-capable PSRAM).
