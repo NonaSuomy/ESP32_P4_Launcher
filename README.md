@@ -246,6 +246,11 @@ own directory: `/sd/apps/<folder>/<app>/<app>.papp` (or `.pax`). There is one le
 apps to the main page. Other files in a folder aren't shown on the home screen and are never deleted, so the
 folder stays until they are removed. `papp_dev.py deploy` finds an app that was moved into a folder.
 
+Existing PAX cards are also supported: app containers stored flat in `/sd/roms/pax/` appear inside a read-only
+**PAX** folder on the home screen. Their neighboring JSON files and shared data folders stay in place. Store updates
+for those apps replace the existing container there; apps installed under `/sd/apps/` take precedence if the same
+manifest ID is present in both locations.
+
 A folder can have its own icon: put an `icon.png` (best 88x88) in its directory, `/sd/apps/<folder>/icon.png`.
 `apps/common/icons/make_folder_icons.py` draws the Games and Emulators icons, `folder_games.png` and `folder_emulators.png`.
 
@@ -255,6 +260,7 @@ A folder can have its own icon: put an `icon.png` (best 88x88) in its directory,
 /sd
 ├── apps/<name>/<name>.papp     applications
 ├── apps/<name>/icon.png        optional icon (square, best at 88×88, transparency OK)
+├── roms/pax/<app>.pax          existing PAX applications (also supported)
 ├── roms/<system>/              ROMs and game data (table below)
 ├── odroid/data/<system>/       emulator saves (created for you)
 └── saves/doom/                 Doom saves (create this folder)
