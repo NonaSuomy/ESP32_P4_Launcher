@@ -33,12 +33,19 @@ implemented by this launcher.
 Use ESP-IDF v5.5.2:
 
 ```sh
+python tools/enable_exfat.py  # after sourcing ESP-IDF's export.sh; one-time per IDF checkout
 cd launcher
 idf.py -B build_elecrow_p4_aio -DLX_BOARD=elecrow_p4_aio build
 idf.py -B build_waveshare_nano_lcd43 -DLX_BOARD=waveshare_nano_lcd43 build
 cd ..
 python tests/host/test_pax_boards.py
 ```
+
+ESP-IDF 5.5 hard-codes FatFs exFAT support off and exposes no Kconfig switch.
+The helper enables `FF_FS_EXFAT` in the selected `IDF_PATH` checkout; it is
+idempotent and refuses to patch an unfamiliar FatFs configuration. Keep long
+file names enabled. On an ESP-IDF release that provides `CONFIG_FATFS_FS_EXFAT`,
+enable that option instead of using the helper.
 
 If switching an already configured AIO build from different radio defaults,
 regenerate its ignored `sdkconfig.elecrow_p4_aio`: existing sdkconfig values take

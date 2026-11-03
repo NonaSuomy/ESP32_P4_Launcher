@@ -49,7 +49,9 @@ esp_err_t bsp_sdcard_mount(const char *path) {
     return ESP_OK;
   sdmmc_host_t host = SDMMC_HOST_DEFAULT();
   host.slot = BOARD_SD_SLOT;
-  host.max_freq_khz = SDMMC_FREQ_DEFAULT;
+  /* Match the PAX AIO's conservative clock. The 64-GB exFAT card is less
+   * reliable at the 20-MHz default on this wiring. */
+  host.max_freq_khz = 10000;
 #if !BOARD_AIO
   static sd_pwr_ctrl_handle_t supply;
   if (!supply) {
@@ -72,11 +74,24 @@ esp_err_t bsp_sdcard_mount(const char *path) {
   esp_vfs_fat_sdmmc_mount_config_t cfg = {.format_if_mount_failed = false,
                                           .max_files = 16,
                                           .allocation_unit_size = 16384};
-  sdmmc_card_t *card;
-  esp_err_t err = esp_vfs_fat_sdmmc_mount(path, &host, &slot, &cfg, &card);
-  if (err == ESP_OK) {
-    mounted = true;
-    board_set_cap(BSP_CAP_SDCARD);
+  sdmmc_card_t *card = NULL;
+  esp_err_t err = ESP_FAIL;
+  for (int attempt = 1; attempt <= 3; attempt++) {
+    err = esp_vfs_fat_sdmmc_mount(path, &host, &slot, &cfg, &card);
+    if (err == ESP_OK) {
+      mounted = true;
+      board_set_cap(BSP_CAP_SDCARD);
+      ESP_LOGI(TAG, "SD mounted at %s: %s, %llu MB, %d kHz", path,
+               card->cid.name,
+               (unsigned long long)card->csd.capacity * card->csd.sector_size /
+                   (1024 * 1024),
+               card->real_freq_khz);
+      break;
+    }
+    ESP_LOGW(TAG, "SD mount attempt %d/3 failed: %s (0x%x)", attempt,
+             esp_err_to_name(err), (unsigned)err);
+    if (attempt < 3)
+      vTaskDelay(pdMS_TO_TICKS(100));
   }
   return err;
 }
