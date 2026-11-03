@@ -3,8 +3,10 @@
 #include "board_pins.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
+#include "hal/mipi_dsi_host_ll.h"
 #include "esp_cache.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
@@ -15,10 +17,29 @@
 static const char *TAG = "pax_display";
 static esp_lcd_panel_handle_t panel;
 static uint16_t *fb[2];
+#if !BOARD_AIO
+/* P4 rev 1.x shares a single input/output pixel-format selector in the DSI
+ * bridge. Keep launcher rendering RGB565, then convert to the panel's RGB888
+ * scanout buffers as PAX does for this hardware revision. */
+static uint8_t *scan_fb[2];
+#endif
 static SemaphoreHandle_t done, vsync;
 static portMUX_TYPE flip_lock = portMUX_INITIALIZER_UNLOCKED;
 static int visible, target, edges;
 static i2c_master_dev_handle_t control;
+#if !BOARD_AIO
+static void rgb565_to_rgb888(const uint16_t *src, uint8_t *dst, size_t pixels) {
+  for (size_t i = 0; i < pixels; i++) {
+    uint16_t px = src[i];
+    uint8_t r = (px >> 11) & 0x1f;
+    uint8_t g = (px >> 5) & 0x3f;
+    uint8_t b = px & 0x1f;
+    dst[i * 3 + 0] = (b << 3) | (b >> 2);
+    dst[i * 3 + 1] = (g << 2) | (g >> 4);
+    dst[i * 3 + 2] = (r << 3) | (r >> 2);
+  }
+}
+#endif
 static esp_err_t control_write(uint8_t reg, uint8_t val) {
   uint8_t bytes[] = {reg, val};
   esp_err_t e = ESP_FAIL;
@@ -120,12 +141,12 @@ esp_err_t bsp_display_init(void) {
       .virtual_channel = 0,
       .dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT,
       .dpi_clock_freq_mhz = BOARD_PCLK,
-      .in_color_format = LCD_COLOR_FMT_RGB565,
 #if BOARD_AIO
+      .in_color_format = LCD_COLOR_FMT_RGB565,
       .out_color_format = LCD_COLOR_FMT_RGB565,
 #else
+      .in_color_format = LCD_COLOR_FMT_RGB888,
       .out_color_format = LCD_COLOR_FMT_RGB888,
-      .flags.disable_lp = 1,
 #endif
       .num_fbs = 2,
       .video_timing = {.h_size = BOARD_LCD_H_RES,
@@ -137,11 +158,31 @@ esp_err_t bsp_display_init(void) {
                        .vsync_back_porch = BOARD_VBP,
                        .vsync_front_porch = BOARD_VFP}};
   ESP_RETURN_ON_ERROR(esp_lcd_new_panel_dpi(bus, &dpi, &panel), TAG, "DPI");
-  ESP_RETURN_ON_ERROR(esp_lcd_dpi_panel_get_frame_buffer(
-                          panel, 2, (void **)&fb[0], (void **)&fb[1]),
-                      TAG, "buffers");
-  size_t bytes = BOARD_LCD_H_RES * BOARD_LCD_V_RES * 2;
+  void *panel_fb[2] = {NULL, NULL};
+  ESP_RETURN_ON_ERROR(
+      esp_lcd_dpi_panel_get_frame_buffer(panel, 2, &panel_fb[0], &panel_fb[1]),
+      TAG, "buffers");
+  size_t pixels = (size_t)BOARD_LCD_H_RES * BOARD_LCD_V_RES;
+  size_t bytes = pixels * 2;
+#if !BOARD_AIO
+  size_t scan_bytes = pixels * 3;
+  scan_fb[0] = panel_fb[0];
+  scan_fb[1] = panel_fb[1];
+#endif
   for (int i = 0; i < 2; i++) {
+#if BOARD_AIO
+    fb[i] = panel_fb[i];
+#else
+    fb[i] = heap_caps_aligned_calloc(64, 1, bytes,
+                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA |
+                                        MALLOC_CAP_8BIT);
+    if (!fb[i])
+      return ESP_ERR_NO_MEM;
+    memset(scan_fb[i], 0, scan_bytes);
+    ESP_RETURN_ON_ERROR(esp_cache_msync(scan_fb[i], scan_bytes,
+                                        ESP_CACHE_MSYNC_FLAG_DIR_C2M),
+                        TAG, "clear RGB888 scanout");
+#endif
     memset(fb[i], 0, bytes);
     ESP_RETURN_ON_ERROR(
         esp_cache_msync(fb[i], bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M), TAG,
@@ -156,6 +197,11 @@ esp_err_t bsp_display_init(void) {
       esp_lcd_dpi_panel_register_event_callbacks(panel, &cb, NULL), TAG, "ISR");
   ESP_RETURN_ON_ERROR(esp_lcd_panel_init(panel), TAG, "start DPI");
 #if !BOARD_AIO
+  /* The PAX Nano panel is configured for continuous DSI clock. Panel init
+   * returns the clock lane to AUTO, which can stop the clock between frames
+   * and leave this display black. Match the working PAX display driver. */
+  mipi_dsi_host_ll_set_clock_lane_state(MIPI_DSI_LL_GET_HOST(0),
+                                        MIPI_DSI_LL_CLOCK_LANE_STATE_HS);
   ESP_RETURN_ON_ERROR(control_write(0x83, 0x0d), TAG, "touch reset");
   vTaskDelay(pdMS_TO_TICKS(10));
   ESP_RETURN_ON_ERROR(control_write(0x83, 0x0f), TAG, "release touch");
@@ -185,13 +231,24 @@ esp_err_t bsp_display_show(int i) {
   ESP_RETURN_ON_ERROR(
       esp_cache_msync(fb[i], bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M), TAG,
       "flush");
+#if !BOARD_AIO
+  rgb565_to_rgb888(fb[i], scan_fb[i],
+                   (size_t)BOARD_LCD_H_RES * BOARD_LCD_V_RES);
+  ESP_RETURN_ON_ERROR(esp_cache_msync(scan_fb[i],
+                                      (size_t)BOARD_LCD_H_RES * BOARD_LCD_V_RES * 3,
+                                      ESP_CACHE_MSYNC_FLAG_DIR_C2M),
+                      TAG, "flush RGB888 scanout");
+  const void *draw_buffer = scan_fb[i];
+#else
+  const void *draw_buffer = fb[i];
+#endif
   xSemaphoreTake(done, 0);
   portENTER_CRITICAL(&flip_lock);
   target = i;
   edges = 2;
   portEXIT_CRITICAL(&flip_lock);
   esp_err_t err = esp_lcd_panel_draw_bitmap(panel, 0, 0, BOARD_LCD_H_RES,
-                                            BOARD_LCD_V_RES, fb[i]);
+                                            BOARD_LCD_V_RES, draw_buffer);
   if (err != ESP_OK) {
     portENTER_CRITICAL(&flip_lock);
     edges = 0;
