@@ -26,7 +26,7 @@ static const char *TAG = "lx_hid";
 typedef enum { DEV_FREE = 0, DEV_PAD, DEV_KBD, DEV_IGNORED } dev_kind_t;
 
 typedef enum {
-    FMT_UNKNOWN = 0, FMT_PS3, FMT_PS4, FMT_PS5, FMT_GENERIC, FMT_PSX_ADAPTOR, FMT_HID,
+    FMT_UNKNOWN = 0, FMT_PS3, FMT_PS4, FMT_PS5, FMT_GENERIC, FMT_PSX_ADAPTOR, FMT_HID, FMT_SWITCH_PRO,
 } pad_fmt_t;
 
 typedef struct {
@@ -37,6 +37,7 @@ typedef struct {
     int detect_count;
     uint16_t vid, pid;
     bool waking;                    /* DS3 asleep: its wake-up press isn't HOME */
+    volatile bool switch_report_seen;
     bool has_layout;
     hid_layout_t layout;            /* from the report descriptor */
 } dev_t;
@@ -96,6 +97,9 @@ static bool centred(uint8_t v, uint8_t lo, uint8_t hi) { return v >= lo && v <= 
 
 static pad_fmt_t detect_format(const dev_t *d, const uint8_t *p, int len)
 {
+    /* Official Switch Pro controllers emit zero-filled startup packets before
+     * report mode 0x30 is selected. Identify them by USB identity first. */
+    if (d->vid == 0x057E && d->pid == 0x2009) return FMT_SWITCH_PRO;
     if (len == 8 && d->vid == 0x0810 && d->pid == 0x0001) return FMT_PSX_ADAPTOR;
     if (d->vid == 0x054C && d->pid == 0x0268 && len >= 49) return FMT_PS3;
     if (d->has_layout && d->vid != 0x054C) return FMT_HID;  /* the pad says what it sends */
@@ -155,7 +159,7 @@ static void parse_pad(dev_t *d, const uint8_t *p, int len)
     if (d->fmt == FMT_UNKNOWN) {
         if (len < 4) return;
         d->fmt = detect_format(d, p, len);
-        static const char *const names[] = { "?", "PS3", "PS4", "PS5", "generic", "PSX adaptor", "HID descriptor" };
+        static const char *const names[] = { "?", "PS3", "PS4", "PS5", "generic", "PSX adaptor", "HID descriptor", "Switch Pro" };
         ESP_LOGI(TAG, "player %d report format: %s (%d bytes)", d->player + 1, names[d->fmt], len);
     }
     if (d->fmt == FMT_HID) {
@@ -167,6 +171,39 @@ static void parse_pad(dev_t *d, const uint8_t *p, int len)
     int16_t lx = 0, ly = 0, rx = 0, ry = 0;
     uint16_t lt = 0, rt = 0;
     switch (d->fmt) {
+    case FMT_SWITCH_PRO: {
+        /* Standard wired Pro report 0x30: 24-bit buttons and four packed
+         * 12-bit stick axes. Ignore startup packets until the mode is active. */
+        if (len < 13 || p[0] != 0x30) return;
+        d->switch_report_seen = true;
+        uint32_t sb = (uint32_t)p[3] | ((uint32_t)p[4] << 8) | ((uint32_t)p[5] << 16);
+        if (sb & (1u << 3)) b |= PAPP_BTN_A;
+        if (sb & (1u << 2)) b |= PAPP_BTN_B;
+        if (sb & (1u << 1)) b |= PAPP_BTN_X;
+        if (sb & (1u << 0)) b |= PAPP_BTN_Y;
+        if (sb & (1u << 22)) b |= PAPP_BTN_L1;
+        if (sb & (1u << 6)) b |= PAPP_BTN_R1;
+        if (sb & (1u << 23)) { b |= PAPP_BTN_L2; lt = 0xFFFF; }
+        if (sb & (1u << 7)) { b |= PAPP_BTN_R2; rt = 0xFFFF; }
+        if (sb & (1u << 8)) b |= PAPP_BTN_SELECT;
+        if (sb & (1u << 9)) b |= PAPP_BTN_START;
+        if (sb & (1u << 11)) b |= PAPP_BTN_L3;
+        if (sb & (1u << 10)) b |= PAPP_BTN_R3;
+        if (sb & (1u << 12)) b |= PAPP_BTN_HOME;
+        if (sb & (1u << 16)) b |= PAPP_BTN_DOWN;
+        if (sb & (1u << 17)) b |= PAPP_BTN_UP;
+        if (sb & (1u << 18)) b |= PAPP_BTN_RIGHT;
+        if (sb & (1u << 19)) b |= PAPP_BTN_LEFT;
+        uint16_t slx = p[6] | ((uint16_t)(p[7] & 0x0F) << 8);
+        uint16_t sly = (p[7] >> 4) | ((uint16_t)p[8] << 4);
+        uint16_t srx = p[9] | ((uint16_t)(p[10] & 0x0F) << 8);
+        uint16_t sry = (p[10] >> 4) | ((uint16_t)p[11] << 4);
+        lx = (int16_t)(((int)(slx >> 4) - 128) * 256);
+        ly = (int16_t)((128 - (int)(sly >> 4)) * 256);
+        rx = (int16_t)(((int)(srx >> 4) - 128) * 256);
+        ry = (int16_t)(((int)(sry >> 4) - 128) * 256);
+        break;
+    }
     case FMT_PS3:
         /* [01][00][btn1][btn2][ps][00][LX][LY][RX][RY] ... pressures from [18] */
         if (len < 10) return;
@@ -323,8 +360,25 @@ static void ds3_enable(hid_host_device_handle_t h)
              err == ESP_OK ? "enabled" : "request failed");
 }
 
+static void switch_pro_enable(hid_host_device_handle_t h)
+{
+    static const uint8_t commands[] = { 0x02, 0x03, 0x02, 0x04 };
+    for (size_t i = 0; i < sizeof(commands); i++) {
+        uint8_t report[] = { 0x80, commands[i] };
+        esp_err_t err = hid_host_device_send_report(h, report, sizeof(report), 1000);
+        ESP_LOGI(TAG, "Switch Pro USB handshake %u: %s", (unsigned)i + 1,
+                 err == ESP_OK ? "OK" : esp_err_to_name(err));
+        vTaskDelay(pdMS_TO_TICKS(25));
+    }
+    uint8_t mode[] = { 0x01, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0x03, 0x30 };
+    esp_err_t err = hid_host_device_send_report(h, mode, sizeof(mode), 1000);
+    ESP_LOGI(TAG, "Switch Pro report mode 0x30: %s", err == ESP_OK ? "OK" : esp_err_to_name(err));
+    vTaskDelay(pdMS_TO_TICKS(50));
+}
+
 static void product_name(hid_host_device_handle_t h, uint16_t vid, uint16_t pid, char *out, size_t len)
 {
+    if (vid == 0x057E && pid == 0x2009) { snprintf(out, len, "Switch Pro"); return; }
     if (vid == 0x054C && pid == 0x0268) { snprintf(out, len, "DualShock 3"); return; }
     if (vid == 0x054C && (pid == 0x05C4 || pid == 0x09CC)) { snprintf(out, len, "DualShock 4"); return; }
     if (vid == 0x054C && pid == 0x0CE6) { snprintf(out, len, "DualSense"); return; }
@@ -363,7 +417,8 @@ static void open_device(hid_host_device_handle_t h)
         size_t dlen = 0;
         const uint8_t *desc = hid_host_get_report_descriptor(h, &dlen);
         /* No descriptor: assume a gamepad, like the reference did */
-        if (!desc || desc_is_gamepad(desc, dlen)) d->kind = DEV_PAD;
+        if ((d->vid == 0x057E && d->pid == 0x2009) || !desc || desc_is_gamepad(desc, dlen))
+            d->kind = DEV_PAD;
         else ESP_LOG_BUFFER_HEX_LEVEL(TAG, desc, dlen < 128 ? dlen : 128, ESP_LOG_DEBUG);   /* to see what it is */
         if (desc && d->kind == DEV_PAD) {
             d->has_layout = hid_layout_parse(desc, dlen, &d->layout);
@@ -398,6 +453,17 @@ static void open_device(hid_host_device_handle_t h)
         else if (d->vid == 0x054C && d->pid == 0x0268) {
             d->waking = true;
             ds3_enable(h);
+        } else if (d->vid == 0x057E && d->pid == 0x2009) {
+            ESP_LOGI(TAG, "Switch Pro detected; initializing wired USB HID transport");
+            for (int attempt = 1; attempt <= 3; ++attempt) {
+                switch_pro_enable(h);
+                vTaskDelay(pdMS_TO_TICKS(150));
+                if (d->switch_report_seen) {
+                    ESP_LOGI(TAG, "Switch Pro input active after handshake attempt %d", attempt);
+                    break;
+                }
+                ESP_LOGW(TAG, "No Switch Pro 0x30 report after attempt %d", attempt);
+            }
         }
     } else if (d->kind == DEV_KBD) {
         lx_input_kbd_attach();
