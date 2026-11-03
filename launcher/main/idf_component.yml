@@ -1,5 +1,8 @@
 dependencies:
   lvgl/lvgl: "~9.2.2"
+  espressif/usb:
+    version: "1.5.0"
+    override_path: "../../components/espressif__usb"
   espressif/usb_host_hid:
     version: "^1.2.1"
     override_path: "../../components/usb_host_hid"

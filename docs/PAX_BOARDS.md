@@ -34,6 +34,7 @@ Use ESP-IDF v5.5.2:
 
 ```sh
 python tools/enable_exfat.py  # after sourcing ESP-IDF's export.sh; one-time per IDF checkout
+python tools/apply_p4_usb_tt_fix.py "$IDF_PATH"  # after sourcing export.sh; one-time per IDF checkout
 cd launcher
 idf.py -B build_elecrow_p4_aio -DLX_BOARD=elecrow_p4_aio build
 idf.py -B build_waveshare_nano_lcd43 -DLX_BOARD=waveshare_nano_lcd43 build
@@ -51,6 +52,13 @@ If switching an already configured AIO build from different radio defaults,
 regenerate its ignored `sdkconfig.elecrow_p4_aio`: existing sdkconfig values take
 precedence over defaults. The test reads the generated config and catches that
 case, including esp_hosted's derived `SPI_GPIO_*` pins.
+
+The launcher vendors PAX's USB host with hub transaction-translator split
+support. On ESP32-P4, the HAL helper above configures the HS UTMI root port for
+FS/LS-only operation and applies matching 30 MHz frame timing. It patches the
+selected ESP-IDF 5.5 checkout; rerun it after replacing that checkout. This
+allows the AIO hub to pass full-speed devices instead of rejecting them as
+unsupported TT children.
 
 Each BSP has its own image/project name, so the existing updater's board check
 continues to prevent cross-board installs. `tools/make_release.py` discovers the
@@ -71,12 +79,15 @@ disables the amplifier; the AIO scales PCM because it has no controllable codec.
 
 The display waits conservatively for two refresh callbacks before reusing the
 old front buffer. Measure frame pacing before reducing this to one. Test panel
-orientation and all four touch corners, SD remount/reboot, USB controllers, mute
-and cold audio startup, C6 scan/connect, Ethernet DHCP and cable removal/fallback.
+orientation and all four touch corners, SD remount/reboot, USB controllers
+directly and behind the AIO hub, mute and cold audio startup, C6 scan/connect,
+Ethernet DHCP and cable removal/fallback.
 The Elecrow AIO was flashed and booted on P4 revision v1.3 at 80 MHz. The display
 initialized at 1024×600, the GT911 answered at 0x5D and reported touch coordinates,
 and the launcher reached Home without a reboot loop. Live use showed touch actions
 were 180° out; the touch driver now leaves the GT911 axes unrotated while the display
 compositor retains its 180° image rotation. The SD card failed to mount during this
 test, so app discovery could not yet be checked on the device. The Nano remains
-untested on hardware.
+untested on hardware. After flashing the PAX TT-capable host and P4 HAL workaround,
+the user confirmed the Switch controller works through the AIO hub; the serial
+log showed the hub and controller enumerated at full speed.

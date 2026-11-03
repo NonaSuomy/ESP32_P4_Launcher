@@ -1,0 +1,7 @@
+version: "1.5.0"
+description: PAX TT-capable ESP-IDF USB host stack
+url: https://github.com/espressif/esp-usb
+repository: https://github.com/espressif/esp-usb
+license: Apache-2.0
+dependencies:
+  idf: ">=5.0,<7.0"
