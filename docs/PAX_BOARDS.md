@@ -9,7 +9,7 @@ hardware ports; only the Elecrow AIO has been flashed so far.
 |---|---|---|
 | Display | AIO 7-inch 1024×600, 180° mounting | Waveshare Raspberry Pi DSI 4.3-inch, 800×480 |
 | MIPI | 2 lanes, 1000 Mbps, 51 MHz pixel clock | 1 lane, 800 Mbps, 26 MHz; RGB565 framebuffer, RGB888 wire |
-| Touch | GT911, I2C18/19, reset40, interrupt/address strap41 | FT5x06 0x38, I2C7/8, both axes mirrored |
+| Touch | GT911, I2C18/19, reset40, interrupt/address strap41; raw touch axes are independent of the display's 180° rotation | FT5x06 0x38, I2C7/8, both axes mirrored |
 | Backlight | PWM20, 30 kHz | I2C panel controller 0x45, register0x86 |
 | SD | slot1, 1-bit CLK43/CMD44/D039 | slot0, same 1-bit pins, LDO4 and active-low power45 |
 | Audio | external I2S WS21/BCLK22/DOUT23, active-low PA6 | ES8311 0x18, MCLK13/BCLK12/WS10/DOUT9, active-high PA53 |
@@ -68,6 +68,8 @@ orientation and all four touch corners, SD remount/reboot, USB controllers, mute
 and cold audio startup, C6 scan/connect, Ethernet DHCP and cable removal/fallback.
 The Elecrow AIO was flashed and booted on P4 revision v1.3 at 80 MHz. The display
 initialized at 1024×600, the GT911 answered at 0x5D and reported touch coordinates,
-and the launcher reached Home without a reboot loop. Touch-to-UI activation is still
-under investigation; the SD card failed to mount during this test, so app discovery
-could not yet be checked on the device. The Nano remains untested on hardware.
+and the launcher reached Home without a reboot loop. Live use showed touch actions
+were 180° out; the touch driver now leaves the GT911 axes unrotated while the display
+compositor retains its 180° image rotation. The SD card failed to mount during this
+test, so app discovery could not yet be checked on the device. The Nano remains
+untested on hardware.

@@ -130,18 +130,10 @@ int bsp_touch_read(bsp_touch_point_t *pts, int max) {
       px = b->display_w - 1;
     if (py >= b->display_h)
       py = b->display_h - 1;
-    /* panel -> landscape: inverse of the mapping documented in bsp.h */
+    /* The Elecrow GT911's raw coordinates already match the launcher's touch
+     * orientation. The compositor rotates the image separately for mounting,
+     * so applying display_rot here would make taps activate the opposite corner. */
     int x = px, y = py;
-    if (b->display_rot == 270) {
-      x = py;
-      y = b->display_w - 1 - px;
-    } else if (b->display_rot == 90) {
-      x = b->display_h - 1 - py;
-      y = px;
-    } else if (b->display_rot == 180) {
-      x = b->display_w - 1 - px;
-      y = b->display_h - 1 - py;
-    }
     s_last[i] = (bsp_touch_point_t){
         .x = x, .y = y, .size = p[5] | p[6] << 8, .id = p[0]};
   }
