@@ -16,6 +16,9 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 # PSRAM via heap_caps and malloc (large blocks)
 CONFIG_SPIRAM_USE_MALLOC=y
 
+# Allow USB HID devices connected through an external USB hub on ESP32-P4.
+CONFIG_USB_HOST_HUBS_SUPPORTED=y
+
 # FATFS long file names
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255
