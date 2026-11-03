@@ -1,9 +1,9 @@
 # Elecrow AIO and Waveshare Nano board ports
 
 These ports adapt the board wiring and panel sequences used by the PAX workspace.
-They are separate BSPs for this launcher, not PAX firmware or `.pax` compatibility.
-The new firmware has not been flashed to either physical board. Review and test it
-as an experimental port; the source pinouts have been exercised under PAX.
+They are separate BSPs for this launcher. The launcher accepts the same PAPP2 app
+container under either a `.papp` or `.pax` filename. Treat these as experimental
+hardware ports; only the Elecrow AIO has been flashed so far.
 
 | Setting | `elecrow_p4_aio` | `waveshare_nano_lcd43` |
 |---|---|---|
@@ -66,4 +66,8 @@ The display waits conservatively for two refresh callbacks before reusing the
 old front buffer. Measure frame pacing before reducing this to one. Test panel
 orientation and all four touch corners, SD remount/reboot, USB controllers, mute
 and cold audio startup, C6 scan/connect, Ethernet DHCP and cable removal/fallback.
-No physical test result is claimed by this port.
+The Elecrow AIO was flashed and booted on P4 revision v1.3 at 80 MHz. The display
+initialized at 1024×600, the GT911 answered at 0x5D and reported touch coordinates,
+and the launcher reached Home without a reboot loop. Touch-to-UI activation is still
+under investigation; the SD card failed to mount during this test, so app discovery
+could not yet be checked on the device. The Nano remains untested on hardware.

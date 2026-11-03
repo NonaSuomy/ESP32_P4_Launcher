@@ -17,7 +17,8 @@ over the USB-Serial-JTAG port.
   python tools/papp_dev.py log [--seconds N]
   python tools/papp_dev.py deploy build/apps/hello/hello.papp [--timeout 30] [-- args...]
 
-`deploy` uploads to /sd/apps/<name>/<name>.papp, runs it, streams logs until the
+`deploy` preserves the input `.papp` or `.pax` filename in /sd/apps/<name>/,
+runs it, and streams logs until the
 app exits (or timeout → force stop) and exits with the app's return code
 (124 on timeout, 125 on DevLink error) — so it can be used from scripts/CI.
 
@@ -398,21 +399,24 @@ def run_injections(dl, specs, done):
             print(f"[inject] {spec}: {e}", file=sys.stderr)
 
 
-def app_remote_path(dl, name):
-    """Where the app belongs: an app moved into a home screen folder stays there"""
+def app_remote_path(dl, name, suffix=".papp"):
+    """Where the app belongs: preserve its container suffix and any home folder."""
     def subdirs(path):
         return [e["n"] for e in json.loads(dl.request(LS, path.encode()).decode().split("\n#")[0]) if e["d"]]
     top = subdirs("/sd/apps")
     if name not in top:
         for folder in top:
             if name in subdirs(f"/sd/apps/{folder}"):
-                return f"/sd/apps/{folder}/{name}/{name}.papp"
-    return f"/sd/apps/{name}/{name}.papp"
+                return f"/sd/apps/{folder}/{name}/{name}{suffix}"
+    return f"/sd/apps/{name}/{name}{suffix}"
 
 
 def cmd_deploy(dl, args, exit_box):
     name = os.path.splitext(os.path.basename(args.file))[0]
-    remote = args.dest or app_remote_path(dl, name)
+    suffix = os.path.splitext(args.file)[1].lower()
+    if suffix not in (".papp", ".pax"):
+        raise DevLinkError("deploy expects a .papp or .pax app container")
+    remote = args.dest or app_remote_path(dl, name, suffix)
     status = dl.json(STATUS)
     if status["state"] != "idle":
         print(f"stopping running app {status['app']}", file=sys.stderr)

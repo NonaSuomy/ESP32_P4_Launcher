@@ -2,7 +2,7 @@
 
 **Run applications from an SD card on an ESP32-P4, the way a PC runs a program from a disk.**
 
-The launcher is a permanent firmware that stays in flash. Applications are `.papp` files on the SD card.
+The launcher is permanent firmware that stays in flash. Applications use the PAPP2 container on the SD card; both `.papp` and `.pax` filenames are accepted.
 Pick one and it is loaded into PSRAM, relocated, linked to the launcher's services and started.
 There's no reflashing, no reboot and no flash wear. When it exits, every resource it used is reclaimed.
 
@@ -227,7 +227,7 @@ python tools/papp_dev.py --port COM9 deploy build/apps/doom/doom.papp --timeout 
 ```
 
 `deploy` uploads the app and its icon, runs it and streams its log. You can also copy files to the card
-directly: anything at `/sd/apps/<dir>/<file>.papp` appears on the home screen. Or, on Wi-Fi, take published
+directly: anything at `/sd/apps/<dir>/<file>.papp` or `.pax` appears on the home screen. Or, on Wi-Fi, take published
 apps from Settings → Apps (see [Versions and publishing](#versions-and-publishing)).
 
 ### 5. Update the launcher later
@@ -241,8 +241,8 @@ to the previous version and says so.
 
 ## Folders
 
-A directory in `/sd/apps` with no `.papp` in it is a folder on the home screen, and each app inside it keeps its
-own directory: `/sd/apps/<folder>/<app>/<app>.papp`. There is one level of folders. Deleting a folder returns its
+A directory in `/sd/apps` with no `.papp` or `.pax` in it is a folder on the home screen, and each app inside it keeps its
+own directory: `/sd/apps/<folder>/<app>/<app>.papp` (or `.pax`). There is one level of folders. Deleting a folder returns its
 apps to the main page. Other files in a folder aren't shown on the home screen and are never deleted, so the
 folder stays until they are removed. `papp_dev.py deploy` finds an app that was moved into a folder.
 

@@ -26,7 +26,9 @@ static i2c_master_dev_handle_t s_dev;
 static uint16_t s_raw_w = BOARD_LCD_H_RES, s_raw_h = BOARD_LCD_V_RES;
 static bsp_touch_point_t
     s_last[BSP_TOUCH_MAX_POINTS]; /* last report: the GT911 only */
-static int s_last_n;              /* flags data when it changes  */
+static int s_last_n;              /* last reported contact count */
+static uint8_t s_prev_status = 0xFF;
+static bool s_touch_reported;
 
 static esp_err_t gt_read(uint16_t reg, uint8_t *buf, size_t len) {
   uint8_t addr[2] = {reg >> 8, reg & 0xFF};
@@ -87,6 +89,9 @@ esp_err_t bsp_touch_init(void) {
   }
   ESP_LOGI(TAG, "GT%.4s at 0x%02X, config v%u, %ux%u", (char *)pid, addr,
            cfg[0], s_raw_w, s_raw_h);
+  uint8_t switches = 0;
+  if (gt_read(0x804D, &switches, 1) == ESP_OK)
+    ESP_LOGI(TAG, "GT911 switch config 0x%02X", switches);
 
   board_set_cap(BSP_CAP_TOUCH);
   return ESP_OK;
@@ -98,10 +103,14 @@ int bsp_touch_read(bsp_touch_point_t *pts, int max) {
   uint8_t status;
   if (gt_read(GT911_REG_STATUS, &status, 1) != ESP_OK)
     return -1;
+  if (status != s_prev_status) {
+    ESP_LOGI(TAG, "GT911 status 0x%02X", status);
+    s_prev_status = status;
+  }
   if (!(status & 0x80))
     goto out; /* nothing new since the last report */
 
-  int n = status & 0x0F;
+  int n = status & 0x07;
   if (n > BSP_TOUCH_MAX_POINTS)
     n = BSP_TOUCH_MAX_POINTS;
   uint8_t raw[BSP_TOUCH_MAX_POINTS * GT911_POINT_SIZE];
@@ -135,6 +144,14 @@ int bsp_touch_read(bsp_touch_point_t *pts, int max) {
     }
     s_last[i] = (bsp_touch_point_t){
         .x = x, .y = y, .size = p[5] | p[6] << 8, .id = p[0]};
+  }
+  if (n > 0 && !s_touch_reported) {
+    ESP_LOGI(TAG, "touch %d point(s), raw %u,%u -> display %d,%d", n,
+             (unsigned)(raw[1] | raw[2] << 8),
+             (unsigned)(raw[3] | raw[4] << 8), s_last[0].x, s_last[0].y);
+    s_touch_reported = true;
+  } else if (n == 0) {
+    s_touch_reported = false;
   }
   s_last_n = n;
 out:
