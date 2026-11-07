@@ -17,7 +17,7 @@ M5Stack Tab5 (1280×720).
 
 | Launcher version | App ABI | Toolchain | Boards |
 |---|---|---|---|
-| 0.25.2 | 2.0-preview | ESP-IDF v5.5.2 | Guition ESP32-P4 4.3" (480×800), Guition JC1060P470C 7" (1024×600), M5Stack Tab5 (720×1280) |
+| 0.25.3 | 2.0-preview | ESP-IDF v5.5.6 | Guition ESP32-P4 4.3" (480×800), Guition JC1060P470C 7" (1024×600), M5Stack Tab5 (720×1280), Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (320×480, contributed) |
 
 > **Status: active development.** The ABI is a preview and may still change. Everything below describes
 > what exists in the code today; the plan for what comes next is in [docs/WORKPLAN.md](docs/WORKPLAN.md).
@@ -174,12 +174,12 @@ Three boards are supported. All run the same apps from the same SD card. Adding 
 
 ### 1. Install the tools
 
-- [ESP-IDF v5.5.2](https://docs.espressif.com/projects/esp-idf/en/v5.5.2/esp32p4/get-started/index.html): use this
+- [ESP-IDF v5.5.6](https://docs.espressif.com/projects/esp-idf/en/v5.5.6/esp32p4/get-started/index.html): use this
   version. The releases are built with it, and the downloaded components (Wi-Fi driver, display drivers, LVGL)
   are pinned to the exact versions that go with it. Another ESP-IDF builds with a warning, but is not tested.
 - Python with `pyserial` and `pyelftools` (the ESP-IDF Python environment works if you add them)
 
-In PowerShell, load ESP-IDF for the session. `tools/idf_env.ps1` looks in `%USERPROFILE%\esp\v5.5.2\esp-idf`
+In PowerShell, load ESP-IDF for the session. `tools/idf_env.ps1` looks in `%USERPROFILE%\esp\v5.5.6\esp-idf`
 unless `IDF_PATH` is already set:
 
 ```powershell

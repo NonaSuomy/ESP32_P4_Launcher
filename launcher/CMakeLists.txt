@@ -27,7 +27,7 @@ set(PROJECT_VER "${CMAKE_MATCH_1}")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # Releases are built and tested with this ESP-IDF; the components are pinned to match
 # (boards/<id>/board/idf_component.yml). Another ESP-IDF still builds, with this warning.
-set(LX_IDF_TESTED "5.5.2")
+set(LX_IDF_TESTED "5.5.6")
 if(NOT IDF_VERSION_MAJOR STREQUAL "" AND
    NOT "${IDF_VERSION_MAJOR}.${IDF_VERSION_MINOR}.${IDF_VERSION_PATCH}" STREQUAL LX_IDF_TESTED)
     message(WARNING "ESP-IDF ${IDF_VERSION_MAJOR}.${IDF_VERSION_MINOR}.${IDF_VERSION_PATCH}: the launcher "

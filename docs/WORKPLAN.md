@@ -194,7 +194,7 @@ Goal: remove the big unknowns before writing production code. Each spike ends wi
   components), `papp-sdk/`, `apps/`, `tools/`, `docs/`, `SDcard/` (staging mirror, as in reference).
 - `.clang-format`, naming conventions (`papp_*` = ABI, `lx_*` = launcher internals, `bsp_*` = board).
 - Build scripts (PowerShell + Python), reuse `Resolve-IdfEnv.ps1` from the reference.
-- CI (GitHub Actions, `espressif/idf:v5.5.2` container): build launcher for every board config, build
+- CI (GitHub Actions, `espressif/idf:v5.5.6` container): build launcher for every board config, build
   SDK + all apps, run host unit tests of `papp-pack`.
 
 **0.2 Spike A — relocatable images** (3 d)

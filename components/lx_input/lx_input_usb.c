@@ -25,7 +25,7 @@
 static const char *TAG = "lx_hid";
 
 /* ── USB host BNA workaround ────────────────────────────────────────────────
- * IDF v5.5.2 usb_dwc_hal_chan_decode_intr() asserts that every channel error
+ * IDF 5.5 (v5.5.2 to v5.5.6) usb_dwc_hal_chan_decode_intr() asserts that every channel error
  * comes with CHHLTD. BNA (the DMA fetched a descriptor that wasn't ready, seen
  * when apps load both cores and the PPA) arrives without it, so the assert
  * panics in the USB interrupt. Wrapped at link time (CMakeLists.txt): an error

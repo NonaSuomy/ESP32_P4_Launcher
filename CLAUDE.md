@@ -68,7 +68,7 @@ tests/board/smoke.py      Board regression: relocation test, test apps, crash re
 
 ## Environment
 
-- ESP-IDF v5.5.2 at `C:\Users\97254\esp\v5.5.2\esp-idf`; in PowerShell: `. .\tools\idf_env.ps1`
+- ESP-IDF v5.5.6 at `C:\Users\97254\esp\v5.5.6\esp-idf` (5.5.2 still installed beside it); in PowerShell: `. .\tools\idf_env.ps1`
 - Python with pyserial + pyelftools: `C:\Users\97254\.espressif\python_env\idf5.5_py3.12_env\Scripts\python.exe`
 - Boards (both chip rev v1.x, `CONFIG_ESP32P4_SELECTS_REV_LESS_V3`); USB-Serial-JTAG belongs to DevLink, UART0 is the text console:
   Guition 4.3" `guition_p4_43` on **COM9** (build in `launcher/build`), Guition 7" JC1060P470C `guition_p4_7` on **COM10**
@@ -77,7 +77,7 @@ tests/board/smoke.py      Board regression: relocation test, test apps, crash re
   `managed_components/` is shared and esp_hosted differs per board: after building another board, add `reconfigure`.
   launcher/CMakeLists.txt turns off the component manager's new-version check (newer esp_hosted releases broke configure).
   Every managed component is pinned to an exact version in the idf_component.yml files (dependencies.lock is not in git,
-  it differs per board): a self-built launcher matches the release. Other ESP-IDF versions get a configure warning.
+  it differs per board): a self-built launcher matches the release. Other ESP-IDF versions get a configure warning. 5.5.6 since launcher 0.25.3 (v3.x chips need >= 5.5.5).
   `papp_dev.py bootlog` shows what the board logged before DevLink came up (bring-up of a new board).
 
 ## Dev loop (works without touching the board)

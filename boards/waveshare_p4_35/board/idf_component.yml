@@ -1,8 +1,12 @@
 dependencies:
   idf: ">=5.5"
-  espressif/esp_codec_dev: "~1.5.4"
-  espressif/esp_lcd_st7796: "^1"
+  espressif/esp_codec_dev: "1.5.11"
+  espressif/esp_lcd_st7796: "1.5.0"
   # Wi-Fi companion: ESP32-C6 on SDIO slot 1 (pins in sdkconfig.board). Waveshare's own
   # examples use esp_hosted 1.4 on IDF 5.x; this is the 1.4 pair the Tab5 port proved
   espressif/esp_wifi_remote: "0.8.5"
   espressif/esp_hosted: "1.4.0"
+  # Pulled in by the packages above, pinned too so every build is the same
+  espressif/eppp_link: "1.1.6"
+  espressif/esp_serial_slave_link: "1.1.2"
+  espressif/cmake_utilities: "0.5.3"
