@@ -669,7 +669,8 @@ rebuilt. [docs/PORTING_GUIDE.md](docs/PORTING_GUIDE.md) is the checklist from th
 
 ```
 launcher/              ESP-IDF project: main.c + home.c (LVGL home screen)
-boards/<id>/           board packages: guition_p4_43 (4.3"), guition_p4_7 (7"), m5stack_tab5
+boards/<id>/           board packages: guition_p4_43 (4.3"), guition_p4_7 (7"), m5stack_tab5,
+                       waveshare_p4_35 (Waveshare 3.5" SPI, needs ESP-IDF >= 5.5.5)
 components/
   bsp/                 BSP contract (bsp.h)
   papp_abi/            .papp format and interface definitions

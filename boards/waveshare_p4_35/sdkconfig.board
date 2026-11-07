@@ -1,0 +1,27 @@
+# Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 — board-specific sdkconfig fragment
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+# Chip revision: Waveshare ships rev v3.x by default (their examples' default profile).
+# For a rev v1.x chip, use the two lines below instead of the rev3 ones.
+# CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+# CONFIG_ESP32P4_REV_MIN_1=y
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=n
+CONFIG_ESP32P4_REV_MIN_300=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
+# ESP32-C6 on SDIO slot 1 at the P4 defaults (Waveshare's examples set no pins):
+# CLK 18, CMD 19, D0-D3 14-17, C6 reset on GPIO 54
+CONFIG_ESP_HOSTED_SDIO_PIN_CMD=19
+CONFIG_ESP_HOSTED_SDIO_PIN_CLK=18
+CONFIG_ESP_HOSTED_SDIO_PIN_D0=14
+CONFIG_ESP_HOSTED_SDIO_PIN_D1=15
+CONFIG_ESP_HOSTED_SDIO_PRIV_PIN_D1_4BIT_BUS=15
+CONFIG_ESP_HOSTED_SDIO_PIN_D2=16
+CONFIG_ESP_HOSTED_SDIO_PIN_D3=17
+CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE=54
+CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_LOW=y
+# ESP32-P4 v3.2 silicon (this board) needs ESP-IDF >= 5.5.5 (Espressif advisory AR2026-004);
+# older releases boot-loop on LP_WDT resets before the bootloader prints anything.

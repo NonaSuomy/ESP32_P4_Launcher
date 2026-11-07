@@ -108,3 +108,13 @@ firmware version register: 1 = ST7121, 3 = ST7123; init tables from M5Stack's BS
 codec, RX8130 RTC, two PI4IOE5V6408 expanders (0x43: speaker amp, LCD reset; 0x44: C6 power, USB 5 V,
 charging), C6 on SDIO CLK 12, CMD 13, D0-D3 11/10/9/8, reset 15. Its 2-cell battery (INA226 at 0x41)
 isn't reported yet.
+
+The Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (`boards/waveshare_p4_35`, pins from Waveshare's BSP
+component 2.0.2): 320x480 ST7796 on SPI (80 MHz), FT6336 touch at 0x38, ES8311 (amplifier on GPIO 53),
+SDMMC with on-chip LDO 4, C6 on the default SDIO pins (CLK 18, CMD 19, D0-D3 14-17, reset 54), esp_hosted
+1.4. The panel has its own GRAM, so the board emulates the double-buffered contract: the framebuffers are
+a 768x512 virtual screen (the home screen needs about 800x480), and a push task scales each frame by
+0.625 with the PPA and streams it to the panel through two DMA bounce buffers (byte-swapped, the panel
+is big-endian). About 30 fps at most. Touch is mapped back up to 768x512. These boards ship with
+ESP32-P4 **v3.2** silicon, which needs ESP-IDF 5.5.5 or later (Espressif advisory AR2026-004): on
+5.5.2 it boot-loops on LP_WDT resets before the bootloader prints a line.
