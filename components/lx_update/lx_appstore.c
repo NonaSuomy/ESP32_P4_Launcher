@@ -12,6 +12,8 @@
  * repository): fetching the catalogue also brings the card's copy up to date.
  * community lists apps shared without their source (community/ in the repository),
  * not reviewed: they come after the project's apps and always go to the Community folder.
+ * category and description (launcher 0.26+) are what the Store shows. The apps' icons
+ * are kept in /sd/launcher/store/<id>.png for the Store's list.
  */
 #include "lx_appstore.h"
 #include "lx_http.h"
@@ -36,6 +38,7 @@ static const char *TAG = "lx_appstore";
 #define CHUNK         8192
 #define MAX_FOLDERS   8
 #define GAMEPADS_FILE "/sd/config/gamepads.txt"
+#define ICON_DIR      "/sd/launcher/store"
 
 static volatile lx_appstore_state_t s_state;
 static volatile int s_percent;
@@ -126,13 +129,14 @@ static bool parse_app(cJSON *a, bool community)
     copy_str(e->url, sizeof(e->url), a, "url");
     copy_str(e->icon, sizeof(e->icon), a, "icon");
     copy_str(e->sha256, sizeof(e->sha256), a, "sha256");
+    copy_str(e->description, sizeof(e->description), a, "description");
+    copy_str(e->category, sizeof(e->category), a, "category");
     cJSON *size = cJSON_GetObjectItem(a, "size");
     e->size = cJSON_IsNumber(size) ? (long)size->valuedouble : 0;
     if (community) {
         e->community = true;
         snprintf(e->folder, sizeof(e->folder), "%s", LX_APPSTORE_COMMUNITY);
         copy_str(e->author, sizeof(e->author), a, "author");
-        copy_str(e->description, sizeof(e->description), a, "description");
     }
     for (int i = 0; i < s_count; i++)           /* the project's app wins over a community one */
         if (strcmp(s_apps[i].id, e->id) == 0) return false;
@@ -142,6 +146,29 @@ static bool parse_app(cJSON *a, bool community)
         return false;
     s_count++;
     return true;
+}
+
+const char *lx_appstore_icon_path(const lx_appstore_app_t *a, char *buf, int len)
+{
+    if (!a || !a->icon[0] || strchr(a->id, '/') || strstr(a->id, "..")) snprintf(buf, len, "%s", "");
+    else snprintf(buf, len, ICON_DIR "/%s.png", a->id);
+    return buf;
+}
+
+/* Icons not on the card yet; a failed one is tried again next time */
+static void icons_sync(void)
+{
+    int want = 0, done = 0;
+    char path[96];
+    struct stat st;
+    for (int i = 0; i < s_count; i++)
+        want += lx_appstore_icon_path(&s_apps[i], path, sizeof(path))[0] && stat(path, &st) != 0;
+    for (int i = 0; i < s_count && want; i++) {
+        if (!lx_appstore_icon_path(&s_apps[i], path, sizeof(path))[0] || stat(path, &st) == 0) continue;
+        download(s_apps[i].icon, path, NULL, 0, false);
+        s_percent = ++done * 100 / want;
+    }
+    if (want) ESP_LOGI(TAG, "%d of %d icons saved", done, want);
 }
 
 static void fetch_task(void *arg)
@@ -178,6 +205,8 @@ static void fetch_task(void *arg)
         ESP_LOGI(TAG, "catalogue: %d apps, %d community", own, s_count - own);
         s_pads_updated = false;
         gamepads_sync(cJSON_GetObjectItem(j, "gamepads"));
+        s_percent = 0;
+        icons_sync();
         s_state = LX_APPSTORE_DONE;
     }
     cJSON_Delete(j);

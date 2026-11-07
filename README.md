@@ -17,7 +17,7 @@ M5Stack Tab5 (1280×720).
 
 | Launcher version | App ABI | Toolchain | Boards |
 |---|---|---|---|
-| 0.25.3 | 2.0-preview | ESP-IDF v5.5.6 | Guition ESP32-P4 4.3" (480×800), Guition JC1060P470C 7" (1024×600), M5Stack Tab5 (720×1280), Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (320×480, contributed) |
+| 0.26.0 | 2.0-preview | ESP-IDF v5.5.6 | Guition ESP32-P4 4.3" (480×800), Guition JC1060P470C 7" (1024×600), M5Stack Tab5 (720×1280), Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (320×480, contributed) |
 
 > **Status: active development.** The ABI is a preview and may still change. Everything below describes
 > what exists in the code today; the plan for what comes next is in [docs/WORKPLAN.md](docs/WORKPLAN.md).
@@ -51,9 +51,11 @@ ones come from the 7" board, the 800×480 ones from the 4.3" board.
 | | |
 |---|---|
 | ![Home screen with folders](docs/images/folders.png) | ![Games folder](docs/images/games.png) |
-| **Home screen:** folders with their own icons, clock, SD card and settings | **Games folder:** Doom, Duke Nukem 3D, OpenTyrian and Quake |
+| **Home screen:** the Store, folders with their own icons, clock, SD card and settings | **Games folder:** Doom, Duke Nukem 3D, OpenTyrian and Quake |
+| ![Store](docs/images/store.png) | ![An app in the Store](docs/images/community.png) |
+| **Store:** apps by category, with Get, Update and Installed | **An app's page:** install, update, open or remove it |
 | ![Settings](docs/images/settings.png) | ![Date and time](docs/images/date_time.png) |
-| **Settings:** volume, brightness, developer apps, controller mapping, Wi-Fi, update, the app catalogue and system information | **Date and time:** on boards with a real-time clock, the home screen clock opens it |
+| **Settings:** volume, brightness, developer apps, controller mapping, Wi-Fi, update and system information | **Date and time:** on boards with a real-time clock, the home screen clock opens it |
 | ![Paused](docs/images/pause_menu.png) | ![Content browser](docs/images/browser.png) |
 | **HOME** pauses any game under the launcher's menu | **Content browser:** All, Favorites and Recent tabs, with live search. Every emulator gets it from the launcher |
 | ![Game menu](docs/images/game_menu.png) | ![Volume overlay](docs/images/volume.png) |
@@ -123,8 +125,9 @@ Two rules keep this portable: apps only see the ABI, and the launcher core only 
 - DevLink: a USB protocol to upload, run, log, screenshot, inject input and read crash reports
 - Self-update from the SD card or from GitHub Releases (Settings → Update), with automatic rollback if a new
   version doesn't start. Each board only ever installs its own launcher
-- App catalogue: Settings → Apps lists the apps published on GitHub with the installed and online version,
-  and installs or updates them over Wi-Fi (checked with SHA-256)
+- Store: the first tile on the home screen. Apps by category (Emulators, Games, Tools, Productivity,
+  Community, Installed), each with its icon, description and version; installs, updates and removes them over
+  Wi-Fi (downloads checked with SHA-256), and the tile counts the updates waiting
 - Controllers: USB HID pads are read from their own report descriptor, Xbox 360-style (XInput) pads and receivers such as 8BitDo's work too, and any pad can be remapped in Settings
 - Wi-Fi and network time through the on-board ESP32-C6; the network is saved on the SD card (`config/wifi.txt`)
 - Real-time clock on boards that have one: the time survives power-off, and the home screen clock opens a
@@ -217,8 +220,9 @@ Output goes to `build/apps/<name>/<name>.papp`, next to the `.elf` and `.map`.
 
 ### 4. Install an app
 
-Without building anything: connect to Wi-Fi in Settings, open Settings → Apps and choose **Install all**. Every
-published app downloads into its folder (Emulators, Games). Then add ROMs and game data, see
+Without building anything: connect to Wi-Fi in Settings, open the **Store** (the first tile on the home
+screen) and choose **Install all**. Every published app downloads into its folder (Emulators, Games). Or pick
+apps one at a time: open one and choose **Install**. Then add ROMs and game data, see
 [Preparing the SD card](#preparing-the-sd-card).
 
 To install an app you built yourself:
@@ -229,7 +233,8 @@ python tools/papp_dev.py --port COM9 deploy build/apps/doom/doom.papp --timeout 
 
 `deploy` uploads the app and its icon, runs it and streams its log. You can also copy files to the card
 directly: anything at `/sd/apps/<dir>/<file>.papp` appears on the home screen. Or, on Wi-Fi, take published
-apps from Settings → Apps (see [Versions and publishing](#versions-and-publishing)).
+apps from the Store (see [Versions and publishing](#versions-and-publishing)). The Store lists apps copied by
+hand too, under Installed, and can remove any of them.
 
 ### 5. Update the launcher later
 
@@ -253,15 +258,15 @@ A folder can have its own icon: put an `icon.png` (best 88x88) in its directory,
 ## Preparing the SD card
 
 The [`SDcard`](SDcard) folder is a ready start: copy its contents to the root of an empty FAT32 card, then on
-Wi-Fi choose Settings → Apps → **Install all**. It already holds the freely shareable game data: Tyrian 2.1
+Wi-Fi open the **Store** and choose **Install all**. It already holds the freely shareable game data: Tyrian 2.1
 (freeware), the Doom and Quake shareware episodes and gngeo's data file. It also has the controller database and
 an empty folder for each system's ROMs. Its [README](SDcard/README.md) explains each folder.
 
 ```
 /sd
-├── apps/<name>/<name>.papp     applications (Settings → Apps puts them here)
+├── apps/<name>/<name>.papp     applications (the Store puts them here)
 ├── apps/<name>/icon.png        optional icon (square, best at 88×88, transparency OK)
-├── config/gamepads.txt         controller mappings shared by everyone (updated by Settings → Apps)
+├── config/gamepads.txt         controller mappings shared by everyone (updated by the Store)
 ├── config/gamepads_mine.txt    your own mappings (Settings → Map controller)
 ├── config/wifi.txt             your Wi-Fi network (Settings → Wi-Fi, or write it yourself)
 ├── roms/<system>/              ROMs and game data (table below)
@@ -329,7 +334,7 @@ controller**. Mappings are text on the card, one line per controller model (USB 
 Each `<button the pad reports>=<button it should be>` pair lists a button that differs; `-` ignores one. The
 launcher reads `/sd/config/gamepads_mine.txt` (yours, written by Map controller), then `/sd/config/gamepads.txt`
 (the shared database). **Share a mapping:** add its line to [`SDcard/config/gamepads.txt`](SDcard/config/gamepads.txt)
-in a pull request. Settings → Apps downloads the newest database together with the app list, so the next
+in a pull request. The Store downloads the newest database together with the app list, so the next
 owner of that pad doesn't need to map it. Mappings made with a launcher before 0.23 (kept in the board's flash)
 still work and are copied to your file the first time the pad connects.
 
@@ -434,8 +439,10 @@ python tools/make_apps_release.py --publish     # needs the GitHub CLI, logged i
 ```
 
 This uploads every app that isn't a developer app, with its icon and `apps.json`, to the repository's `apps`
-release (a pre-release, so it never replaces the launcher's own latest release). Settings → Apps on a board
-then offers **Update** for each app whose online version is newer than the one on its card. An app is
+release (a pre-release, so it never replaces the launcher's own latest release). The Store on a board then
+offers **Update** for each app whose online version is newer than the one on its card, and its tile shows how
+many there are. Each app's category and one-line description come from [`apps/store.json`](apps/store.json)
+(the release script stops when an app is missing there). An app is
 updated where it is, even if it was moved into a folder; a new app goes to the folder named in the catalogue
 (emulators to Emulators, games to Games). To try a catalogue from your own server first, build it with
 `--base http://<server>/` and put that `apps.json` address in `/sd/update/apps_url.txt`.
@@ -464,10 +471,10 @@ PAPP_FAST_BSS  static uint16_t line[320];
 ## Sharing your app
 
 You can share an app you built without sharing its source: send the `.papp` in a pull request. Once it is
-merged, it appears in **Settings → Apps** under **Community** with your name, and installs into the Community
+merged, it appears in the **Store** under **Community** (and under its category) with your name, and installs into the Community
 folder on the home screen (there from launcher 0.25.1 on, empty until you install one). Updates reach users the same way as the project's apps.
 
-![Settings → Apps with a community app at the end of the list](docs/images/community.png)
+![The Store's Community category](docs/images/community.png)
 
 **What to send.** One folder per app under [`community/`](community), named like the app in lowercase:
 
@@ -475,14 +482,15 @@ folder on the home screen (there from launcher 0.25.1 on, empty until you instal
 community/my-game/
 ├── my-game.papp       the app, at most 4 MB (larger: see below)
 ├── icon.png           square PNG, 64 to 256 pixels, 88×88 is best, transparency OK
-├── app.json           author, description, licence, optional source link
+├── app.json           author, description, category, licence, optional source link
 └── screenshot.png     optional
 ```
 
 ```json
 {
   "author": "Your name or GitHub user",
-  "description": "One line about the app, shown in Settings > Apps",
+  "description": "One line about the app, shown in the Store",
+  "category": "games",
   "license": "MIT",
   "source": "https://github.com/you/your-app"
 }
@@ -508,7 +516,7 @@ launcher checks every download against that SHA-256.
 
 **Before you install or merge one.** A PAPP is native code and runs without a sandbox: an app can do anything
 the board can, including deleting files on the card. Without the source, nobody can review what it does. So
-Settings → Apps names the author and marks community apps as not reviewed, and **Install all** never installs
+the Store names the author and marks community apps as not reviewed, and **Install all** never installs
 them; each one is the user's own choice. Merge apps from people you trust.
 
 **Licences.** An app built on GPL code, such as most emulator cores, can't be shared as a binary alone. Its
@@ -696,7 +704,7 @@ apps/                  emulators, games and test apps
   common/icons/        emulator and folder icons
 tools/papp_dev.py      DevLink host tool
 tools/make_release.py  release files for Settings → Update, every board
-tools/make_apps_release.py  app catalogue, community apps and controller database for Settings → Apps
+tools/make_apps_release.py  app catalogue, community apps and controller database for the Store
 tools/community.py     checks the community apps (the pull request check runs it)
 community/             apps shared without their source, one folder each
 SDcard/                starter card: shareable game data, controller database, ROM folders

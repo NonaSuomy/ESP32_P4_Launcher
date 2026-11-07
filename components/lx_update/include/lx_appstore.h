@@ -25,7 +25,8 @@ typedef struct {
     long size;
     bool community;             /* shared without source, not reviewed (after the project's apps) */
     char author[32];            /* community apps */
-    char description[124];
+    char description[124];      /* one line for the Store */
+    char category[16];          /* emulators, games, tools, productivity; "" = not given */
 } lx_appstore_app_t;
 
 typedef enum {
@@ -35,9 +36,11 @@ typedef enum {
     LX_APPSTORE_FAILED,         /* reason: lx_appstore_error() */
 } lx_appstore_state_t;
 
+/* Reads the catalogue, then saves each app's icon to lx_appstore_icon_path() if it
+ * is not on the card yet (lx_appstore_percent() follows the icons) */
 void lx_appstore_fetch(void);
 int lx_appstore_count(void);
-const lx_appstore_app_t *lx_appstore_app(int i);
+const lx_appstore_app_t *lx_appstore_app(int i);     /* changes while a fetch runs: copy it when DONE */
 
 /* Downloads app i to papp_path (checked against its SHA-256, then put in place of
  * the old file) and its icon to icon_path. folder_icon_path, when not NULL and not
@@ -51,6 +54,9 @@ const char *lx_appstore_error(void);
 
 /* The last fetch replaced /sd/config/gamepads.txt (the controller mapping database) */
 bool lx_appstore_gamepads_updated(void);
+
+/* Where the catalogue icon of app a is kept on the card ("" when it has none) */
+const char *lx_appstore_icon_path(const lx_appstore_app_t *a, char *buf, int len);
 
 /* a > b for "x.y.z" versions */
 bool lx_appstore_newer(const char *a, const char *b);

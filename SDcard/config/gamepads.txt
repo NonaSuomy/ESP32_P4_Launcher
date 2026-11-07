@@ -1,5 +1,5 @@
 # Controller button mappings, one line per controller model (USB VID:PID).
-# Copy to /sd/config/gamepads.txt on the card; Settings -> Apps keeps it up to date.
+# Copy to /sd/config/gamepads.txt on the card; the Store keeps it up to date.
 #
 #   VID:PID  <button the pad reports>=<button it should be> ...  # controller name
 #

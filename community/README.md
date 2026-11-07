@@ -1,7 +1,7 @@
 # Community apps
 
 Apps shared by their authors as a built `.papp`, without the source. After a pull request adding one is
-merged, the app appears in **Settings → Apps** under **Community**, with its author, and installs into the
+merged, the app appears in the **Store** under **Community**, with its author, and installs into the
 Community folder on the home screen. Community apps are not reviewed: see
 [Sharing your app](../README.md#sharing-your-app) in the main README before you install or submit one.
 
@@ -19,7 +19,8 @@ Community folder on the home screen. Community apps are not reviewed: see
    | `app.json` | copy [`_template/app.json`](_template/app.json) and fill it in |
    | `screenshot.png` | optional: `python tools/papp_dev.py shot screenshot.png` while it runs |
 
-   `app.json` holds `author`, a one-line `description`, the `license` and, if you publish it, a `source`
+   `app.json` holds `author`, a one-line `description`, the `license`, optionally a `category` (`games`,
+   `tools`, `productivity` or `emulators`: the Store lists the app there too) and, if you publish it, a `source`
    link. An app bigger than 4 MB stays on your own release page: leave the `.papp` out and add
    `"url"` (https link to it), `"sha256"` and `"size"` to `app.json`.
 3. Check it: `python tools/community.py`.

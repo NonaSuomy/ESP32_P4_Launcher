@@ -1,6 +1,7 @@
 {
   "author": "Gil Tal",
   "description": "3D brick-breaker on the e3d engine: break a tower's base and the bricks above drop",
+  "category": "games",
   "license": "MIT",
   "source": "https://github.com/giltal/ESP32_P4_3D_Engine/tree/main/game/shardwall"
 }

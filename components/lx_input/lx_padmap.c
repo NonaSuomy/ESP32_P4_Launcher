@@ -9,7 +9,7 @@
  *
  * /sd/config/gamepads_mine.txt  written by Settings -> Map controller; wins
  * /sd/config/gamepads.txt       the shared database (SDcard/config/gamepads.txt
- *                               in the repository, updated from Settings -> Apps)
+ *                               in the repository, updated by the Store)
  */
 #include "lx_input.h"
 #include "lx_input_priv.h"

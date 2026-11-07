@@ -448,7 +448,7 @@ Exit criteria: conformance 100%; all Phase 6 apps run unmodified; porting guide 
 
 - `NET` interface: Wi-Fi via esp_hosted (P4 boards with a C6 companion); Wi-Fi upload in dev mode.
   App download is done in the launcher (0.22.0): each app has a `version.txt` (PAPP_APP_VERSION),
-  `tools/make_apps_release.py --publish` puts the catalogue on the "apps" pre-release, and Settings → Apps
+  `tools/make_apps_release.py --publish` puts the catalogue on the "apps" pre-release, and Settings → Apps (the Store since 0.26)
   installs or updates apps (SHA-256 checked, updated in place). Same release: one launcher-drawn game menu
   for every emulator (`odroid_menu.h`), and the launcher volume replaces the cores' own volume levels.
 - `BTHD`: BLE HID gamepads/keyboards.

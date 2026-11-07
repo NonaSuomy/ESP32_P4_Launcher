@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Prepares the online app catalogue for Settings -> Apps: copies every built app that
+Prepares the online app catalogue for the launcher's Store: copies every built app that
 is not a developer app (PAPP_MF_HIDDEN), its icon and the folder icons, and writes
 apps.json next to them. --publish uploads them to the "apps" release on GitHub.
 
@@ -15,13 +15,17 @@ update when the catalogue's is newer than the installed one.
 apps.json:
   {"format": 1,
    "folders": {"Emulators": {"icon": url}, ...},
-   "apps": [{"id", "name", "version", "folder", "dir", "file", "url", "size", "sha256", "icon"}],
+   "apps": [{"id", "name", "version", "folder", "dir", "file", "url", "size", "sha256", "icon",
+             "category", "description"}],
    "gamepads": {"url", "size", "sha256"},
-   "community": [{the app fields, plus "author", "description", "license", "source"}]}
+   "community": [{the app fields, plus "author", "license", "source"}]}
+category and description: the Store's (launcher 0.26+), from apps/store.json for the project's
+apps and from app.json for community ones (category optional there). category is emulators,
+games, tools or productivity.
 folder: where a new install goes (/sd/apps/<folder>/<dir>/<file>; "" = the main page).
 An installed app is updated where it is, wherever the user moved it.
 gamepads: the controller mapping database, SDcard/config/gamepads.txt; the launcher
-replaces /sd/config/gamepads.txt with it when Settings -> Apps reads the catalogue.
+replaces /sd/config/gamepads.txt with it when the Store reads the catalogue.
 community: the apps under community/ (shared without source, checked by tools/community.py),
 in the "Community" folder. Their files are uploaded as c_<dir>.papp and c_<dir>.png, or the
 app's own url is used. Launchers before 0.25 ignore this list.
@@ -41,6 +45,8 @@ TAG = "apps"
 BASE = f"https://github.com/{REPO}/releases/download/{TAG}/"
 ICONS = os.path.join(ROOT, "apps", "common", "icons")
 GAMEPADS = os.path.join(ROOT, "SDcard", "config", "gamepads.txt")
+STORE = os.path.join(ROOT, "apps", "store.json")
+CATEGORIES = ("emulators", "games", "tools", "productivity")
 FOLDERS = {"emu.": "Emulators", "game.": "Games"}          # by app id prefix; others: main page
 FOLDER_ICONS = {"Emulators": "folder_emulators.png", "Games": "folder_games.png",
                 "Community": "folder_community.png"}
@@ -83,6 +89,7 @@ def main():
         if os.path.isfile(os.path.join(args.out, old)):
             os.remove(os.path.join(args.out, old))
 
+    store = json.load(open(STORE, encoding="utf-8"))
     apps, files, folders = [], [], {}
     built = os.path.join(ROOT, "build", "apps")
     for name in sorted(os.listdir(built)):
@@ -99,6 +106,12 @@ def main():
         entry = dict(id=m["id"], name=m["name"], version=m["version"], folder=folder, dir=name,
                      file=name + ".papp", url=base + name + ".papp", size=os.path.getsize(papp),
                      sha256=sha256(papp))
+        info = store.get(m["id"])
+        if not info or info.get("category") not in CATEGORIES or not info.get("description"):
+            raise SystemExit(f"{m['id']}: add its category and description to apps/store.json")
+        if len(info["description"]) > 120:
+            raise SystemExit(f"{m['id']}: description in apps/store.json is longer than 120 characters")
+        entry["category"], entry["description"] = info["category"], info["description"]
         shutil.copyfile(papp, os.path.join(args.out, name + ".papp"))
         files.append(name + ".papp")
         icon = os.path.join(built, name, "icon.png")
@@ -144,6 +157,8 @@ def main():
                      license=meta["license"].strip())
         if meta.get("source"):
             entry["source"] = meta["source"]
+        if meta.get("category"):
+            entry["category"] = meta["category"]
         if app.get("path"):
             asset = f"c_{app['dir']}.papp"
             shutil.copyfile(app["path"], os.path.join(args.out, asset))
@@ -181,7 +196,7 @@ def main():
     exists = subprocess.run(["gh", "release", "view", TAG, "-R", REPO], capture_output=True).returncode == 0
     if not exists:
         subprocess.run(["gh", "release", "create", TAG, "-R", REPO, "--prerelease", "--title", "Apps",
-                        "--notes", "Apps for Settings -> Apps on the launcher. Replaced in place on each "
+                        "--notes", "Apps for the Store on the launcher. Replaced in place on each "
                         "publish; the launcher compares versions."], check=True)
     subprocess.run(["gh", "release", "upload", TAG, "-R", REPO, "--clobber"] + paths, check=True)
     print(f"published {len(apps)} apps to {BASE}apps.json")

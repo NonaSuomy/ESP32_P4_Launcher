@@ -1,10 +1,10 @@
 # SD card starter
 
 Copy the contents of this folder to the root of an empty FAT32 card, put it in the board,
-then on Wi-Fi open **Settings → Apps → Install all** to download the apps.
+then on Wi-Fi open the **Store** (first tile on the home screen) and choose **Install all** to download the apps.
 
 ```
-apps/                    the apps (Settings → Apps puts them here)
+apps/                    the apps (the Store puts them here)
 config/gamepads.txt      controller button mappings shared by everyone (see below)
 roms/<system>/           your ROMs, one folder per emulator
 roms/doom/doom1.wad      Doom shareware episode

@@ -9,7 +9,8 @@ Design: `docs/ARCHITECTURE.md`. Plan + status: `docs/WORKPLAN.md`.
 ## Layout
 
 ```
-launcher/                 ESP-IDF project (factory app; main.c + home.c = LVGL home screen + app folders). Board: -DLX_BOARD=<id> (default guition_p4_43)
+launcher/                 ESP-IDF project (factory app; main.c + home.c = LVGL home screen + app folders; store.c = the Store,
+                          first home tile: categories, app pages, install/update/remove; home_ui.h = what it uses from home.c). Board: -DLX_BOARD=<id> (default guition_p4_43)
 boards/<id>/board/        BSP implementation (component "board", pins esp_hosted for its C6); boards/<id>/sdkconfig.board.
                           guition_p4_43 (4.3" 480x800, image "launcher"), guition_p4_7 (7" 1024x600), m5stack_tab5 (720x1280,
                           power rails on two PI4IOE5V6408 I2C expanders, esp_hosted 1.4 for M5Stack's C6 firmware)
@@ -25,9 +26,9 @@ components/lx_ui/         launcher-drawn screens for apps: content browser (pick
 components/lx_input/      input manager: USB HID gamepads/keyboards, XInput (Xbox 360) pads (lx_input_xinput) + board buttons (merged into P1) → players + event queue; HOME chord;
                           lx_hid_parse = HID descriptor parser; lx_padmap = per-pad button mapping as text on the card:
                           /sd/config/gamepads_mine.txt (Map controller) wins over /sd/config/gamepads.txt (shared database,
-                          SDcard/config/gamepads.txt, downloaded by Settings → Apps); NVS "padmap" = pre-0.23, read-only fallback
+                          SDcard/config/gamepads.txt, downloaded by the Store); NVS "padmap" = pre-0.23, read-only fallback
 components/lx_update/     self-update from /sd/update/launcher.bin + rollback confirm; online update (latest.json);
-                          lx_appstore = app catalogue for Settings → Apps (apps.json on the "apps" release)
+                          lx_appstore = app catalogue for the Store (apps.json on the "apps" release; icons cached in /sd/launcher/store)
 components/lx_net/        Wi-Fi station, NTP, time zone via the ESP32-C6 (esp_hosted 2.0.17 to match the C6's firmware);
                           saved network = /sd/config/wifi.txt (ssid=/password= lines; NVS "net" = pre-0.24, moved to the card at boot)
 components/lx_web/        Wi-Fi file manager: web page for the SD card, on request, with a PIN per start
@@ -55,7 +56,8 @@ apps/common/v1compat/     v1 `app_services_t` host on the SDK + v1build.py: the 
                           doom, opentyrian, quake, duke3d build with their own glue unchanged; frames go to the PPA without a copy (DISP v3 `present_ext`)
 tools/papp_dev.py         DevLink host tool
 tools/make_release.py     Release files for Settings → Update: launcher.bin + latest.json, prints the gh command
-tools/make_apps_release.py  Catalogue for Settings → Apps from build/apps + community/: apps.json + .papp + icons; --publish uploads
+tools/make_apps_release.py  Catalogue for the Store from build/apps + community/ (+ apps/store.json: category and one-line
+                          description of each app): apps.json + .papp + icons; --publish uploads
                           them to the "apps" pre-release (bump the app's version.txt first). --base + /sd/update/apps_url.txt
                           = test from a local server
 community/<dir>/          Community apps (PR with .papp + icon.png + app.json, no source): tools/community.py checks them

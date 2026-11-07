@@ -1,6 +1,7 @@
 {
   "author": "Your name or GitHub user",
-  "description": "One line about the app, shown in Settings > Apps",
+  "description": "One line about the app, shown in the Store",
+  "category": "games",
   "license": "MIT",
   "source": "https://github.com/you/your-app"
 }

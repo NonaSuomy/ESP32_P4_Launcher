@@ -16,10 +16,12 @@
  * (/sd/apps/<folder>/<dir>/<file>.papp), one level only. X / Y, or holding a tile,
  * opens its menu: move an app, rename or delete a folder.
  *
- * Settings -> Apps lists the apps published online (lx_appstore) and installs or
- * updates them on the card.
+ * The Store (store.c), the first tile of the main page, finds, installs, updates
+ * and removes apps; its tile shows how many updates are waiting.
  */
 #include "home.h"
+#include "home_ui.h"
+#include "store.h"
 #include "bsp.h"
 #include "lx_app.h"
 #include "lx_audio.h"
@@ -57,23 +59,10 @@ static const char *TAG = "home";
 /* Paths are capped on purpose; a longer one is cut, not overflowed */
 #pragma GCC diagnostic ignored "-Wformat-truncation"
 
-#define APPS_DIR      "/sd/apps"
 #define LAST_APP_FILE "/sd/launcher/last_app.txt"
 #define MAX_APPS      64           /* apps + folders */
 #define MAX_NAME      24           /* folder name */
 #define ICON          88
-
-/* Palette (from the design mock-up) */
-#define C_BG_TOP      lv_color_hex(0x0B1630)
-#define C_BG_BOTTOM   lv_color_hex(0x050A14)
-#define C_PANEL       lv_color_hex(0x0E1A30)
-#define C_BORDER      lv_color_hex(0x24406E)
-#define C_ACCENT      lv_color_hex(0x3BC9F5)
-#define C_BLUE        lv_color_hex(0x1E6FFF)
-#define C_TEXT        lv_color_hex(0xFFFFFF)
-#define C_DIM         lv_color_hex(0x8FA3BF)
-#define C_GREEN       lv_color_hex(0x3DDC84)
-#define C_FOCUS       lv_color_hex(0x1B3A70)
 
 static const uint32_t TILE_COLORS[] = { 0x2F7BF6, 0x8E44EC, 0x22B35E, 0xF39C12, 0x12A7A7, 0xE8457C, 0x5B4BDB, 0x3B4A63 };
 
@@ -111,7 +100,7 @@ static lv_obj_t *s_dev_switch;
 
 /* ── Focus (gamepad / keyboard): nearest item in the pressed direction ──── */
 
-#define MAX_FOCUS (MAX_APPS + 8)
+#define MAX_FOCUS 160            /* the Store: apps + categories + buttons */
 static lv_obj_t *s_focusable[MAX_FOCUS];
 static int s_nfocus;
 static lv_obj_t *s_focused;
@@ -247,10 +236,24 @@ static void scan_dir(const char *base, const char *parent)
 }
 
 /* The Community folder is always on the home screen, so users know where shared apps
- * go (Settings -> Apps installs them there). Made once per boot when the card has none;
- * its icon is built into the launcher. */
+ * go (the Store installs them there). Made once per boot when the card has none. Its
+ * icon and the Store's are built into the launcher and written to the card for LVGL. */
 extern const uint8_t folder_community_png_start[] asm("_binary_folder_community_png_start");
 extern const uint8_t folder_community_png_end[] asm("_binary_folder_community_png_end");
+extern const uint8_t store_png_start[] asm("_binary_store_png_start");
+extern const uint8_t store_png_end[] asm("_binary_store_png_end");
+#define STORE_ICON "/sd/launcher/store.png"
+
+/* Writes a built-in file unless the card has one (of the same size: keep_any = any size) */
+static void embedded_file(const char *path, const uint8_t *start, const uint8_t *end, bool keep_any)
+{
+    struct stat st;
+    if (stat(path, &st) == 0 && (keep_any || st.st_size == end - start)) return;
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    fwrite(start, 1, end - start, f);
+    fclose(f);
+}
 
 static void community_folder(void)
 {
@@ -259,14 +262,12 @@ static void community_folder(void)
     if (done) return;
     if (stat(APPS_DIR, &st) != 0) return;                   /* no card (yet) */
     done = true;
+    mkdir("/sd/launcher", 0775);
+    embedded_file(STORE_ICON, store_png_start, store_png_end, false);
     const char *dir = APPS_DIR "/" LX_APPSTORE_COMMUNITY;
     if (stat(dir, &st) != 0 && mkdir(dir, 0775) != 0) return;
-    const char *icon = APPS_DIR "/" LX_APPSTORE_COMMUNITY "/icon.png";
-    if (stat(icon, &st) == 0) return;
-    FILE *f = fopen(icon, "wb");
-    if (!f) return;
-    fwrite(folder_community_png_start, 1, folder_community_png_end - folder_community_png_start, f);
-    fclose(f);
+    embedded_file(APPS_DIR "/" LX_APPSTORE_COMMUNITY "/icon.png", folder_community_png_start,
+                  folder_community_png_end, true);
 }
 
 static void scan_apps(void)
@@ -309,8 +310,9 @@ static void remember_last(const char *path)
     snprintf(s_last, sizeof(s_last), "%s", path);
 }
 
-/* An app icon: its PNG scaled to size, or a coloured tile with its initial. */
-static lv_obj_t *make_icon(lv_obj_t *parent, const app_entry_t *e, int size)
+/* An icon: the PNG src scaled to size, or a coloured tile with the initial of name
+ * (key picks the colour; a folder gets the folder symbol) */
+static lv_obj_t *icon_box(lv_obj_t *parent, const char *src, const char *key, const char *name, bool folder, int size)
 {
     lv_obj_t *box = lv_obj_create(parent);
     lv_obj_remove_style_all(box);
@@ -320,11 +322,11 @@ static lv_obj_t *make_icon(lv_obj_t *parent, const app_entry_t *e, int size)
     lv_obj_set_style_radius(box, size / 4, 0);
     lv_obj_set_style_clip_corner(box, true, 0);
 
-    if (e && e->icon[0]) {
+    if (src && src[0]) {
         lv_image_header_t h;
-        if (lv_image_decoder_get_info(e->icon, &h) == LV_RESULT_OK && h.w && h.h) {
+        if (lv_image_decoder_get_info(src, &h) == LV_RESULT_OK && h.w && h.h) {
             lv_obj_t *img = lv_image_create(box);
-            lv_image_set_src(img, e->icon);
+            lv_image_set_src(img, src);
             int big = h.w > h.h ? h.w : h.h;
             lv_image_set_scale(img, (uint32_t)(256 * size / big));
             lv_obj_center(img);
@@ -332,20 +334,30 @@ static lv_obj_t *make_icon(lv_obj_t *parent, const app_entry_t *e, int size)
         }
     }
     uint32_t hash = 5381;
-    for (const char *p = e ? (e->id[0] ? e->id : e->name) : "?"; *p; p++) hash = hash * 33 + (uint8_t)*p;
-    uint32_t c = e && e->is_folder ? 0xD9921A : TILE_COLORS[hash % (sizeof(TILE_COLORS) / sizeof(TILE_COLORS[0]))];
+    for (const char *p = key && key[0] ? key : "?"; *p; p++) hash = hash * 33 + (uint8_t)*p;
+    uint32_t c = folder ? 0xD9921A : TILE_COLORS[hash % (sizeof(TILE_COLORS) / sizeof(TILE_COLORS[0]))];
     lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(box, lv_color_lighten(lv_color_hex(c), 40), 0);
     lv_obj_set_style_bg_grad_color(box, lv_color_hex(c), 0);
     lv_obj_set_style_bg_grad_dir(box, LV_GRAD_DIR_VER, 0);
     lv_obj_t *l = lv_label_create(box);
-    char initial[2] = { e && e->name[0] ? (char)toupper((unsigned char)e->name[0]) : '?', 0 };
-    lv_label_set_text(l, e && e->is_folder ? LV_SYMBOL_DIRECTORY : initial);
+    char initial[2] = { name && name[0] ? (char)toupper((unsigned char)name[0]) : '?', 0 };
+    lv_label_set_text(l, folder ? LV_SYMBOL_DIRECTORY : initial);
     lv_obj_set_style_text_font(l, size >= 80 ? &lv_font_montserrat_48 : &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(l, C_TEXT, 0);
     lv_obj_center(l);
     return box;
 }
+
+static lv_obj_t *make_icon(lv_obj_t *parent, const app_entry_t *e, int size)
+{
+    return icon_box(parent, e->icon, e->id[0] ? e->id : e->name, e->name, e->is_folder, size);
+}
+
+/* The Store's tile: first on the main page, not an app on the card */
+static app_entry_t s_store_tile = { .path = "store", .icon = "S:" STORE_ICON, .name = "Store", .id = "launcher.store" };
+static lv_obj_t *s_store_badge;         /* updates waiting, on the tile */
+static int s_badge_shown;
 
 /* ── Clicks ────────────────────────────────────────────────────────────── */
 
@@ -357,6 +369,7 @@ static void on_tile_click(lv_event_t *ev)
 {
     const app_entry_t *e = lv_event_get_user_data(ev);
     if (s_long_press) s_long_press = false;
+    else if (e == &s_store_tile) store_open(NULL);
     else if (e->is_folder) folder_enter(e->name);
     else snprintf(s_launch, sizeof(s_launch), "%s", e->path);
 }
@@ -368,7 +381,6 @@ static void on_tile_long(lv_event_t *ev)
 }
 
 static void show_settings(void);
-static void show_home(void);
 
 static void on_gear_click(lv_event_t *ev)   { show_settings(); }
 static void on_back_click(lv_event_t *ev)   { show_home(); }
@@ -412,14 +424,24 @@ static void focus_style(lv_obj_t *o, int radius)
     lv_obj_set_style_radius(o, radius, 0);
 }
 
+static void badge_update(void)
+{
+    s_badge_shown = store_updates();
+    if (!s_store_badge) return;
+    lv_label_set_text_fmt(s_store_badge, "%d", s_badge_shown);
+    if (s_badge_shown) lv_obj_remove_flag(s_store_badge, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(s_store_badge, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void build_grid(void)
 {
     lv_obj_clean(s_grid);
+    s_store_badge = NULL;
     int shown = 0;
-    for (int i = 0; i < s_napps; i++) {
-        app_entry_t *e = &s_apps[i];
-        if (strcmp(e->parent, s_folder) != 0) continue;
-        shown++;
+    for (int i = -1; i < s_napps; i++) {
+        app_entry_t *e = i < 0 ? &s_store_tile : &s_apps[i];
+        if (i < 0 ? s_folder[0] != 0 : strcmp(e->parent, s_folder) != 0) continue;
+        shown += i >= 0;
         lv_obj_t *t = lv_obj_create(s_grid);
         lv_obj_remove_style_all(t);
         lv_obj_set_size(t, 118, 128);
@@ -440,11 +462,25 @@ static void build_grid(void)
         lv_obj_set_user_data(t, e);
         lv_obj_add_event_cb(t, on_tile_click, LV_EVENT_CLICKED, e);
         lv_obj_add_event_cb(t, on_tile_long, LV_EVENT_LONG_PRESSED, e);
+        if (i < 0) {
+            s_store_badge = label(t, &lv_font_montserrat_16, C_TEXT, "");
+            lv_obj_set_style_bg_opa(s_store_badge, LV_OPA_COVER, 0);
+            lv_obj_set_style_bg_color(s_store_badge, C_RED, 0);
+            lv_obj_set_style_radius(s_store_badge, LV_RADIUS_CIRCLE, 0);
+            lv_obj_set_style_min_width(s_store_badge, 26, 0);
+            lv_obj_set_style_pad_ver(s_store_badge, 3, 0);
+            lv_obj_set_style_pad_hor(s_store_badge, 6, 0);
+            lv_obj_set_style_text_align(s_store_badge, LV_TEXT_ALIGN_CENTER, 0);
+            lv_obj_align(s_store_badge, LV_ALIGN_TOP_RIGHT, -6, 0);
+            badge_update();
+        }
     }
     if (!shown) {
         lv_obj_t *l = label(s_grid, &lv_font_montserrat_16, C_DIM, s_folder[0] ?
                             "This folder is empty. To add an app, hold it or press X on the main page." :
-                            "No apps on the SD card yet (put them in /sd/apps/<name>/<name>.papp)");
+                            "No apps on the SD card yet: open the Store to get some.");
+        lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(l, s_folder[0] ? 700 : 560);
         lv_obj_set_style_pad_top(l, 40, 0);
     }
     if (s_folder[0]) {
@@ -479,7 +515,11 @@ static void home_focus_list(void)
     bool still_there = false;
     for (int i = 0; i < s_nfocus; i++) still_there |= s_focusable[i] == keep;
     s_focused = NULL;
-    focus_set(still_there ? keep : (s_nfocus ? s_focusable[0] : NULL));
+    lv_obj_t *first = s_nfocus ? s_focusable[0] : NULL;
+    if (first && lv_obj_get_user_data(first) == &s_store_tile && s_nfocus > 1 &&
+        lv_obj_get_parent(s_focusable[1]) == s_grid)
+        first = s_focusable[1];                         /* the last app run, ready to start again */
+    focus_set(still_there ? keep : first);
     if (!still_there) lv_obj_scroll_to_y(s_grid, 0, LV_ANIM_OFF);
 }
 
@@ -810,7 +850,7 @@ static void on_crash_ok(lv_event_t *ev)
     s_crash_box = s_crash_ok = NULL;
     s_focused = NULL;
     if (lv_screen_active() == s_settings) show_settings();
-    else home_focus_list();
+    else if (!store_focus()) home_focus_list();
 }
 
 static void on_dev_switch(lv_event_t *ev)
@@ -1255,332 +1295,10 @@ static void wifi_tick(void)
 static lv_obj_t *s_update_btn;
 static void on_upd_check(lv_event_t *ev);
 enum { ACT_CLOSE, ACT_OPEN, ACT_RENAME, ACT_DELETE, ACT_DELETE_YES, ACT_PICK, ACT_OUT, ACT_NEW_MOVE, ACT_FORGET,
-       ACT_STORE_GET, ACT_TO_FOLDER };
-
-/* ── Apps from the internet (Settings -> Apps) ───────────────────────────
- * The catalogue (lx_appstore) with each app's online and installed version. An
- * installed app is updated where it is; a new one goes to the catalogue's folder.
- * Installs run one at a time from a queue, in the background. */
-
-static lv_obj_t *s_store_btn, *s_store_scr, *s_store_back, *s_store_all, *s_store_status, *s_store_list;
-typedef struct { char path[160]; char version[16]; } store_inst_t;
-static store_inst_t *s_store_inst;      /* LX_APPSTORE_MAX, in PSRAM; set before any store row is built */
-static int s_store_queue[LX_APPSTORE_MAX], s_store_nqueue;
-static int s_store_doing = -1;          /* being installed */
-static int s_store_sel;                 /* the app the menu is about */
-static bool s_store_fetching, s_store_changed;
+       ACT_STORE_OPEN, ACT_TO_FOLDER };
 static lv_obj_t *s_menu;
 static void menu_open(const char *title, const char *text, int items);
 static void menu_add(const char *text, int act);
-
-/* Notes where catalogue apps are installed, from the .papp files in dir */
-static void store_find_in(const char *dir)
-{
-    DIR *d = opendir(dir);
-    if (!d) return;
-    struct dirent *fe;
-    while ((fe = readdir(d))) {
-        size_t n = strlen(fe->d_name);
-        if (n < 6 || strcasecmp(fe->d_name + n - 5, ".papp") != 0) continue;
-        char path[160];
-        snprintf(path, sizeof(path), "%s/%s", dir, fe->d_name);
-        papp_manifest_t m;
-        if (lx_app_read_manifest(path, &m) != ESP_OK) continue;
-        for (int i = 0; i < lx_appstore_count(); i++) {
-            if (strcmp(lx_appstore_app(i)->id, m.id) != 0 || s_store_inst[i].path[0]) continue;
-            snprintf(s_store_inst[i].path, sizeof(s_store_inst[i].path), "%s", path);
-            snprintf(s_store_inst[i].version, sizeof(s_store_inst[i].version), "%s", m.version);
-        }
-    }
-    closedir(d);
-}
-
-/* Apps are in /sd/apps/<dir> or /sd/apps/<folder>/<dir> */
-static void store_find_installed(void)
-{
-    if (!s_store_inst) s_store_inst = heap_caps_malloc(LX_APPSTORE_MAX * sizeof(store_inst_t), MALLOC_CAP_SPIRAM);
-    if (!s_store_inst) abort();
-    memset(s_store_inst, 0, LX_APPSTORE_MAX * sizeof(store_inst_t));
-    DIR *d = opendir(APPS_DIR);
-    if (!d) return;
-    struct dirent *de;
-    while ((de = readdir(d))) {
-        if (de->d_name[0] == '.' || de->d_type != DT_DIR) continue;
-        char dir[128];
-        snprintf(dir, sizeof(dir), APPS_DIR "/%s", de->d_name);
-        store_find_in(dir);
-        DIR *sub = opendir(dir);
-        if (!sub) continue;
-        struct dirent *se;
-        while ((se = readdir(sub))) {
-            if (se->d_name[0] == '.' || se->d_type != DT_DIR) continue;
-            char inner[160];
-            snprintf(inner, sizeof(inner), "%s/%s", dir, se->d_name);
-            store_find_in(inner);
-        }
-        closedir(sub);
-    }
-    closedir(d);
-}
-
-static bool store_queued(int i)
-{
-    for (int q = 0; q < s_store_nqueue; q++)
-        if (s_store_queue[q] == i) return true;
-    return false;
-}
-
-static bool store_has_update(int i)
-{
-    return s_store_inst[i].path[0] && lx_appstore_newer(lx_appstore_app(i)->version, s_store_inst[i].version);
-}
-
-static void on_store_pick(lv_event_t *ev);
-
-/* Rebuilds the rows, keeping the focus on the same row or button */
-static void store_rows(void)
-{
-    if (!s_store_inst) store_find_installed();
-    bool here = lv_screen_active() == s_store_scr && !s_menu;
-    int row = -1;
-    lv_obj_t *button = NULL;
-    if (here && s_focused) {
-        if (lv_obj_get_parent(s_focused) == s_store_list) row = lv_obj_get_index(s_focused);
-        else button = s_focused;
-        lv_obj_remove_state(s_focused, LV_STATE_FOCUSED);
-    }
-    lv_obj_clean(s_store_list);
-    int updates = 0, missing = 0;
-    for (int i = 0; i < lx_appstore_count(); i++) {
-        const lx_appstore_app_t *a = lx_appstore_app(i);
-        char right[64];
-        lv_color_t col = C_DIM;
-        if (i == s_store_doing) {
-            snprintf(right, sizeof(right), "Installing...");
-            col = C_ACCENT;
-        } else if (store_queued(i)) {
-            snprintf(right, sizeof(right), "Waiting");
-        } else if (!s_store_inst[i].path[0]) {
-            snprintf(right, sizeof(right), "Get  %s", a->version);
-            col = C_GREEN;
-            missing += !a->community;           /* Install all leaves community apps to the user */
-        } else if (store_has_update(i)) {
-            snprintf(right, sizeof(right), "Update  %s " LV_SYMBOL_RIGHT " %s", s_store_inst[i].version, a->version);
-            col = C_ACCENT;
-            updates++;
-        } else {
-            snprintf(right, sizeof(right), "Installed  %s", s_store_inst[i].version);
-        }
-        lv_obj_t *b = lv_obj_create(s_store_list);
-        lv_obj_remove_style_all(b);
-        lv_obj_set_size(b, lv_pct(100), 50);
-        lv_obj_remove_flag(b, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
-        focus_style(b, 10);
-        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_STATE_FOCUSED);
-        lv_obj_set_style_bg_color(b, C_FOCUS, LV_STATE_FOCUSED);
-        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_STATE_PRESSED);
-        lv_obj_set_style_bg_color(b, C_FOCUS, LV_STATE_PRESSED);
-        lv_obj_t *n = label(b, &lv_font_montserrat_20, C_TEXT, a->name);
-        lv_obj_align(n, LV_ALIGN_LEFT_MID, 14, 0);
-        if (a->community) {
-            char by[48];
-            snprintf(by, sizeof(by), "Community, by %s", a->author[0] ? a->author : "?");
-            lv_obj_t *f = label(b, &lv_font_montserrat_14, C_DIM, by);
-            lv_obj_align_to(f, n, LV_ALIGN_OUT_RIGHT_MID, 12, 2);
-        } else if (a->folder[0]) {
-            lv_obj_t *f = label(b, &lv_font_montserrat_14, C_DIM, a->folder);
-            lv_obj_align_to(f, n, LV_ALIGN_OUT_RIGHT_MID, 12, 2);
-        }
-        lv_obj_t *r = label(b, &lv_font_montserrat_16, col, right);
-        lv_obj_align(r, LV_ALIGN_RIGHT_MID, -14, 0);
-        lv_obj_add_event_cb(b, on_store_pick, LV_EVENT_CLICKED, (void *)(intptr_t)i);
-    }
-    char buf[32];
-    if (updates) snprintf(buf, sizeof(buf), "Update all (%d)", updates);
-    else if (missing) snprintf(buf, sizeof(buf), "Install all (%d)", missing);   /* e.g. a new card */
-    else snprintf(buf, sizeof(buf), "Update all");
-    lv_label_set_text(lv_obj_get_child(s_store_all, 0), buf);
-    if (!here) return;
-    focus_clear_list();
-    focus_add(s_store_back);
-    focus_add(s_store_all);
-    int rows = lv_obj_get_child_count(s_store_list);
-    for (int i = 0; i < rows; i++) focus_add(lv_obj_get_child(s_store_list, i));
-    if (row >= 0 && rows) focus_set(lv_obj_get_child(s_store_list, row < rows ? row : rows - 1));
-    else if (button) focus_set(button);
-    else focus_set(rows ? lv_obj_get_child(s_store_list, 0) : s_store_back);
-}
-
-static void store_next(void)
-{
-    if (s_store_doing >= 0 || !s_store_nqueue) return;
-    int i = s_store_queue[0];
-    memmove(s_store_queue, s_store_queue + 1, --s_store_nqueue * sizeof(int));
-    const lx_appstore_app_t *a = lx_appstore_app(i);
-    char papp[160], icon[160], ficon[160] = "";
-    if (s_store_inst[i].path[0]) {                      /* update in place */
-        snprintf(papp, sizeof(papp), "%s", s_store_inst[i].path);
-        snprintf(icon, sizeof(icon), "%s", papp);
-        snprintf(strrchr(icon, '/'), sizeof(icon) - (strrchr(icon, '/') - icon), "/icon.png");
-    } else if (a->folder[0]) {
-        snprintf(papp, sizeof(papp), APPS_DIR "/%s/%s/%s", a->folder, a->dir, a->file);
-        snprintf(icon, sizeof(icon), APPS_DIR "/%s/%s/icon.png", a->folder, a->dir);
-        snprintf(ficon, sizeof(ficon), APPS_DIR "/%s/icon.png", a->folder);
-    } else {
-        snprintf(papp, sizeof(papp), APPS_DIR "/%s/%s", a->dir, a->file);
-        snprintf(icon, sizeof(icon), APPS_DIR "/%s/icon.png", a->dir);
-    }
-    s_store_doing = i;
-    lx_appstore_install(i, papp, icon, ficon[0] ? ficon : NULL);
-}
-
-static void store_add(int i)
-{
-    if (i == s_store_doing || store_queued(i) || s_store_nqueue >= LX_APPSTORE_MAX) return;
-    s_store_queue[s_store_nqueue++] = i;
-    store_next();
-}
-
-static void on_store_pick(lv_event_t *ev)
-{
-    int i = (int)(intptr_t)lv_event_get_user_data(ev);
-    const lx_appstore_app_t *a = lx_appstore_app(i);
-    if (!a || i == s_store_doing || store_queued(i)) return;
-    s_store_sel = i;
-    char text[400], size[16];
-    bool have = s_store_inst[i].path[0];
-    if (a->size >= 1000000) snprintf(size, sizeof(size), "%.1f MB", a->size / 1e6);
-    else snprintf(size, sizeof(size), "%ld KB", (a->size + 999) / 1000);
-    int n = 0;
-    if (a->community)                           /* shared without source: say so before installing */
-        n = snprintf(text, sizeof(text), "%s\nBy %s. A community app, not reviewed: like any app, "
-                     "it can change anything on the card.\n\n", a->description, a->author);
-    if (have)
-        snprintf(text + n, sizeof(text) - n, "Online: version %s, %s\nInstalled: version %s",
-                 a->version, size, s_store_inst[i].version);
-    else
-        snprintf(text + n, sizeof(text) - n, "Version %s, %s\nIt goes to %s.", a->version, size,
-                 a->folder[0] ? a->folder : "the main page");
-    menu_open(a->name, text, 2);
-    menu_add(!have ? "Install" : store_has_update(i) ? "Update" : "Reinstall", ACT_STORE_GET);
-    menu_add("Cancel", ACT_CLOSE);
-}
-
-static void on_store_all(lv_event_t *ev)
-{
-    /* Updates when there are any, otherwise every app not on the card (as the button says) */
-    bool any_update = false;
-    for (int i = 0; i < lx_appstore_count(); i++) any_update |= store_has_update(i);
-    int n = 0;
-    for (int i = 0; i < lx_appstore_count(); i++) {
-        bool want = any_update ? store_has_update(i)
-                               : !s_store_inst[i].path[0] && !lx_appstore_app(i)->community;
-        if (want && i != s_store_doing && !store_queued(i)) {
-            store_add(i);
-            n++;
-        }
-    }
-    if (!n && s_store_doing < 0) lv_label_set_text(s_store_status, "All installed apps are up to date.");
-    store_rows();
-}
-
-static void on_store_back(lv_event_t *ev) { show_settings(); }
-
-static void on_store_open(lv_event_t *ev)
-{
-    if (lx_net_state() != LX_NET_CONNECTED) {
-        upd_message("Apps", "Connect to Wi-Fi first.");
-        return;
-    }
-    if (s_focused) lv_obj_remove_state(s_focused, LV_STATE_FOCUSED);
-    s_focused = NULL;
-    lv_screen_load(s_store_scr);
-    if (s_store_doing >= 0 || s_store_nqueue) {         /* still installing from the last visit */
-        store_rows();
-        return;
-    }
-    lv_obj_clean(s_store_list);
-    lv_label_set_text(s_store_status, "Reading the app list...");
-    store_rows();
-    s_store_fetching = true;
-    lx_appstore_fetch();
-}
-
-static void build_store_screen(void)
-{
-    s_store_scr = lv_obj_create(NULL);
-    lv_obj_remove_flag(s_store_scr, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_bg_color(s_store_scr, C_BG_TOP, 0);
-    lv_obj_set_style_bg_grad_color(s_store_scr, C_BG_BOTTOM, 0);
-    lv_obj_set_style_bg_grad_dir(s_store_scr, LV_GRAD_DIR_VER, 0);
-    s_store_back = wifi_button(s_store_scr, 16, 14, 56, LV_SYMBOL_LEFT, on_store_back);
-    lv_obj_t *t = label(s_store_scr, &lv_font_montserrat_28, C_TEXT, "Apps");
-    lv_obj_set_pos(t, 92, 20);
-    s_store_all = wifi_button(s_store_scr, 500 + s_dx, 14, 276, "Update all", on_store_all);
-    s_store_status = label(s_store_scr, &lv_font_montserrat_16, C_DIM, "");
-    lv_obj_set_pos(s_store_status, 24, 76);
-    s_store_list = lv_obj_create(s_store_scr);
-    lv_obj_set_pos(s_store_list, 24, 104);
-    lv_obj_set_size(s_store_list, 752 + s_dx, 362 + s_dy);
-    lv_obj_set_style_bg_color(s_store_list, C_PANEL, 0);
-    lv_obj_set_style_border_color(s_store_list, C_BORDER, 0);
-    lv_obj_set_style_radius(s_store_list, 14, 0);
-    lv_obj_set_style_pad_all(s_store_list, 8, 0);
-    lv_obj_set_style_pad_row(s_store_list, 4, 0);
-    lv_obj_set_flex_flow(s_store_list, LV_FLEX_FLOW_COLUMN);
-}
-
-static void store_tick(void)
-{
-    static int shown = -1;
-    lx_appstore_state_t st = lx_appstore_state();
-    char buf[112];
-    if (st == LX_APPSTORE_BUSY) {
-        int pct = lx_appstore_percent();
-        if (s_store_doing >= 0 && pct != shown) {
-            shown = pct;
-            snprintf(buf, sizeof(buf), "Installing %s... %d%%", lx_appstore_app(s_store_doing)->name, pct);
-            lv_label_set_text(s_store_status, buf);
-        }
-        return;
-    }
-    if (st == LX_APPSTORE_IDLE) return;
-    snprintf(buf, sizeof(buf), "%s", lx_appstore_error());
-    lx_appstore_reset();
-    shown = -1;
-    if (s_store_fetching) {
-        s_store_fetching = false;
-        if (st == LX_APPSTORE_DONE) {
-            store_find_installed();
-            int n = lx_appstore_count(), have = 0;
-            for (int i = 0; i < n; i++) have += s_store_inst[i].path[0] != 0;
-            snprintf(buf, sizeof(buf), "%d apps online, %d of them installed%s", n, have,
-                     lx_appstore_gamepads_updated() ? ". Controller database updated." : "");
-            if (lx_appstore_gamepads_updated()) lx_input_pad_reload_maps();
-        }
-        lv_label_set_text(s_store_status, buf);
-        if (lv_screen_active() == s_store_scr && s_focused == s_store_back) {    /* to the first app */
-            lv_obj_remove_state(s_focused, LV_STATE_FOCUSED);
-            s_focused = NULL;
-        }
-        store_rows();
-        return;
-    }
-    if (s_store_doing < 0) return;
-    const lx_appstore_app_t *a = lx_appstore_app(s_store_doing);
-    s_store_doing = -1;
-    if (st == LX_APPSTORE_DONE) {
-        s_store_changed = true;
-        snprintf(buf, sizeof(buf), "%s %s installed", a->name, a->version);
-        store_find_installed();
-    } else {
-        s_store_nqueue = 0;                             /* the rest would likely fail too */
-    }
-    lv_label_set_text(s_store_status, buf);
-    store_next();
-    store_rows();
-}
 
 static void build_settings(void)
 {
@@ -1620,7 +1338,7 @@ static void build_settings(void)
     lv_obj_set_style_outline_pad(s_dev_switch, 6, LV_STATE_FOCUSED);
     if (s_show_dev) lv_obj_add_state(s_dev_switch, LV_STATE_CHECKED);
     lv_obj_add_event_cb(s_dev_switch, on_dev_switch, LV_EVENT_VALUE_CHANGED, NULL);
-    int bw = (752 + s_dx - 3 * 10) / 4;        /* four buttons share the row */
+    int bw = (752 + s_dx - 2 * 10) / 3;        /* three buttons share the row */
     s_map_btn = lv_button_create(s_settings);
     lv_obj_set_pos(s_map_btn, 24, 278);
     lv_obj_set_size(s_map_btn, bw, 52);
@@ -1650,16 +1368,6 @@ static void build_settings(void)
     lv_obj_set_style_outline_pad(s_update_btn, 3, LV_STATE_FOCUSED);
     lv_obj_center(label(s_update_btn, &lv_font_montserrat_20, C_TEXT, LV_SYMBOL_DOWNLOAD " Update"));
     lv_obj_add_event_cb(s_update_btn, on_upd_check, LV_EVENT_CLICKED, NULL);
-    s_store_btn = lv_button_create(s_settings);
-    lv_obj_set_pos(s_store_btn, 24 + 3 * (bw + 10), 278);
-    lv_obj_set_size(s_store_btn, bw, 52);
-    lv_obj_set_style_bg_color(s_store_btn, C_BLUE, 0);
-    lv_obj_set_style_outline_width(s_store_btn, 3, LV_STATE_FOCUSED);
-    lv_obj_set_style_outline_color(s_store_btn, C_ACCENT, LV_STATE_FOCUSED);
-    lv_obj_set_style_outline_pad(s_store_btn, 3, LV_STATE_FOCUSED);
-    lv_obj_center(label(s_store_btn, &lv_font_montserrat_20, C_TEXT, LV_SYMBOL_SHUFFLE " Apps"));
-    lv_obj_add_event_cb(s_store_btn, on_store_open, LV_EVENT_CLICKED, NULL);
-    build_store_screen();
 
     lv_obj_t *info = panel(s_settings, 24, 336, 752 + s_dx, 136 + s_dy, 14);
     s_info = label(info, &lv_font_montserrat_14, C_DIM, "");
@@ -1704,19 +1412,17 @@ static void show_settings(void)
     focus_add(s_map_btn);
     focus_add(s_wifi_btn);
     focus_add(s_update_btn);
-    focus_add(s_store_btn);
     focus_set(s_vol_slider);
 }
 
 static uint32_t s_web_seen;     /* file manager changes already on the grid */
 
-static void show_home(void)
+void show_home(void)
 {
     if (s_focused) lv_obj_remove_state(s_focused, LV_STATE_FOCUSED);    /* else it stays lit on Settings */
     lv_screen_load(s_home);
-    if (lx_web_changes() != s_web_seen || s_store_changed) {
+    if (store_take_changed() | (lx_web_changes() != s_web_seen)) {
         s_web_seen = lx_web_changes();
-        s_store_changed = false;
         scan_apps();
     }
     build_grid();
@@ -1727,7 +1433,7 @@ static void show_home(void)
 /* ── Folders ───────────────────────────────────────────────────────────── */
 
 static lv_obj_t *s_menu_return;
-static char s_target[160], s_target_name[32];   /* what the menu is about */
+static char s_target[160], s_target_name[32], s_target_id[32];   /* what the menu is about */
 static bool s_name_move;                        /* move s_target into the folder being named */
 
 static void menu_close(void)
@@ -1737,7 +1443,6 @@ static void menu_close(void)
     s_long_press = false;
     s_focused = s_menu_return;
     if (lv_screen_active() == s_wifi_scr) wifi_focus();
-    else if (lv_screen_active() == s_store_scr) store_rows();
     else home_focus_list();
 }
 
@@ -1907,8 +1612,10 @@ static void folder_name_done(const char *text)
 
 static void tile_menu(const app_entry_t *e)
 {
+    if (!e || e == &s_store_tile) return;
     snprintf(s_target, sizeof(s_target), "%s", e->path);
     snprintf(s_target_name, sizeof(s_target_name), "%s", e->name);
+    snprintf(s_target_id, sizeof(s_target_id), "%s", e->id);
     if (e->is_folder) {
         menu_open(e->name, NULL, 4);
         menu_add("Open", ACT_OPEN);
@@ -1917,7 +1624,8 @@ static void tile_menu(const app_entry_t *e)
     } else {
         char ver[32];
         snprintf(ver, sizeof(ver), "Version %s", e->version[0] ? e->version : "unknown");
-        menu_open(e->name, ver, 3);
+        menu_open(e->name, ver, 4);
+        menu_add(LV_SYMBOL_DOWNLOAD " Open in Store", ACT_STORE_OPEN);
         menu_add("Move to folder", ACT_PICK);
         if (s_folder[0]) menu_add("Move to main page", ACT_OUT);
     }
@@ -1951,10 +1659,7 @@ static void on_menu_item(lv_event_t *ev)
     }
     case ACT_OUT: move_app(s_target, ""); break;
     case ACT_FORGET: lx_net_forget(); break;
-    case ACT_STORE_GET:
-        store_add(s_store_sel);
-        store_rows();
-        break;
+    case ACT_STORE_OPEN: store_open(s_target_id[0] ? s_target_id : s_target_name); break;
     case ACT_NEW_MOVE:
         s_name_move = true;
         name_open("Name of the new folder", "New folder", PW_NEW_FOLDER);
@@ -2225,6 +1930,59 @@ static void upd_install(void)
     lv_label_set_text(s_upd_text, buf);
 }
 
+/* ── For the other launcher screens (home_ui.h) ──────────────────────── */
+
+int ui_dx(void)                 { return s_dx; }
+int ui_dy(void)                 { return s_dy; }
+void ui_focus_clear(void)       { focus_clear_list(); }
+void ui_focus_add(lv_obj_t *o)  { focus_add(o); }
+void ui_focus_set(lv_obj_t *o)  { focus_set(o); }
+lv_obj_t *ui_focus_get(void)    { return s_focused; }
+void ui_focus_style(lv_obj_t *o, int radius)                    { focus_style(o, radius); }
+void ui_message(const char *title, const char *text)            { upd_message(title, text); }
+bool home_show_dev(void)        { return s_show_dev; }
+
+void ui_focus_drop(void)
+{
+    if (s_focused) lv_obj_remove_state(s_focused, LV_STATE_FOCUSED);
+    s_focused = NULL;
+}
+
+lv_obj_t *ui_label(lv_obj_t *parent, const lv_font_t *font, lv_color_t color, const char *text)
+{
+    return label(parent, font, color, text);
+}
+
+lv_obj_t *ui_panel(lv_obj_t *parent, int x, int y, int w, int h, int radius)
+{
+    return panel(parent, x, y, w, h, radius);
+}
+
+lv_obj_t *ui_button(lv_obj_t *parent, int x, int y, int w, const char *text, lv_event_cb_t cb)
+{
+    return wifi_button(parent, x, y, w, text, cb);
+}
+
+lv_obj_t *ui_icon(lv_obj_t *parent, const char *src, const char *key, const char *name, int size)
+{
+    return icon_box(parent, src, key, name, false, size);
+}
+
+lv_obj_t *ui_screen(void)
+{
+    lv_obj_t *scr = lv_obj_create(NULL);
+    lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(scr, C_BG_TOP, 0);
+    lv_obj_set_style_bg_grad_color(scr, C_BG_BOTTOM, 0);
+    lv_obj_set_style_bg_grad_dir(scr, LV_GRAD_DIR_VER, 0);
+    return scr;
+}
+
+void home_launch(const char *path)
+{
+    snprintf(s_launch, sizeof(s_launch), "%s", path);
+}
+
 /* ── LVGL glue ─────────────────────────────────────────────────────────── */
 
 static uint32_t tick_ms(void)
@@ -2348,8 +2106,8 @@ static void poll_keys(void)
             show_home();
         } else if (back && lv_screen_active() == s_wifi_scr) {
             show_settings();
-        } else if (back && lv_screen_active() == s_store_scr) {
-            show_settings();
+        } else if (back && store_back()) {
+            /* a Store screen took it */
         } else if (back && lv_screen_active() == s_pw_scr) {
             pw_close();
         }
@@ -2375,7 +2133,7 @@ static void screenshot_tick(void)
 static void launch(const char *path)
 {
     char err[160];
-    if (s_store_doing >= 0) {           /* the download writes to the card */
+    if (store_installing()) {           /* the download writes to the card */
         upd_message("Please wait", "An app is being downloaded. Start it again when it is done.");
         return;
     }
@@ -2433,6 +2191,7 @@ static void home_task(void *arg)
         else poll_keys();
         wifi_tick();
         store_tick();
+        if (store_updates() != s_badge_shown) badge_update();
         if (lx_web_changes() != s_web_seen && lv_screen_active() == s_home &&
             lv_obj_get_child_count(lv_layer_top()) == 0) {            /* not under a menu or message */
             s_web_seen = lx_web_changes();
@@ -2490,6 +2249,7 @@ esp_err_t home_start(void)
     s_dy = h_px - 480;
     build_home();
     build_settings();
+    store_build();
     if (s_clk_area) build_clock_screen();
     refresh_home();
     lv_screen_load(s_home);

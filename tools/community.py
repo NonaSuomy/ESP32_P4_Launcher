@@ -10,11 +10,15 @@ Checks every folder (the pull request check runs this) and reads them for the ap
 community/<dir>/
   <file>.papp      the app, built with the SDK (or "url" + "sha256" + "size" in app.json)
   icon.png         square PNG, 64 to 256 pixels (88x88 is best), transparency OK
-  app.json         {"author", "description", "license", "source" (optional)}
+  app.json         {"author", "description", "license", "source" (optional),
+                    "category" (optional: games, tools, productivity or emulators; the Store also
+                    lists the app there, besides Community)}
   screenshot.png   optional
 
 Folders whose name starts with "_" (community/_template) are skipped.
 """
+CATEGORIES = ("games", "tools", "productivity", "emulators")
+
 import argparse
 import hashlib
 import json
@@ -163,6 +167,8 @@ def load(folder, fetch=True):
             errors.append(f"app.json: \"{key}\" is longer than {limit} characters")
     if "source" in meta and not str(meta["source"]).startswith("https://"):
         errors.append("app.json: \"source\" must be an https:// link")
+    if "category" in meta and meta["category"] not in CATEGORIES:
+        errors.append("app.json: \"category\" must be one of " + ", ".join(CATEGORIES))
 
     icon = os.path.join(folder, "icon.png")
     if not os.path.isfile(icon):
