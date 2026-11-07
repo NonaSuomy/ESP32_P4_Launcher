@@ -9,6 +9,9 @@ Every board under boards/ whose image is built at the current version goes in:
 guition_p4_43 from launcher/build/launcher.bin, any other <id> from
 launcher/build_<id>/launcher_<id>.bin (idf.py -B build_<id> -DLX_BOARD=<id> build).
 
+Each board also gets launcher_<id>_full.bin: bootloader, partition table and launcher in one
+file for a first install at address 0 (esptool or the ESP Tool web page).
+
 latest.json lists each board under "boards"; its top-level fields are guition_p4_43's,
 which is where launchers from before per-board releases look. The board reads
 releases/latest/download/latest.json, so the newest published release (not a draft
@@ -20,6 +23,8 @@ import json
 import os
 import re
 import shutil
+import subprocess
+import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = "giltal/ESP32_P4_Launcher"
@@ -54,6 +59,12 @@ def main():
             continue
         shutil.copyfile(path, os.path.join(args.out, name))
         files.append(name)
+        full = f"launcher_{board}_full.bin"
+        # flash_args = the build's own addresses and files (bootloader, partition table, otadata, app)
+        subprocess.run([sys.executable, "-m", "esptool", "--chip", "esp32p4", "merge_bin",
+                        "-o", os.path.abspath(os.path.join(args.out, full)), "@flash_args"],
+                       cwd=os.path.dirname(path), check=True, stdout=subprocess.DEVNULL)
+        files.append(full)
         boards[board] = {
             "url": f"https://github.com/{REPO}/releases/download/{tag}/{name}",
             "size": len(data),

@@ -56,7 +56,8 @@ apps/common/icons/        88x88 icons of the emulator apps (emubuild copies <app
 apps/common/v1compat/     v1 `app_services_t` host on the SDK + v1build.py: the RetroESP32 v1 PSRAM games
                           doom, opentyrian, quake, duke3d build with their own glue unchanged; frames go to the PPA without a copy (DISP v3 `present_ext`)
 tools/papp_dev.py         DevLink host tool
-tools/make_release.py     Release files for Settings → Update: launcher.bin + latest.json, prints the gh command
+tools/make_release.py     Release files: launcher.bin per board (Settings → Update) + launcher_<id>_full.bin (first install at 0x0,
+                          ESP Tool web page) + latest.json, prints the gh command
 tools/make_apps_release.py  Catalogue for the Store from build/apps + community/ (+ apps/store.json: category and one-line
                           description of each app): apps.json + .papp + icons; --publish uploads
                           them to the "apps" pre-release (bump the app's version.txt first). --base + /sd/update/apps_url.txt

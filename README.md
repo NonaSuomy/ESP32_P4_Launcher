@@ -13,6 +13,9 @@ The same launcher runs on more than one board, and the same `.papp` files and SD
 today the Guition ESP32-P4 4.3" (800×480), the Guition JC1060P470C 7" (1024×600) and the
 M5Stack Tab5 (1280×720).
 
+**Try it without installing anything:** flash your board from the browser with Espressif's ESP Tool page,
+copy the `SDcard` folder to a card and get the apps from the Store, see [Getting started](#getting-started).
+
 ![Home screen: the Emulators folder on the 7-inch board](docs/images/home.png)
 
 | Launcher version | App ABI | Toolchain | Boards |
@@ -175,7 +178,53 @@ Three boards are supported. All run the same apps from the same SD card. Adding 
 
 ## Getting started
 
-### 1. Install the tools
+To use the launcher you only need to flash it once, from a web browser, and prepare an SD card. Building from
+source is optional.
+
+### 1. Flash the launcher from your browser
+
+You need Chrome or Edge on a desktop computer (the page uses Web Serial, which Firefox and Safari don't
+have) and a USB cable for the board's USB-Serial-JTAG port.
+
+1. Download your board's full image from the [latest release](https://github.com/giltal/ESP32_P4_Launcher/releases/latest):
+
+   | Board | File |
+   |---|---|
+   | Guition ESP32-P4 4.3" | `launcher_guition_p4_43_full.bin` |
+   | Guition ESP32-P4 4.3" with a v3.x chip (see below) | `launcher_guition_p4_43_v3_full.bin` |
+   | Guition JC1060P470C 7" | `launcher_guition_p4_7_full.bin` |
+   | M5Stack Tab5 | `launcher_m5stack_tab5_full.bin` |
+   | Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 | `launcher_waveshare_p4_35_full.bin` |
+
+   A full image holds the bootloader, partition table and launcher, so it goes to address 0. The files
+   without `_full` are only the launcher, for Settings → Update.
+2. Connect the board and open Espressif's **ESP Tool** page: <https://espressif.github.io/esptool-js/>
+3. Under **Program**, click **Connect** and pick the board's port in the browser's list
+   (on Windows it shows as a USB Serial Device or USB JTAG). The log then shows the chip, ESP32-P4.
+   If it can't connect, hold the board's BOOT button, press RESET, release BOOT and try again.
+4. In the file table, change **Flash Address** from `0x1000` to **`0x0`** and choose the `_full.bin` file.
+   Leave Flash Mode, Frequency and Size as they are.
+5. Click **Program** and wait for the log to finish.
+6. Press RESET on the board, or unplug and reconnect it. The home screen appears.
+
+Then [prepare an SD card](#preparing-the-sd-card): copy the `SDcard` folder of this repository to an empty
+FAT32 card, connect to Wi-Fi in Settings and install apps from the Store (step 4 below).
+
+The same in a terminal, if you have esptool:
+
+```bash
+esptool.py --chip esp32p4 -p COMx write_flash 0x0 launcher_guition_p4_43_full.bin
+```
+
+**Which 4.3" chip do I have?** Newer Guition 4.3" boards carry a rev v3.x ESP32-P4. An image runs on one
+chip generation only, so these have their own image. On the ESP Tool page, the log after **Connect**
+shows the chip revision, for example "revision v1.0" or "revision v3.2"; `esptool.py --chip esp32p4
+-p COMx chip_id` shows it too. If you flashed the wrong one, the screen stays dark: flash the other
+file. After the first install, Settings → Update picks the right image by itself.
+
+### 2. Build the launcher yourself (optional)
+
+Install the tools:
 
 - [ESP-IDF v5.5.6](https://docs.espressif.com/projects/esp-idf/en/v5.5.6/esp32p4/get-started/index.html): use this
   version. The releases are built with it, and the downloaded components (Wi-Fi driver, display drivers, LVGL)
@@ -188,8 +237,6 @@ unless `IDF_PATH` is already set:
 ```powershell
 . .\tools\idf_env.ps1
 ```
-
-### 2. Build and flash the launcher
 
 Connect the board's USB-Serial-JTAG port, and use your own COM port below.
 
@@ -204,16 +251,12 @@ cd ..
 
 Each board builds in its own folder. The boards use different versions of the ESP32-C6 driver, so when you
 switch to the other board, add `reconfigure` once: `idf.py -B <folder> -DLX_BOARD=<id> reconfigure build`.
-
-Newer Guition 4.3" boards carry a rev v3.x ESP32-P4. An image runs on one chip generation only, so these
-have their own board id, `guition_p4_43_v3` (same board code). The bootloader prints the chip revision
-on its first lines, and `esptool.py --chip esp32p4 -p COMx chip_id` shows it too. Settings → Update picks the
-right image by itself.
+The 4.3" with a v3.x chip has its own board id, `guition_p4_43_v3` (same board code, built for v3 silicon).
 
 > On Windows, `papp_dev.py` needs the same COM port, so close any serial monitor first. Text logs go to
 > UART0. USB-Serial-JTAG belongs to DevLink.
 
-### 3. Build the apps
+### 3. Build the apps (optional)
 
 Apps only need the `riscv32-esp-elf` toolchain from ESP-IDF, not an ESP-IDF project.
 

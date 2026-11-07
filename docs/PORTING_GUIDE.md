@@ -87,7 +87,8 @@ another board's launcher, from the SD card or online.
 ## 5. Releases
 
 `python tools/make_release.py` packs every board built at the current version into one release:
-`latest.json` lists each under `"boards"`, and its top-level fields are `guition_p4_43`'s, where
+`launcher_<id>_full.bin` beside each image is the first install (bootloader, partition table and launcher,
+flashed at 0 from the ESP Tool web page or esptool). `latest.json` lists each under `"boards"`, and its top-level fields are `guition_p4_43`'s, where
 launchers from before per-board releases look. A board with no entry is told there is no release for
 it yet.
 
