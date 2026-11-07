@@ -4,6 +4,9 @@
  *   X / START  mode menu
  *   Stopwatch  A start/stop, B reset
  *   Timer      UP/DOWN minutes, A start/stop, B reset
+ * Touch (works without a pad): hold anywhere for the menu; in the clock a tap opens it too.
+ * Stopwatch and timer: tap the left half to start/stop, the right half to reset; a stopped
+ * timer's top band sets the minutes (left -1, right +1). Hints are drawn in those places.
  */
 #include <math.h>
 #include <string.h>
@@ -15,6 +18,9 @@ PAPP_MANIFEST(.id = "tool.clock", .name = "Clock", .version = PAPP_APP_VERSION, 
 #define H 240
 
 enum { MODE_CLOCK, MODE_STOPWATCH, MODE_TIMER };
+
+#define HOLD_US   600000          /* touch held this long = menu */
+#define BAND_H    56              /* timer: minutes band at the top */
 
 static uint16_t *s_px;
 static int s_stride;
@@ -59,6 +65,28 @@ static void digits(const int *v, int pairs, int y, int w, int h, int t, uint16_t
     (void)gap;
 }
 
+/* Touch hints: play / pause, reset, minus / plus, centred at (cx, cy) */
+static void hint_play(int cx, int cy, bool running, uint16_t c)
+{
+    if (running) {
+        rect(cx - 9, cy - 10, 6, 20, c);
+        rect(cx + 3, cy - 10, 6, 20, c);
+    } else {
+        for (int i = 0; i < 20; i++) rect(cx - 8, cy - 10 + i, 1 + (i < 10 ? i : 19 - i) * 18 / 10, 1, c);
+    }
+}
+
+static void hint_reset(int cx, int cy, uint16_t c)
+{
+    rect(cx - 9, cy - 9, 18, 18, c);
+}
+
+static void hint_sign(int cx, int cy, bool plus, uint16_t c)
+{
+    rect(cx - 10, cy - 2, 20, 5, c);
+    if (plus) rect(cx - 2, cy - 10, 5, 20, c);
+}
+
 static void beep(papp_audio_stream_t *a)
 {
     if (!a) return;
@@ -83,6 +111,9 @@ int main(int argc, char **argv)
     int64_t sw_base = 0, sw_start = 0, tm_left = 5 * 60 * 1000000LL, tm_last = 0;
     bool sw_run = false, tm_run = false;
     uint32_t prev = 0;
+    bool down = false, held = false, wait_release = false;
+    int64_t down_at = 0;
+    int tx = 0, ty = 0;
 
     while (!papp_exit_requested()) {
         papp_gamepad_t pad = { 0 };
@@ -91,13 +122,37 @@ int main(int argc, char **argv)
         prev = pad.buttons;
         int64_t now = papp_time_us();
 
-        if (press & (PAPP_BTN_X | PAPP_BTN_START)) {
+        /* Touch: a short tap acts where it lands; holding opens the menu */
+        papp_touch_point_t tp;
+        bool touch = papp_disp_touch(s, &tp, 1) > 0;
+        bool tap = false, menu = false;
+        if (wait_release) {
+            wait_release = touch;               /* the touch that closed the menu */
+        } else if (touch) {
+            if (!down) { down = true; held = false; down_at = now; }
+            tx = tp.x;
+            ty = tp.y;
+            if (!held && now - down_at >= HOLD_US) { held = true; menu = true; }
+        } else if (down) {
+            down = false;
+            tap = !held;
+        }
+        if (tap && mode == MODE_CLOCK) menu = true;
+
+        if (menu || (press & (PAPP_BTN_X | PAPP_BTN_START))) {
             static const char *const items[] = { "Clock", "Stopwatch", "Timer", "Exit" };
             int r = papp_ui_menu("Clock", items, 4, mode);
             if (r == 3) break;
             if (r >= 0) mode = r;
             prev = 0xFFFFFFFFu;             /* ignore what closed the menu until released */
+            down = false;
+            wait_release = true;
             continue;
+        }
+        if (tap) {                              /* the same as a button, by where it landed */
+            bool left = tx < W / 2;
+            if (mode == MODE_TIMER && !tm_run && ty < BAND_H) press |= left ? PAPP_BTN_DOWN : PAPP_BTN_UP;
+            else press |= left ? PAPP_BTN_A : PAPP_BTN_B;
         }
         if (mode == MODE_STOPWATCH) {
             if (press & PAPP_BTN_A) {
@@ -148,10 +203,18 @@ int main(int argc, char **argv)
             int cs = (int)(us / 10000 % 100), sec = (int)(us / 1000000);
             int v[3] = { sec / 60 % 100, sec % 60, cs };
             digits(v, 3, 75, 44, 90, 7, sw_run ? on : fg);
+            hint_play(W / 4, H - 30, sw_run, dim);
+            hint_reset(3 * W / 4, H - 30, dim);
         } else {
             int sec = (int)((tm_left + 999999) / 1000000);
             int v[2] = { sec / 60, sec % 60 };
             digits(v, 2, 70, 60, 100, 9, tm_run ? on : tm_left == 0 ? PAPP_RGB565(255, 90, 90) : fg);
+            hint_play(W / 4, H - 30, tm_run, dim);
+            hint_reset(3 * W / 4, H - 30, dim);
+            if (!tm_run) {
+                hint_sign(W / 4, BAND_H / 2, false, dim);
+                hint_sign(3 * W / 4, BAND_H / 2, true, dim);
+            }
         }
         papp_disp_present(s);
     }
