@@ -6,7 +6,9 @@ change: they ask for the display size, draw into their own surface, and the comp
 rotates it onto the panel. The same SD card runs on every board.
 
 Written from the second and third ports, the Guition JC1060P470C (7" 1024x600, `boards/guition_p4_7`)
-and the M5Stack Tab5 (720x1280, `boards/m5stack_tab5`), each done in an afternoon.
+and the M5Stack Tab5 (720x1280, `boards/m5stack_tab5`), each done in an afternoon. A contributed one, the Waveshare
+dev kit with a Raspberry Pi DSI touch display (`boards/waveshare_p4_rpi_dsi`), has its own notes in
+`docs/PORT_WAVESHARE_P4.md`: a panel that can't take RGB565, and a refresh rate below 50 Hz.
 
 ## 1. The board package
 
@@ -39,6 +41,9 @@ Start by copying the closest existing board. What each function must do is writt
    for the 4.3" portrait panel).
 3. **Display.** Two framebuffers, `bsp_display_show()` switches scan-out at the next refresh,
    `bsp_display_wait_flip()` waits for it. Clear both buffers before the backlight comes on.
+   The framebuffers are RGB565. A panel that needs another format (the Waveshare 5" bridge takes
+   only RGB888) keeps RGB565 shadow buffers and converts each frame in `bsp_display_show()` with the
+   PPA; the blend engine is about twice as fast as the scaler (SRM) for this.
 4. **Touch.** Report landscape coordinates scaled to the panel. The GT911 reports its own configured
    range (800x480 on the 7" board), so scale from that, not from the panel size. On the 7" board an
    I2C probe right after the panel reset upsets the GT911: talk to its addresses directly.
@@ -77,6 +82,8 @@ another board's launcher, from the SD card or online.
 ## 4. Test
 
 1. `python tools/papp_dev.py --port COMxx info` shows the board id, display size and capabilities.
+   On Linux and macOS the port is `/dev/ttyACM*`; a board with a separate UART bridge (CH343) shows
+   two, and DevLink is the USB-Serial-JTAG one.
    `bootlog` shows everything logged before DevLink came up: the place to look when a device doesn't start.
 2. `shot` screenshots the home screen: check the layout uses the whole display.
 3. Put the SD card from another board in, unchanged. Run apps of each kind: an emulator (NES), a v1
@@ -120,6 +127,13 @@ a 768x512 virtual screen (the home screen needs about 800x480), and a push task 
 is big-endian). About 30 fps at most. Touch is mapped back up to 768x512. These boards ship with
 ESP32-P4 **v3.2** silicon, which needs ESP-IDF 5.5.5 or later (Espressif advisory AR2026-004): on
 5.5.2 it boot-loops on LP_WDT resets before the bootloader prints a line.
+
+The Waveshare ESP32-P4 dev kit with a Raspberry Pi Touch Display (V1) or a copy (tested: Cuqi 5"): the same Function EV board wiring
+as the Guition 7" (I2C, ES8311, SD, C6 on SDIO), amplifier on GPIO 53. The panel is a TC358762
+DSI-to-DPI bridge on one lane, about 46.7 Hz, powered, reset and dimmed by an ATTINY88 at 0x45, with
+FT5x06 touch (mirrored in both axes). It shows RGB565 wrapped sideways, so the board converts to RGB888
+(above). No RTC, battery or buttons. USB host works only on the root port (the lower USB-A); the
+on-board hub's ports need a Transaction Translator that ESP-IDF doesn't have.
 
 A board sold with either chip generation gets one board id per generation, because an image runs on one
 only (the ROM and memory map differ, and the bootloader checks the revision range). `boards/guition_p4_43_v3`

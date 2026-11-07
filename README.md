@@ -178,6 +178,11 @@ Three boards are supported. All run the same apps from the same SD card. Adding 
 | Storage | microSD | microSD | microSD |
 | Input | USB host for gamepads and keyboards, optional GPIO button pad, battery pin | USB host for gamepads and keyboards | USB host for gamepads and keyboards |
 
+Contributed, tested by their authors: the Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (`waveshare_p4_35`), and the
+Waveshare ESP32-P4 Module dev kit with a Raspberry Pi Touch Display (V1) or a compatible one, tested with a
+Cuqi 5" (`waveshare_p4_rpi_dsi`: 800×480 at about 47 Hz, FT5x06 touch, ES8311, no real-time clock; USB
+gamepads on the lower USB-A port only; notes in [docs/PORT_WAVESHARE_P4.md](docs/PORT_WAVESHARE_P4.md)).
+
 ## Getting started
 
 To use the launcher you only need to flash it once, from a web browser, and prepare an SD card. Building from
@@ -248,6 +253,7 @@ idf.py -p COM9 build flash                                                    # 
 idf.py -B build_guition_p4_43_v3 -DLX_BOARD=guition_p4_43_v3 -p COMx build flash  # Guition 4.3" with a v3.x chip
 idf.py -B build_guition_p4_7 -DLX_BOARD=guition_p4_7 -p COM10 build flash     # Guition 7"
 idf.py -B build_m5stack_tab5 -DLX_BOARD=m5stack_tab5 -p COM15 build flash     # M5Stack Tab5
+idf.py -B build_waveshare_p4_rpi_dsi -DLX_BOARD=waveshare_p4_rpi_dsi -p COMxx build flash   # Waveshare + RPi display
 cd ..
 ```
 
@@ -742,7 +748,8 @@ rebuilt. [docs/PORTING_GUIDE.md](docs/PORTING_GUIDE.md) is the checklist from th
 launcher/              ESP-IDF project: main.c + home.c (LVGL home screen)
 boards/<id>/           board packages: guition_p4_43 (4.3"), guition_p4_43_v3 (the 4.3" with a v3.x chip),
                        guition_p4_7 (7"), m5stack_tab5,
-                       waveshare_p4_35 (Waveshare 3.5" SPI, needs ESP-IDF >= 5.5.5)
+                       waveshare_p4_35 (Waveshare 3.5" SPI, needs ESP-IDF >= 5.5.5),
+                       waveshare_p4_rpi_dsi (Waveshare dev kit + RPi DSI display)
 components/
   bsp/                 BSP contract (bsp.h)
   papp_abi/            .papp format and interface definitions

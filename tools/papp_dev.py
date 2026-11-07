@@ -114,10 +114,17 @@ class DevLink:
         self.ser.port = port
         self.ser.baudrate = 115200
         self.ser.timeout = 0.05
-        # Don't toggle DTR/RTS on open: on USB-Serial-JTAG that can reset the chip.
-        self.ser.dtr = False
-        self.ser.rts = False
-        self.ser.open()
+        # Don't toggle DTR/RTS on open: on USB-Serial-JTAG RTS high with DTR low resets the chip.
+        if os.name == "nt":
+            self.ser.dtr = False
+            self.ser.rts = False
+            self.ser.open()
+        else:
+            # Linux/macOS raise both lines on open; pyserial would then drop DTR before RTS
+            # (a reset). Keep both high through open, then drop RTS first.
+            self.ser.open()
+            self.ser.rts = False
+            self.ser.dtr = False
         self.on_log = on_log or (lambda app, text: None)
         self.on_event = on_event or (lambda ev: None)
         self.seq = 0

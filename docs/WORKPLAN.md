@@ -422,6 +422,11 @@ bootlog` (log kept from boot). Orientation, touch and sound checked by hand. Not
 (2 cells via INA226). The ST7123 / ST7121 panel variants are detected and set up as in M5Stack's BSP,
 waiting for a test on such a unit.
 
+**Contributed board, Waveshare ESP32-P4 dev kit + Raspberry Pi DSI touch display (`boards/waveshare_p4_rpi_dsi`):**
+TC358762 bridge 800x480 at 46.7 Hz, RGB888 only (the board converts its RGB565 framebuffers with the PPA
+blend engine), ATTINY88 for panel power and backlight, FT5x06, ES8311, C6 with esp_hosted 2.12. Same SD
+card: NES, SNES, Genesis, Game Boy, Doom, Clock, Wi-Fi; `smoke.py` passes. Notes in `docs/PORT_WAVESHARE_P4.md`.
+
 Pick a board that is **meaningfully different** from the reference to stress the abstraction — e.g.
 a 7″ 1024×600 landscape P4 board (Espressif ESP32-P4-Function-EV-Board or a Waveshare ESP32-P4
 board), different codec, no GPIO pad (USB-only input).

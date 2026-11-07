@@ -14,7 +14,10 @@ launcher/                 ESP-IDF project (factory app; main.c + home.c = LVGL h
 boards/<id>/board/        BSP implementation (component "board", pins esp_hosted for its C6); boards/<id>/sdkconfig.board.
                           guition_p4_43 (4.3" 480x800, image "launcher"; guition_p4_43_v3 = same sources built for
                           rev v3.x chips, BOARD_CHIP_V3 picks the id), guition_p4_7 (7" 1024x600), m5stack_tab5 (720x1280,
-                          power rails on two PI4IOE5V6408 I2C expanders, esp_hosted 1.4 for M5Stack's C6 firmware)
+                          power rails on two PI4IOE5V6408 I2C expanders, esp_hosted 1.4 for M5Stack's C6 firmware),
+                          waveshare_p4_rpi_dsi (Waveshare dev kit + RPi Touch Display V1-style 800x480 panel: TC358762, ATTINY88
+                          power/backlight at 0x45, FT5x06 touch; RGB565 shadow buffers converted to the RGB888 scan-out
+                          by the PPA, docs/PORT_WAVESHARE_P4.md)
 components/bsp/           BSP contract (bsp.h) — the core only talks to hardware through it
 components/papp_abi/      papp_abi.h — .papp v2 format + interfaces (shared with apps; no IDF includes)
 components/lx_loader/     App Manager: loader, relocation, imports, services (SYS/MEM/FS/DISP/AUDI/INPT/THRD/UI/NET/BLE), teardown;
@@ -124,6 +127,9 @@ tests/board/smoke.py      Board regression: relocation test, test apps, crash re
   Guition 4.3" `guition_p4_43` on **COM9** (build in `launcher/build`), Guition 7" JC1060P470C `guition_p4_7` on **COM10**
   (`idf.py -B build_guition_p4_7 -DLX_BOARD=guition_p4_7 -p COM10 build flash`). Porting: `docs/PORTING_GUIDE.md`.
   M5Stack Tab5 `m5stack_tab5` on **COM15** (`-B build_m5stack_tab5`; image "launcher_m5stack_tab5").
+  Waveshare `waveshare_p4_rpi_dsi` (`-B build_waveshare_p4_rpi_dsi`; image "launcher_waveshare_p4_rpi_dsi"), tested on Linux:
+  /dev/ttyACM0 = CH343 UART console and flashing, /dev/ttyACM1 = USB-Serial-JTAG (DevLink). Open the console without
+  changing DTR/RTS (that resets the board); USB host works on the lower USB-A port only (no hub TT in IDF).
   `managed_components/` is shared and esp_hosted differs per board: after building another board, add `reconfigure`.
   launcher/CMakeLists.txt turns off the component manager's new-version check (newer esp_hosted releases broke configure).
   Every managed component is pinned to an exact version in the idf_component.yml files (dependencies.lock is not in git,
