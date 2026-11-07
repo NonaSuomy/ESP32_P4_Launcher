@@ -163,7 +163,7 @@ Three boards are supported. All run the same apps from the same SD card. Adding 
 | Part | Guition ESP32-P4 4.3" | Guition JC1060P470C 7" | M5Stack Tab5 |
 |---|---|---|---|
 | Board id (`-DLX_BOARD=`) | `guition_p4_43` (default) | `guition_p4_7` | `m5stack_tab5` |
-| SoC | ESP32-P4, dual RISC-V at 360 MHz, chip revision v1.x | same | same |
+| SoC | ESP32-P4, dual RISC-V at 360 MHz, chip revision v1.x (v3.x: board id `guition_p4_43_v3`) | same | same |
 | Memory | 32 MB hex PSRAM at 200 MHz, 16 MB flash | same | same |
 | Display | 480×800 ST7701 MIPI-DSI, used in landscape as 800×480 | 1024×600 JD9165 MIPI-DSI, landscape | 720×1280 MIPI-DSI (ILI9881C, ST7123 or ST7121, detected at start), used in landscape as 1280×720 |
 | Touch | GT911 capacitive | GT911 capacitive | GT911, or the touch built into the ST7123 / ST7121 panel |
@@ -196,6 +196,7 @@ Connect the board's USB-Serial-JTAG port, and use your own COM port below.
 ```powershell
 cd launcher
 idf.py -p COM9 build flash                                                    # Guition 4.3" (default board)
+idf.py -B build_guition_p4_43_v3 -DLX_BOARD=guition_p4_43_v3 -p COMx build flash  # Guition 4.3" with a v3.x chip
 idf.py -B build_guition_p4_7 -DLX_BOARD=guition_p4_7 -p COM10 build flash     # Guition 7"
 idf.py -B build_m5stack_tab5 -DLX_BOARD=m5stack_tab5 -p COM15 build flash     # M5Stack Tab5
 cd ..
@@ -203,6 +204,11 @@ cd ..
 
 Each board builds in its own folder. The boards use different versions of the ESP32-C6 driver, so when you
 switch to the other board, add `reconfigure` once: `idf.py -B <folder> -DLX_BOARD=<id> reconfigure build`.
+
+Newer Guition 4.3" boards carry a rev v3.x ESP32-P4. An image runs on one chip generation only, so these
+have their own board id, `guition_p4_43_v3` (same board code). The bootloader prints the chip revision
+on its first lines, and `esptool.py --chip esp32p4 -p COMx chip_id` shows it too. Settings → Update picks the
+right image by itself.
 
 > On Windows, `papp_dev.py` needs the same COM port, so close any serial monitor first. Text logs go to
 > UART0. USB-Serial-JTAG belongs to DevLink.
@@ -677,7 +683,8 @@ rebuilt. [docs/PORTING_GUIDE.md](docs/PORTING_GUIDE.md) is the checklist from th
 
 ```
 launcher/              ESP-IDF project: main.c + home.c (LVGL home screen)
-boards/<id>/           board packages: guition_p4_43 (4.3"), guition_p4_7 (7"), m5stack_tab5,
+boards/<id>/           board packages: guition_p4_43 (4.3"), guition_p4_43_v3 (the 4.3" with a v3.x chip),
+                       guition_p4_7 (7"), m5stack_tab5,
                        waveshare_p4_35 (Waveshare 3.5" SPI, needs ESP-IDF >= 5.5.5)
 components/
   bsp/                 BSP contract (bsp.h)

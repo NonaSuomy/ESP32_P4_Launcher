@@ -118,3 +118,8 @@ a 768x512 virtual screen (the home screen needs about 800x480), and a push task 
 is big-endian). About 30 fps at most. Touch is mapped back up to 768x512. These boards ship with
 ESP32-P4 **v3.2** silicon, which needs ESP-IDF 5.5.5 or later (Espressif advisory AR2026-004): on
 5.5.2 it boot-loops on LP_WDT resets before the bootloader prints a line.
+
+A board sold with either chip generation gets one board id per generation, because an image runs on one
+only (the ROM and memory map differ, and the bootloader checks the revision range). `boards/guition_p4_43_v3`
+is the pattern: an `sdkconfig.board` with the v3 lines, and a `board/CMakeLists.txt` that builds
+`guition_p4_43`'s sources with `BOARD_CHIP_V3` defined, which `board.c` turns into the other id and name.

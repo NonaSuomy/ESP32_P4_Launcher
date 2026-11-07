@@ -1,0 +1,12 @@
+# Guition ESP32-P4 4.3" with a rev v3.x chip — board-specific sdkconfig fragment
+# (same board as guition_p4_43, whose sources it builds; only the chip revision differs)
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+# Rev v3.x silicon. v3.2 needs ESP-IDF >= 5.5.5 (Espressif advisory AR2026-004).
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=n
+CONFIG_ESP32P4_REV_MIN_300=y
+# The CPU runs at 400 MHz: the v3 default, 360 is a pre-v3 choice

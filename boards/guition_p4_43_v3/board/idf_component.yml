@@ -1,0 +1,10 @@
+dependencies:
+  idf: ">=5.5"
+  espressif/esp_codec_dev: "1.5.11"
+  # Exact versions: a build matches the released launcher whatever is newest on the registry.
+  # Wi-Fi companion: this board's ESP32-C6 runs esp_hosted 2.0.17 firmware
+  espressif/esp_wifi_remote: "0.14.5"
+  espressif/esp_hosted: "2.0.17"
+  # Pulled in by the packages above, pinned too so every build is the same
+  espressif/eppp_link: "1.1.6"
+  espressif/esp_serial_slave_link: "1.1.2"

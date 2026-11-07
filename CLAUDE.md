@@ -12,7 +12,8 @@ Design: `docs/ARCHITECTURE.md`. Plan + status: `docs/WORKPLAN.md`.
 launcher/                 ESP-IDF project (factory app; main.c + home.c = LVGL home screen + app folders; store.c = the Store,
                           first home tile: categories, app pages, install/update/remove; home_ui.h = what it uses from home.c). Board: -DLX_BOARD=<id> (default guition_p4_43)
 boards/<id>/board/        BSP implementation (component "board", pins esp_hosted for its C6); boards/<id>/sdkconfig.board.
-                          guition_p4_43 (4.3" 480x800, image "launcher"), guition_p4_7 (7" 1024x600), m5stack_tab5 (720x1280,
+                          guition_p4_43 (4.3" 480x800, image "launcher"; guition_p4_43_v3 = same sources built for
+                          rev v3.x chips, BOARD_CHIP_V3 picks the id), guition_p4_7 (7" 1024x600), m5stack_tab5 (720x1280,
                           power rails on two PI4IOE5V6408 I2C expanders, esp_hosted 1.4 for M5Stack's C6 firmware)
 components/bsp/           BSP contract (bsp.h) — the core only talks to hardware through it
 components/papp_abi/      papp_abi.h — .papp v2 format + interfaces (shared with apps; no IDF includes)
