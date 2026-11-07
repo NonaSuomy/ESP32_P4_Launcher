@@ -297,6 +297,7 @@ static inline unsigned int gwenesis_bus_map_z80_address(unsigned int address) {
   case 0x3000:
     return Z80_RAM_ADDR1K;
   case 0x4000:
+  case 0x5000:                      /* 0x4000-0x5FFF is all YM2612 (mirrors) */
     return Z80_YM2612_ADDR;
   case 0x6000:
     return Z80_BANK_ADDR;

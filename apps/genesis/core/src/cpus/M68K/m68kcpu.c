@@ -25,6 +25,7 @@ extern int vdp_68k_irq_ack(int int_level);
 #include "m68kcpu.h"
 #include "m68kops.h"
 #include "gwenesis_savestate.h"
+#include <stdio.h>
 
 /* ======================================================================== */
 /* ================================= DATA ================================= */
@@ -35,6 +36,24 @@ static unsigned char m68ki_cycles[0x10000];
 #endif
 
 static int irq_latency;
+
+/* Runs the opcode in REG_IR. The trimmed tables (TABLES_FULL off) end at 0xEFBF; reading a
+ * handler for a line-F opcode (some games run them on purpose) or 0xEFC0-0xEFFF from past the
+ * end jumped to whatever followed the table (a crash after a while in Xenon 2). */
+static inline void m68ki_execute(void)
+{
+#ifndef TABLES_FULL
+  if (REG_IR >= M68K_TABLE_END) {
+    static int logged;
+    if (!logged++) printf("m68k: opcode %04X at %06X: %s exception\n", REG_IR, (REG_PC - 2) & 0xffffff,
+                          REG_IR >= 0xF000 ? "line-F" : "illegal");
+    if (REG_IR >= 0xF000) m68ki_exception_1111();
+    else m68ki_exception_illegal();
+    return;
+  }
+#endif
+  m68ki_instruction_jump_table[REG_IR]();
+}
 
 m68ki_cpu_core *m68k = NULL;
 
@@ -237,14 +256,14 @@ void m68k_set_irq_delay(unsigned int int_level)
     if ((REG_IR & 0xF000) != 0x2000)
     {
       /* Finish executing current instruction */
-      USE_CYCLES(CYC_INSTRUCTION[REG_IR]);
+      USE_CYCLES(CYC_INSTRUCTION_OF(REG_IR));
 
       /* One instruction delay before interrupt */
       irq_latency = 1;
       m68ki_trace_t1() /* auto-disable (see m68kcpu.h) */
       m68ki_use_data_space() /* auto-disable (see m68kcpu.h) */
       REG_IR = m68ki_read_imm_16();
-      m68ki_instruction_jump_table[REG_IR]();
+      m68ki_execute();
       m68ki_exception_if_trace() /* auto-disable (see m68kcpu.h) */
       irq_latency = 0;
     }
@@ -308,11 +327,11 @@ void m68k_run(unsigned int cycles)
     /* Decode next instruction */
     REG_IR = m68ki_read_imm_16();
 
-//    printf("PC=%x IR=%x CYCLES=%d \n",m68k->pc,REG_IR,CYC_INSTRUCTION[REG_IR]);
+//    printf("PC=%x IR=%x CYCLES=%d \n",m68k->pc,REG_IR,CYC_INSTRUCTION_OF(REG_IR));
 
     /* Execute instruction */
-    m68ki_instruction_jump_table[REG_IR]();
-    USE_CYCLES(CYC_INSTRUCTION[REG_IR]);
+    m68ki_execute();
+    USE_CYCLES(CYC_INSTRUCTION_OF(REG_IR));
 
     /* Trace m68k_exception, if necessary */
     m68ki_exception_if_trace(); /* auto-disable (see m68kcpu.h) */
@@ -321,7 +340,7 @@ void m68k_run(unsigned int cycles)
 
 int m68k_cycles(void)
 {
-  return CYC_INSTRUCTION[REG_IR];
+  return CYC_INSTRUCTION_OF(REG_IR);
 }
 
 int m68k_cycles_run(void)

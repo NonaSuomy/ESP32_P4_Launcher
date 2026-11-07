@@ -213,7 +213,15 @@
 #define CPU_RUN_MODE     m68ki_cpu->run_mode
 #endif
 
-#define CYC_INSTRUCTION   m68ki_cycles
+#ifndef TABLES_FULL
+/* The trimmed jump and cycle tables stop at 0xEFBF: above it a 68000 only has illegal
+ * (0xEFC0-0xEFFF) and line-F (0xF000-0xFFFF) opcodes, which m68ki_execute() turns into
+ * their exceptions. Those cost no table cycles of their own. */
+#define M68K_TABLE_END    0xEFC0
+#define CYC_INSTRUCTION_OF(ir) ((ir) < M68K_TABLE_END ? m68ki_cycles[ir] : 0)
+#else
+#define CYC_INSTRUCTION_OF(ir) m68ki_cycles[ir]
+#endif
 #define CYC_EXCEPTION     m68ki_exception_cycle_table
 #define CYC_BCC_NOTAKE_B  ( -2 * MUL)
 #define CYC_BCC_NOTAKE_W  (  2 * MUL)
@@ -1375,7 +1383,7 @@ static void m68ki_exception_privilege_violation(void)
   m68ki_jump_vector(EXCEPTION_PRIVILEGE_VIOLATION);
 
   /* Use up some clock cycles and undo the instruction's cycles */
-  USE_CYCLES(CYC_EXCEPTION[EXCEPTION_PRIVILEGE_VIOLATION] - CYC_INSTRUCTION[REG_IR]);
+  USE_CYCLES(CYC_EXCEPTION[EXCEPTION_PRIVILEGE_VIOLATION] - CYC_INSTRUCTION_OF(REG_IR));
 }
 
 /* Exception for A-Line instructions */
@@ -1386,7 +1394,7 @@ INLINE void m68ki_exception_1010(void)
   m68ki_jump_vector(EXCEPTION_1010);
 
   /* Use up some clock cycles and undo the instruction's cycles */
-  USE_CYCLES(CYC_EXCEPTION[EXCEPTION_1010] - CYC_INSTRUCTION[REG_IR]);
+  USE_CYCLES(CYC_EXCEPTION[EXCEPTION_1010] - CYC_INSTRUCTION_OF(REG_IR));
 }
 
 /* Exception for F-Line instructions */
@@ -1397,7 +1405,7 @@ INLINE void m68ki_exception_1111(void)
   m68ki_jump_vector(EXCEPTION_1111);
 
   /* Use up some clock cycles and undo the instruction's cycles */
-  USE_CYCLES(CYC_EXCEPTION[EXCEPTION_1111] - CYC_INSTRUCTION[REG_IR]);
+  USE_CYCLES(CYC_EXCEPTION[EXCEPTION_1111] - CYC_INSTRUCTION_OF(REG_IR));
 }
 
 /* Exception for illegal instructions */
@@ -1413,7 +1421,7 @@ INLINE void m68ki_exception_illegal(void)
   m68ki_jump_vector(EXCEPTION_ILLEGAL_INSTRUCTION);
 
   /* Use up some clock cycles and undo the instruction's cycles */
-  USE_CYCLES(CYC_EXCEPTION[EXCEPTION_ILLEGAL_INSTRUCTION] - CYC_INSTRUCTION[REG_IR]);
+  USE_CYCLES(CYC_EXCEPTION[EXCEPTION_ILLEGAL_INSTRUCTION] - CYC_INSTRUCTION_OF(REG_IR));
 }
 
 
@@ -1430,7 +1438,7 @@ INLINE void m68ki_exception_address_error(void)
   if(CPU_RUN_MODE == RUN_MODE_BERR_AERR_RESET)
   {
     CPU_STOPPED = STOP_LEVEL_HALT;
-    SET_CYCLES(m68ki_cpu->cycle_end - CYC_INSTRUCTION[REG_IR]);
+    SET_CYCLES(m68ki_cpu->cycle_end - CYC_INSTRUCTION_OF(REG_IR));
     return;
   }
   CPU_RUN_MODE = RUN_MODE_BERR_AERR_RESET;
@@ -1441,7 +1449,7 @@ INLINE void m68ki_exception_address_error(void)
   m68ki_jump_vector(EXCEPTION_ADDRESS_ERROR);
 
   /* Use up some clock cycles and undo the instruction's cycles */
-  USE_CYCLES(CYC_EXCEPTION[EXCEPTION_ADDRESS_ERROR] - CYC_INSTRUCTION[REG_IR]);
+  USE_CYCLES(CYC_EXCEPTION[EXCEPTION_ADDRESS_ERROR] - CYC_INSTRUCTION_OF(REG_IR));
 }
 #endif
 
