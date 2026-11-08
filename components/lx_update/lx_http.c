@@ -23,7 +23,7 @@ esp_http_client_handle_t lx_http_new(const char *url)
         .crt_bundle_attach = esp_crt_bundle_attach,
         .buffer_size = CHUNK,
         .buffer_size_tx = CHUNK,                /* release downloads redirect to long URLs */
-        .timeout_ms = 15000,
+        .timeout_ms = 8000,                     /* a lost reply is retried sooner */
         .user_agent = "P4-Launcher",
     };
     return esp_http_client_init(&cfg);
@@ -61,8 +61,8 @@ int lx_http_get_text(const char *url, size_t max, char **out, char *why, size_t 
         return -1;
     }
     int status = -1;
-    for (int tries = 0; status < 0 && tries < 3; tries++) {        /* a weak signal drops some */
-        if (tries) vTaskDelay(pdMS_TO_TICKS(2000));
+    for (int tries = 0; status < 0 && tries < 4; tries++) {        /* a weak signal drops some */
+        if (tries) vTaskDelay(pdMS_TO_TICKS(1000));
         esp_http_client_handle_t c = lx_http_new(url);
         if (!c) break;
         status = lx_http_open(c, why, why_len);

@@ -558,8 +558,12 @@ static void diag_task(void *arg)
     esp_wifi_get_max_tx_power(&power);
     esp_wifi_get_bandwidth(WIFI_IF_STA, &bw);
     esp_wifi_get_protocol(WIFI_IF_STA, &proto);
-    diag("tx power %.2f dBm, bandwidth %d, protocol 0x%x, ap phy b%d g%d n%d ax%d\n", power / 4.0, (int)bw, proto,
-         ap.phy_11b, ap.phy_11g, ap.phy_11n, ap.phy_11ax);
+    wifi_ps_type_t ps = WIFI_PS_NONE;
+#if LX_HOSTED_MAJOR >= 2
+    esp_wifi_get_ps(&ps);
+#endif
+    diag("tx power %.2f dBm, bandwidth %d, protocol 0x%x, power save %d, ap phy b%d g%d n%d ax%d\n", power / 4.0,
+         (int)bw, proto, (int)ps, ap.phy_11b, ap.phy_11g, ap.phy_11n, ap.phy_11ax);
     uint32_t one = ESP_IP4TOADDR(1, 1, 1, 1);
     diag_ping("gateway", ip.gw.addr);
     if ((int)arg != 1) {
