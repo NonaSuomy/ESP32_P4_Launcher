@@ -188,6 +188,14 @@ static bool sys_local_time(papp_datetime_t *out)
     return true;
 }
 
+static bool sys_utc_time(int64_t *seconds)
+{
+    time_t now = time(NULL);
+    if (now < 1700000000) return false;
+    *seconds = (int64_t)now;
+    return true;
+}
+
 static const papp_if_sys_t s_if_sys = {
     .hdr = { PAPP_IF_SYS, PAPP_IF_SYS_VER, sizeof(papp_if_sys_t) },
     .abi_version    = LX_ABI_VERSION,
@@ -198,6 +206,7 @@ static const papp_if_sys_t s_if_sys = {
     .exit_requested = sys_exit_requested,
     .board_id       = sys_board_id,
     .local_time     = sys_local_time,
+    .utc_time       = sys_utc_time,
 };
 
 /* ── MEM ────────────────────────────────────────────────────────────────── */

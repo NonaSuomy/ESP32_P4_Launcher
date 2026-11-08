@@ -11,13 +11,13 @@ community/<dir>/
   <file>.papp      the app, built with the SDK (or "url" + "sha256" + "size" in app.json)
   icon.png         square PNG, 64 to 256 pixels (88x88 is best), transparency OK
   app.json         {"author", "description", "license", "source" (optional),
-                    "category" (optional: games, tools, productivity or emulators; the Store also
+                    "category" (optional: games, tools, productivity, education or emulators; the Store also
                     lists the app there, besides Community)}
   screenshot.png   optional
 
 Folders whose name starts with "_" (community/_template) are skipped.
 """
-CATEGORIES = ("games", "tools", "productivity", "emulators")
+CATEGORIES = ("games", "tools", "productivity", "education", "emulators")
 
 import argparse
 import hashlib

@@ -128,7 +128,7 @@ Two rules keep this portable: apps only see the ABI, and the launcher core only 
 - DevLink: a USB protocol to upload, run, log, screenshot, inject input and read crash reports
 - Self-update from the SD card or from GitHub Releases (Settings → Update), with automatic rollback if a new
   version doesn't start. Each board only ever installs its own launcher
-- Store: the first tile on the home screen. Apps by category (Emulators, Games, Tools, Productivity,
+- Store: the first tile on the home screen. Apps by category (Emulators, Games, Tools, Productivity, Education,
   Community, Installed), each with its icon, description and version; installs, updates and removes them over
   Wi-Fi (downloads checked with SHA-256), and the tile counts the updates waiting
 - Controllers: USB HID pads are read from their own report descriptor, Xbox 360-style (XInput) pads and receivers such as 8BitDo's work too, and any pad can be remapped in Settings
@@ -153,7 +153,7 @@ Two rules keep this portable: apps only see the ABI, and the launcher core only 
 | Atari 800 / XL / 5200 | atari800 | ZX Spectrum | spectemu |
 | Doom | prboom | Quake | WinQuake |
 | Duke Nukem 3D | Chocolate Duke3D | OpenTyrian | OpenTyrian |
-| Clock (clock, stopwatch, timer) | This project | Files (browse, preview, delete) | This project |
+| Clock (clock, alarms, stopwatch, timer, world clock) | This project | Files (browse, preview, delete) | This project |
 
 The test apps (`hello`, `gfx_demo`, `audio_test`, `input_test`, `thread_test`, `fast_bench`, `browse_test`,
 `libc_test`) are hidden unless you turn on **Settings → Show developer apps**.
@@ -578,7 +578,7 @@ Include only `papp/papp.h`. The full API, with examples, is in
 
 | Interface | Version | What it gives you | Example calls |
 |---|---|---|---|
-| `SYS` | 2 | Logging, time, local time, exit, board id | `papp_log`, `papp_time_us`, `papp_local_time`, `papp_exit` |
+| `SYS` | 3 | Logging, time, local time, UTC time, exit, board id | `papp_log`, `papp_time_us`, `papp_local_time`, `papp_utc_time`, `papp_exit` |
 | `MEM` | 1 | Tracked allocation from PSRAM, internal or DMA memory | `papp_alloc`, `papp_free` |
 | `FS` | 1 | Files, also reachable through stdio with `--libc` | `papp_fs()` |
 | `DISP` | 3 | Surfaces, scaling, tear-free present, zero-copy present, touch | `papp_disp_surface_create`, `papp_disp_present`, `papp_disp_present_ext` |
@@ -788,7 +788,8 @@ Further reading:
 ## Credits and licensing
 
 This project grew out of [RetroESP32-P4](https://github.com/giltal/RetroESP32-P4), the reference for its drivers
-and ports. The launcher UI uses [LVGL](https://lvgl.io).
+and ports. The launcher UI uses [LVGL](https://lvgl.io). The Clock's text is drawn with
+[Montserrat](https://github.com/JulietaUla/Montserrat) (SIL Open Font License 1.1), rendered by `apps/clock/make_font.py`.
 
 This project's original code (launcher, SDK, tools, compatibility layers and board support) is released under
 the [MIT License](LICENSE).

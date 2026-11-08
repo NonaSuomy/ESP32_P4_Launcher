@@ -78,7 +78,7 @@ New services follow the existing rules: interfaces are appended and versioned, a
 | B1 | Home screen folders: **done, 0.18** | — | Directories in `/sd/apps` without a `.papp`, one level. New, rename, delete (apps return to the main page, other files are kept) and move, by X / Y or a long press. Replaces the All / Emulators / Games / Other filter. **Long press not tested by touch** |
 | B2 | File browser: **first cut, 0.17** | — | `apps/files` PAPP: browse all of SD, details, text preview, delete with confirm (default Cancel). Rename, copy and open-with are missing |
 | B3 | File associations | S | Manifest list (`.nes`, `.sfc`, …), which B2 and any future library use |
-| B4 | Clock: **done, 0.17** | — | `apps/clock` PAPP: clock, stopwatch, timer. SYS v2 `papp_local_time`. Alarms are not done |
+| B4 | Clock: **done, 0.17** | — | `apps/clock` PAPP: clock, stopwatch, timer. SYS v2 `papp_local_time`. 2.0 (launcher 0.27): round function buttons, close button, alarms (ring while the Clock is open), stopwatch laps, timer ring, world clock (SYS v3 `papp_utc_time` + POSIX zones in newlib) |
 | B5 | Sleep and power: **dimming done, 0.19** | S | The home screen dims to 15% after 3 minutes and any input restores it. Not seen on the panel yet. Sleep and wake are not done |
 
 **Clock: both, split by job.** Time itself belongs to the launcher: the home screen needs it, and NTP, time zone

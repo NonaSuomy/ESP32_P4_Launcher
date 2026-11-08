@@ -20,7 +20,7 @@ Community folder on the home screen. Community apps are not reviewed: see
    | `screenshot.png` | optional: `python tools/papp_dev.py shot screenshot.png` while it runs |
 
    `app.json` holds `author`, a one-line `description`, the `license`, optionally a `category` (`games`,
-   `tools`, `productivity` or `emulators`: the Store lists the app there too) and, if you publish it, a `source`
+   `tools`, `productivity`, `education` or `emulators`: the Store lists the app there too) and, if you publish it, a `source`
    link. An app bigger than 4 MB stays on your own release page: leave the `.papp` out and add
    `"url"` (https link to it), `"sha256"` and `"size"` to `app.json`.
 3. Check it: `python tools/community.py`.

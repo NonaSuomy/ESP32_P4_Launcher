@@ -40,19 +40,20 @@ static const char *TAG = "store";
 #define REFETCH_US   (5 * 60 * 1000000LL)   /* opening the Store reads the catalogue again after this */
 #define MAX_ITEMS    (LX_APPSTORE_MAX + 48)
 
-enum { CAT_ALL, CAT_EMU, CAT_GAMES, CAT_TOOLS, CAT_PROD, CAT_COMMUNITY, CAT_INSTALLED, CAT_N };
+enum { CAT_ALL, CAT_EMU, CAT_GAMES, CAT_TOOLS, CAT_PROD, CAT_EDU, CAT_COMMUNITY, CAT_INSTALLED, CAT_N };
+#define CAT_LAST_KEY CAT_EDU        /* categories an app can name in the catalogue */
 static const char *const k_cat_name[CAT_N] = {
-    "All apps", "Emulators", "Games", "Tools", "Productivity", "Community", "Installed",
+    "All apps", "Emulators", "Games", "Tools", "Productivity", "Education", "Community", "Installed",
 };
 static const char *const k_cat_symbol[CAT_N] = {
-    LV_SYMBOL_LIST, LV_SYMBOL_VIDEO, LV_SYMBOL_PLAY, LV_SYMBOL_SETTINGS, LV_SYMBOL_EDIT,
+    LV_SYMBOL_LIST, LV_SYMBOL_VIDEO, LV_SYMBOL_PLAY, LV_SYMBOL_SETTINGS, LV_SYMBOL_EDIT, LV_SYMBOL_FILE,
     LV_SYMBOL_SHUFFLE, LV_SYMBOL_SD_CARD,
 };
-static const char *const k_cat_key[CAT_N] = { "", "emulators", "games", "tools", "productivity" };
+static const char *const k_cat_key[CAT_N] = { "", "emulators", "games", "tools", "productivity", "education" };
 
 typedef struct {
     int cat;                    /* catalogue index, -1 = only on the card */
-    uint8_t category;           /* CAT_EMU .. CAT_PROD; CAT_ALL = none given */
+    uint8_t category;           /* CAT_EMU .. CAT_LAST_KEY; CAT_ALL = none given */
     bool community;
     char id[32];
     char name[32];
@@ -94,7 +95,7 @@ static void detail_show(void);
 
 static uint8_t category_of(const char *key, const char *id)
 {
-    for (int c = CAT_EMU; c <= CAT_PROD; c++)
+    for (int c = CAT_EMU; c <= CAT_LAST_KEY; c++)
         if (strcmp(key, k_cat_key[c]) == 0) return c;
     if (strncmp(id, "emu.", 4) == 0) return CAT_EMU;            /* the project's id prefixes */
     if (strncmp(id, "game.", 5) == 0) return CAT_GAMES;
@@ -403,6 +404,7 @@ static void on_row(lv_event_t *ev)
 static void on_tab(lv_event_t *ev)
 {
     s_tab = (int)(intptr_t)lv_event_get_user_data(ev);
+    ui_focus_set(s_rail[s_tab]);        /* a tap moves the focus too, or the old one keeps its frame */
     list_show();
 }
 
@@ -529,7 +531,7 @@ static void list_show(void)
         note(s_list, s_fetching ? "Reading the app list..." :
              lx_net_state() == LX_NET_CONNECTED ? "The app list could not be read. Open the Store again to retry." :
              "Connect to Wi-Fi (Settings, Wi-Fi) to see the apps online. Installed shows the apps on the card.");
-    else if (!s_nrows && s_tab == CAT_PROD)
+    else if (!s_nrows && (s_tab == CAT_PROD || s_tab == CAT_EDU))
         note(s_list, "No apps here yet.\n\nMade one? Share it: see \"Sharing your app\" in the launcher's README on GitHub.");
     else if (!s_nrows && s_tab == CAT_COMMUNITY)
         note(s_list, "No community apps yet.\n\nMade one? Share it: see \"Sharing your app\" in the launcher's README on GitHub.");
@@ -562,7 +564,7 @@ static lv_obj_t *rail_button(lv_obj_t *parent, int y, int c)
     lv_obj_t *b = lv_obj_create(parent);
     lv_obj_remove_style_all(b);
     lv_obj_set_pos(b, 0, y);
-    lv_obj_set_size(b, lv_pct(100), 44);
+    lv_obj_set_size(b, lv_pct(100), 42);
     lv_obj_remove_flag(b, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
     ui_focus_style(b, 10);
@@ -802,8 +804,9 @@ void store_build(void)
 
     lv_obj_t *rail = ui_panel(s_scr, 16, 72, 176, 396 + dy, 14);
     lv_obj_set_style_pad_all(rail, 6, 0);
+    int step = dy >= 40 ? 50 : 46;      /* 8 rows fit the 480-high screen too */
     for (int c = 0; c < CAT_N; c++)     /* a small gap above Community and above Installed */
-        s_rail[c] = rail_button(rail, c * 50 + (c >= CAT_COMMUNITY) * 6 + (c >= CAT_INSTALLED) * 6, c);
+        s_rail[c] = rail_button(rail, c * step + (c >= CAT_COMMUNITY) * 4 + (c >= CAT_INSTALLED) * 4, c);
 
     s_list = lv_obj_create(s_scr);
     lv_obj_set_pos(s_list, 202, 72);

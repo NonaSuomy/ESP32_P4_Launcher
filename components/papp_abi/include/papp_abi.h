@@ -145,7 +145,7 @@ typedef struct {
 /* ── SYS interface ──────────────────────────────────────────────────────── */
 
 #define PAPP_IF_SYS       PAPP_FOURCC('S', 'Y', 'S', ' ')
-#define PAPP_IF_SYS_VER   2      /* v2: local_time */
+#define PAPP_IF_SYS_VER   3      /* v2: local_time; v3: utc_time */
 
 typedef struct {
     int16_t year;
@@ -163,6 +163,7 @@ typedef struct {
     bool     (*exit_requested)(void);             /* set by DevLink STOP / overlay quit */
     const char *(*board_id)(void);
     bool     (*local_time)(papp_datetime_t *out);   /* v2: false if the clock isn't set */
+    bool     (*utc_time)(int64_t *seconds);          /* v3: Unix time (UTC); false if the clock isn't set */
 } papp_if_sys_t;
 
 /* ── MEM interface ──────────────────────────────────────────────────────── */

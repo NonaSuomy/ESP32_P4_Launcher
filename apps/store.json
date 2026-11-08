@@ -1,5 +1,5 @@
 {
- "_about": "Store category and one-line description of each app (tools/make_apps_release.py adds them to apps.json). category: emulators, games, tools or productivity. description: at most 120 characters.",
+ "_about": "Store category and one-line description of each app (tools/make_apps_release.py adds them to apps.json). category: emulators, games, tools, productivity or education. description: at most 120 characters.",
  "emu.a26":         {"category": "emulators", "description": "Atari 2600 games (.a26, .bin) from /sd/roms/a26"},
  "emu.a78":         {"category": "emulators", "description": "Atari 7800 games (.a78) from /sd/roms/a78"},
  "emu.a800":        {"category": "emulators", "description": "Atari 800 and 5200 games, disks and tapes from /sd/roms/a800"},
@@ -19,6 +19,6 @@
  "game.duke3d":     {"category": "games", "description": "Duke Nukem 3D (Chocolate Duke3D). Needs DUKE3D.GRP in /sd/roms/duke3d"},
  "game.opentyrian": {"category": "games", "description": "Vertical shoot 'em up. Needs the free Tyrian 2.1 data in /sd/tyrian/data"},
  "game.quake":      {"category": "games", "description": "id Software's Quake. Needs id1/pak0.pak in /sd/roms/quake (shareware works)"},
- "tool.clock":      {"category": "tools", "description": "A big digital clock with the date, set from the network or by hand; touch or pad"},
+ "tool.clock":      {"category": "tools", "description": "Clock, alarms, stopwatch, timer and world clock; touch or pad"},
  "tool.files":      {"category": "tools", "description": "File manager for the SD card: browse, copy, move, rename and delete"}
 }

@@ -21,7 +21,7 @@ apps.json:
    "community": [{the app fields, plus "author", "license", "source"}]}
 category and description: the Store's (launcher 0.26+), from apps/store.json for the project's
 apps and from app.json for community ones (category optional there). category is emulators,
-games, tools or productivity.
+games, tools, productivity or education.
 folder: where a new install goes (/sd/apps/<folder>/<dir>/<file>; "" = the main page).
 An installed app is updated where it is, wherever the user moved it.
 gamepads: the controller mapping database, SDcard/config/gamepads.txt; the launcher
@@ -46,7 +46,7 @@ BASE = f"https://github.com/{REPO}/releases/download/{TAG}/"
 ICONS = os.path.join(ROOT, "apps", "common", "icons")
 GAMEPADS = os.path.join(ROOT, "SDcard", "config", "gamepads.txt")
 STORE = os.path.join(ROOT, "apps", "store.json")
-CATEGORIES = ("emulators", "games", "tools", "productivity")
+CATEGORIES = ("emulators", "games", "tools", "productivity", "education")
 FOLDERS = {"emu.": "Emulators", "game.": "Games"}          # by app id prefix; others: main page
 FOLDER_ICONS = {"Emulators": "folder_emulators.png", "Games": "folder_games.png",
                 "Community": "folder_community.png"}
