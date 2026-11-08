@@ -61,7 +61,8 @@ tools/make_release.py     Release files: launcher.bin per board (Settings → Up
 tools/make_apps_release.py  Catalogue for the Store from build/apps + community/ (+ apps/store.json: category and one-line
                           description of each app): apps.json + .papp + icons; --publish uploads
                           them to the "apps" pre-release (bump the app's version.txt first). --base + /sd/update/apps_url.txt
-                          = test from a local server
+                          = test from a local server. --publish refuses unless community/, apps/store.json and gamepads.txt
+                          match origin/main (committed) and no published app would vanish or go back a version (--force)
 community/<dir>/          Community apps (PR with .papp + icon.png + app.json, no source): tools/community.py checks them
                           (.github/workflows/community.yml on PRs); catalogue "community" list, Community folder, not in Install all
 SDcard/                   Starter card for new users (README.md): shareable game data, config/gamepads.txt, ROM folders.

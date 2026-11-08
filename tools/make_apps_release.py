@@ -38,6 +38,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = "giltal/ESP32_P4_Launcher"
@@ -54,6 +55,45 @@ COMMUNITY_FOLDER = "Community"
 PAPP_MAGIC = 0x32504150          # "PAP2"
 MANIFEST_MAGIC = 0x464E414D      # "MANF"
 MF_HIDDEN = 1 << 1
+# What the catalogue is made of besides the built apps: these must match origin/main when publishing
+SYNCED = ["community", "apps/store.json", "SDcard/config/gamepads.txt"]
+
+
+def check_git_sync():
+    """--publish only from what is on GitHub: community apps, descriptions and the gamepad list
+    as merged on origin/main, nothing uncommitted. Another checkout's publish isn't undone this way."""
+    git = lambda *a: subprocess.run(["git", "-C", ROOT, *a], capture_output=True, text=True)
+    if git("fetch", "-q", "origin", "main").returncode != 0:
+        raise SystemExit("git fetch origin main failed: can't check the catalogue is in sync")
+    problems = []
+    dirty = git("status", "--porcelain", "--", *SYNCED).stdout.strip()
+    if dirty:
+        problems.append("not committed:\n" + dirty)
+    diff = git("diff", "--name-status", "origin/main", "--", *SYNCED).stdout.strip()
+    if diff:
+        problems.append("differs from origin/main (pull, or merge your branch first):\n" + diff)
+    return problems
+
+
+def check_live(catalogue):
+    """Nothing in the published catalogue may disappear or go back to an older version."""
+    try:
+        with urllib.request.urlopen(BASE + "apps.json", timeout=30) as r:
+            live = json.load(r)
+    except Exception as e:                          # first publish, or offline
+        print(f"note: could not read the published catalogue ({e})")
+        return []
+    ver = lambda v: tuple(int(x) for x in (v.split(".") + ["0", "0"])[:3] if x.isdigit())
+    problems = []
+    for key in ("apps", "community"):
+        mine = {a["id"]: a["version"] for a in catalogue.get(key, [])}
+        for a in live.get(key, []):
+            if a["id"] not in mine:
+                problems.append(f"{a['id']} {a['version']} is published but would be removed")
+            elif ver(mine[a["id"]]) < ver(a["version"]):
+                problems.append(f"{a['id']} would go back from {a['version']} to {mine[a['id']]} "
+                                f"(rebuild it: python apps/build_all.py)")
+    return problems
 
 
 def manifest(path):
@@ -80,6 +120,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "apps_release"))
     ap.add_argument("--publish", action="store_true", help=f"upload to the '{TAG}' release with gh")
+    ap.add_argument("--force", action="store_true", help="publish even if not in sync with origin/main "
+                    "or the published catalogue")
     ap.add_argument("--base", default=BASE, help="where the files will be (to test from another server, "
                     "named in /sd/update/apps_url.txt on the card)")
     args = ap.parse_args()
@@ -193,6 +235,12 @@ def main():
     if not args.publish:
         print(f"\npublish with: python tools/make_apps_release.py --publish")
         return
+    problems = check_git_sync() + check_live(catalogue)
+    if problems:
+        print("\nnot published, the catalogue is out of sync:\n- " + "\n- ".join(problems))
+        if not args.force:
+            raise SystemExit("fix the above, or --force to publish anyway")
+        print("--force: publishing anyway")
     exists = subprocess.run(["gh", "release", "view", TAG, "-R", REPO], capture_output=True).returncode == 0
     if not exists:
         subprocess.run(["gh", "release", "create", TAG, "-R", REPO, "--prerelease", "--title", "Apps",

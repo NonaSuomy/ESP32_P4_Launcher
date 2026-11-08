@@ -207,12 +207,33 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     }
 }
 
+/* Some C6 firmwares report STA_START twice (seen on a Guition 4.3" from a newer batch). IDF's default
+ * handler then starts the netif again and lwIP asserts "netif already added". Registered before the
+ * defaults, so it runs first: a repeated start stops the netif, and the default handler starts it cleanly. */
+static esp_netif_t *s_sta;
+static bool s_sta_up;
+
+static void on_sta_start_stop(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    if (id == WIFI_EVENT_STA_STOP) {
+        s_sta_up = false;
+        return;
+    }
+    if (s_sta_up && s_sta) {
+        ESP_LOGW(TAG, "Wi-Fi chip reported start twice, restarting the interface");
+        esp_netif_action_stop(s_sta, base, WIFI_EVENT_STA_STOP, NULL);
+    }
+    s_sta_up = true;
+}
+
 static bool radio_start(void)
 {
     if (s_started) return true;
     esp_netif_init();
     esp_event_loop_create_default();
-    esp_netif_create_default_wifi_sta();
+    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_START, on_sta_start_stop, NULL);
+    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_STOP, on_sta_start_stop, NULL);
+    s_sta = esp_netif_create_default_wifi_sta();
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_err_t e = esp_wifi_init(&cfg);
     if (e == ESP_OK) {
