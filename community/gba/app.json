@@ -1,0 +1,7 @@
+{
+  "author": "PAX gpSP port contributors",
+  "description": "Game Boy Advance emulator for PAPP2 community compatibility testing.",
+  "license": "GPL-2.0-only",
+  "category": "emulators",
+  "source": "https://github.com/NonaSuomy/RetroESP32-P4"
+}
