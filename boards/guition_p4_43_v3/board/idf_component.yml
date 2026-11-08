@@ -2,9 +2,12 @@ dependencies:
   idf: ">=5.5"
   espressif/esp_codec_dev: "1.5.11"
   # Exact versions: a build matches the released launcher whatever is newest on the registry.
-  # Wi-Fi companion: this board's ESP32-C6 runs esp_hosted 2.0.17 firmware
-  espressif/esp_wifi_remote: "0.14.5"
-  espressif/esp_hosted: "2.0.17"
+  # Wi-Fi companion: esp_hosted 2.12, as on the 7" (it still talks to the 2.0 firmware these boards
+  # shipped with; Settings > Update then installs the matching C6 firmware from the card)
+  espressif/esp_wifi_remote: "1.6.5"
+  espressif/esp_hosted: "2.12.13"
   # Pulled in by the packages above, pinned too so every build is the same
   espressif/eppp_link: "1.1.6"
   espressif/esp_serial_slave_link: "1.1.2"
+  espressif/cmake_utilities: "0.5.3"
+  espressif/wifi_remote_over_eppp: "0.3.3"

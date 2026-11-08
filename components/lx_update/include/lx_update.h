@@ -35,7 +35,14 @@ typedef enum {
     LX_ONLINE_AVAILABLE,    /* lx_update_online_version() is newer */
     LX_ONLINE_READY,
     LX_ONLINE_FAILED,       /* reason: lx_update_online_error() */
+    LX_ONLINE_C6_READY,     /* the Wi-Fi chip firmware is in LX_UPDATE_C6_FILE */
 } lx_online_state_t;
+
+/* The release's Wi-Fi chip (ESP32-C6) firmware for this board, from the last check:
+ * its version, "" if the release has none. Downloaded by lx_update_online_download_c6(). */
+#define LX_UPDATE_C6_FILE  "/sd/update/c6.bin"
+const char *lx_update_online_c6_version(void);
+void lx_update_online_download_c6(void);
 
 void lx_update_online_check(void);
 void lx_update_online_download(void);

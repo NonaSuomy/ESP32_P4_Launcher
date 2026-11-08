@@ -20,7 +20,7 @@ copy the `SDcard` folder to a card and get the apps from the Store, see [Getting
 
 | Launcher version | App ABI | Toolchain | Boards |
 |---|---|---|---|
-| 0.27.1 | 2.0-preview | ESP-IDF v5.5.6 | Guition ESP32-P4 4.3" (480×800; chip v1.x, or v3.x with its own image), Guition JC1060P470C 7" (1024×600), M5Stack Tab5 (720×1280), Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (320×480, contributed) |
+| 0.28.0 | 2.0-preview | ESP-IDF v5.5.6 | Guition ESP32-P4 4.3" (480×800; chip v1.x, or v3.x with its own image), Guition JC1060P470C 7" (1024×600), M5Stack Tab5 (720×1280), Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (320×480, contributed) |
 
 > **Status: active development.** The ABI is a preview and may still change. Everything below describes
 > what exists in the code today; the plan for what comes next is in [docs/WORKPLAN.md](docs/WORKPLAN.md).
@@ -127,7 +127,8 @@ Two rules keep this portable: apps only see the ABI, and the launcher core only 
 - Content browser with folders, Favorites, Recent, search, and per-ROM Run/Resume/Restart/Delete save
 - DevLink: a USB protocol to upload, run, log, screenshot, inject input and read crash reports
 - Self-update from the SD card or from GitHub Releases (Settings → Update), with automatic rollback if a new
-  version doesn't start. Each board only ever installs its own launcher
+  version doesn't start. Each board only ever installs its own launcher. It also updates the Wi-Fi chip
+  (ESP32-C6) firmware to the version the launcher is built for, from the release or from `/sd/update/c6.bin`
 - Store: the first tile on the home screen. Apps by category (Emulators, Games, Tools, Productivity, Education,
   Community, Installed), each with its icon, description and version; installs, updates and removes them over
   Wi-Fi (downloads checked with SHA-256), and the tile counts the updates waiting
@@ -293,6 +294,14 @@ The home screen offers the update, and a board refuses another board's image. A 
 to the previous version and says so.
 
 > After flashing with `idf.py flash`, the board boots the factory slot again.
+
+The Wi-Fi chip (ESP32-C6) runs its own firmware, and it works best at the version of the launcher's
+Wi-Fi library (esp_hosted). The Wi-Fi screen shows both. When they differ, Settings → Update offers
+**Update the Wi-Fi chip** after the launcher is up to date: it downloads the release's `c6_<version>.bin`
+(or takes `/sd/update/c6.bin` from the card), sends it to the chip in about 15 seconds and restarts the
+board. It only installs esp_hosted firmware for an ESP32-C6 at the launcher's version, and if anything
+fails the chip keeps its old firmware. The Guition boards support it; the Tab5 and the Waveshare
+(esp_hosted 1.4, their makers' firmware) don't. To build the image: `python tools/build_c6_fw.py`.
 
 ## Folders
 
@@ -755,6 +764,7 @@ apps/                  emulators, games and test apps
   common/v1compat/     PAPP v1 compatibility layer
   common/icons/        emulator and folder icons
 tools/papp_dev.py      DevLink host tool
+tools/build_c6_fw.py   Wi-Fi chip (ESP32-C6) firmware matching the launcher's esp_hosted
 tools/make_release.py  release files for Settings → Update, every board
 tools/make_apps_release.py  app catalogue, community apps and controller database for the Store
 tools/community.py     checks the community apps (the pull request check runs it)

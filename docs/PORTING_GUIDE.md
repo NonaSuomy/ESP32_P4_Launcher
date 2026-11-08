@@ -44,7 +44,8 @@ Start by copying the closest existing board. What each function must do is writt
    I2C probe right after the panel reset upsets the GT911: talk to its addresses directly.
 5. **Audio.** One fixed rate (48 kHz). The launcher's mixer resamples every app stream to it.
 6. **Wi-Fi companion.** `esp_hosted` must suit the firmware on the board's ESP32-C6, so its version is
-   pinned in the board's `idf_component.yml`: 2.0 on the 4.3", 2.12 on the 7" (its C6 reports 2.3), and
+   pinned in the board's `idf_component.yml`: 2.12 on the Guition 4.3" and 7" (they shipped with C6 firmware
+   2.0 and 2.3; a 2.12 launcher talks to both, and Settings → Update moves the C6 to 2.12.13), and
    1.4 with `esp_wifi_remote` 0.8.5 on the Tab5, as in M5Stack's demo (2.12 never got past SDIO card
    init there). `lx_net` only asks for `esp_wifi_remote` without a version. SDIO pins other than the
    P4 slot 1 defaults are set in `sdkconfig.board`; check the build log line `sdio_wrapper: GPIOs: ...`,
@@ -100,7 +101,7 @@ it yet.
 | Panel reset | GPIO 5 | GPIO 27 (V1 panel), GPIO 0 (2026 V2 panel: needs the other init table) |
 | Backlight | on/off | PWM |
 | Audio | ES8311, amplifier on GPIO 11 | ES8311, NS4150 amplifier on GPIO 20 |
-| C6 firmware | esp_hosted 2.0.17 | esp_hosted 2.3.0 (host 2.12 works, with a version warning) |
+| C6 firmware | shipped with esp_hosted 2.0.17; the launcher updates it to 2.12.13 | shipped with 2.3.x; updated to 2.12.13 |
 | Extras | battery pin, GPIO pad add-on | RX8025T real-time clock (keeps UTC; set from NTP) |
 
 The M5Stack Tab5: 720x1280 portrait panel (`display_rot` 90), one of three, told apart at boot by the

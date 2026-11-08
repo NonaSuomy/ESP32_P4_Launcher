@@ -10,3 +10,9 @@ CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 CONFIG_ESP32P4_SELECTS_REV_LESS_V3=n
 CONFIG_ESP32P4_REV_MIN_300=y
 # The CPU runs at 400 MHz: the v3 default, 360 is a pre-v3 choice
+
+# ESP32-C6 on SDIO with the Function EV board wiring: CLK 18, CMD 19, D0-D3 14-17, reset 54
+CONFIG_ESP_HOSTED_P4_DEV_BOARD_FUNC_BOARD=y
+# esp_hosted 2.12 takes its SDIO buffer pools from internal RAM; keep them small
+CONFIG_ESP_HOSTED_SDIO_TX_Q_SIZE=12
+CONFIG_ESP_HOSTED_SDIO_RX_Q_SIZE=12

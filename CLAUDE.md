@@ -30,7 +30,8 @@ components/lx_input/      input manager: USB HID gamepads/keyboards, XInput (Xbo
                           SDcard/config/gamepads.txt, downloaded by the Store); NVS "padmap" = pre-0.23, read-only fallback
 components/lx_update/     self-update from /sd/update/launcher.bin + rollback confirm; online update (latest.json);
                           lx_appstore = app catalogue for the Store (apps.json on the "apps" release; icons cached in /sd/launcher/store)
-components/lx_net/        Wi-Fi station, NTP, time zone via the ESP32-C6 (esp_hosted 2.0.17 to match the C6's firmware);
+components/lx_net/        Wi-Fi station, NTP, time zone via the ESP32-C6 (esp_hosted 2.12.13 on the Guition boards, 1.4 on Tab5/Waveshare);
+                          lx_c6 = the C6's firmware: version (DevLink info c6_fw) and update from /sd/update/c6.bin or the release;
                           saved network = /sd/config/wifi.txt (ssid=/password= lines; NVS "net" = pre-0.24, moved to the card at boot)
 components/lx_web/        Wi-Fi file manager: web page for the SD card, on request, with a PIN per start
 papp-sdk/                 App SDK: include/papp/papp.h, runtime/ (crt0, libc glue), ld/papp.ld,
@@ -56,6 +57,7 @@ apps/common/icons/        88x88 icons of the emulator apps (emubuild copies <app
 apps/common/v1compat/     v1 `app_services_t` host on the SDK + v1build.py: the RetroESP32 v1 PSRAM games
                           doom, opentyrian, quake, duke3d build with their own glue unchanged; frames go to the PPA without a copy (DISP v3 `present_ext`)
 tools/papp_dev.py         DevLink host tool
+tools/build_c6_fw.py      C6 firmware matching a board's esp_hosted -> build/c6_fw/c6_<version>.bin (make_release adds it)
 tools/make_release.py     Release files: launcher.bin per board (Settings → Update) + launcher_<id>_full.bin (first install at 0x0,
                           ESP Tool web page) + latest.json, prints the gh command
 tools/make_apps_release.py  Catalogue for the Store from build/apps + community/ (+ apps/store.json: category and one-line

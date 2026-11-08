@@ -13,6 +13,7 @@
 #include "bsp.h"
 #include "lx_input.h"
 #include "lx_net.h"
+#include "lx_c6.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -225,6 +226,10 @@ static void h_info(uint16_t seq)
     jstr(&j, lx_app_path());
     jcat(&j, ",\"net_state\":%d,\"ip\":", (int)lx_net_state());
     jstr(&j, lx_net_ip());
+    jcat(&j, ",\"c6_fw\":");                 /* "" until the radio first started, "?" = it didn't say */
+    jstr(&j, lx_c6_version());
+    jcat(&j, ",\"hosted\":");
+    jstr(&j, lx_c6_host_version());
     int64_t rtc = -1;
     bsp_rtc_get(&rtc);                      /* -1: no RTC, or it lost the time */
     jcat(&j, ",\"time\":%lld,\"rtc\":%lld,\"reset_reason\":%d}", (long long)time(NULL), (long long)rtc,

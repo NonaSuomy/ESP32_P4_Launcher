@@ -1,4 +1,5 @@
 #include "lx_net.h"
+#include "lx_c6.h"
 #include "bsp.h"
 
 #include <errno.h>
@@ -31,7 +32,7 @@ static const char *TAG = "lx_net";
 #define MAX_RETRIES   4
 #define TASK_STACK    6144
 
-typedef enum { CMD_SCAN, CMD_CONNECT, CMD_FORGET, CMD_PAUSE, CMD_RESUME, CMD_RETRY } cmd_t;
+typedef enum { CMD_SCAN, CMD_CONNECT, CMD_FORGET, CMD_PAUSE, CMD_RESUME, CMD_RETRY, CMD_C6_INFO, CMD_C6_UPDATE } cmd_t;
 
 static const struct { const char *name, *posix; } k_zones[] = {
     { "Not set", NULL },
@@ -58,6 +59,7 @@ static int s_retries, s_tz, s_drops, s_last_reason;
 static char s_ssid[33], s_pass[65], s_ip[16];
 static lx_net_ap_t s_aps[LX_NET_MAX_APS];
 static volatile int s_ap_count = -1;
+static char s_c6_path[96];
 
 static void post(cmd_t c)
 {
@@ -250,6 +252,7 @@ static bool radio_start(void)
     }
     s_started = true;
     if (s_state == LX_NET_OFF) s_state = LX_NET_IDLE;
+    lx_c6_query();
     return true;
 }
 
@@ -333,6 +336,23 @@ static void net_task(void *arg)
             }
             s_state = s_started ? LX_NET_IDLE : LX_NET_OFF;
             break;
+        case CMD_C6_INFO:
+            if (radio_start() && !s_paused) lx_c6_query();
+            break;
+        case CMD_C6_UPDATE:
+            if (!radio_start()) break;
+            if (s_paused) {
+                s_paused = false;
+                esp_wifi_start();
+            }
+            esp_wifi_disconnect();          /* the link carries only the update now */
+            lx_c6_update(s_c6_path);        /* restarts the board when it worked */
+            if (s_want) {
+                s_retries = 0;
+                s_state = LX_NET_CONNECTING;
+                join();
+            }
+            break;
         case CMD_PAUSE:
             if (s_started && !s_paused) {
                 s_paused = true;
@@ -400,6 +420,13 @@ void lx_net_connect(const char *ssid, const char *password)
 }
 
 void lx_net_forget(void)      { post(CMD_FORGET); }
+void lx_net_c6_refresh(void)  { post(CMD_C6_INFO); }
+
+void lx_net_c6_update(const char *path)
+{
+    snprintf(s_c6_path, sizeof(s_c6_path), "%s", path);
+    post(CMD_C6_UPDATE);
+}
 void lx_net_pause(bool pause) { post(pause ? CMD_PAUSE : CMD_RESUME); }
 
 int         lx_net_tz_count(void)      { return ZONES; }

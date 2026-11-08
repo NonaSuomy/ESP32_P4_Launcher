@@ -39,6 +39,11 @@ int  lx_net_scan_results(lx_net_ap_t *out, int max);    /* -1 while scanning */
 void lx_net_connect(const char *ssid, const char *password);    /* saved once connected */
 void lx_net_forget(void);
 
+/* The C6's firmware (lx_c6.h has the version and progress): read again, or install a file.
+ * The update stops Wi-Fi, sends the image and restarts the board once the C6 took it. */
+void lx_net_c6_refresh(void);
+void lx_net_c6_update(const char *path);
+
 /* While an app runs the radio is stopped, so it can't cost the app anything */
 void lx_net_pause(bool pause);
 

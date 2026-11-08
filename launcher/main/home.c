@@ -31,6 +31,7 @@
 #include "lx_update.h"
 #include "lx_appstore.h"
 #include "lx_net.h"
+#include "lx_c6.h"
 #include "lx_web.h"
 #include "esp_system.h"
 
@@ -868,7 +869,7 @@ static void on_dev_switch(lv_event_t *ev)
 
 /* ── Wi-Fi screens ───────────────────────────────────────────── */
 
-static lv_obj_t *s_wifi_btn, *s_wifi_scr, *s_wifi_status, *s_wifi_list, *s_wifi_tz;
+static lv_obj_t *s_wifi_btn, *s_wifi_scr, *s_wifi_status, *s_wifi_list, *s_wifi_tz, *s_wifi_chip;
 static lv_obj_t *s_wifi_scan, *s_wifi_forget, *s_wifi_back, *s_pw_scr, *s_pw_title, *s_pw_text;
 static lv_obj_t *s_web_btn, *s_web_info;
 static bool s_wifi_scanning;
@@ -1032,7 +1033,9 @@ static void build_wifi_screens(void)
     lv_obj_add_event_cb(s_wifi_tz, on_wifi_tz, LV_EVENT_VALUE_CHANGED, NULL);
     s_wifi_list = lv_list_create(s_wifi_scr);
     lv_obj_set_pos(s_wifi_list, 24, 160);
-    lv_obj_set_size(s_wifi_list, 752 + s_dx, 306 + s_dy);
+    lv_obj_set_size(s_wifi_list, 752 + s_dx, 282 + s_dy);
+    s_wifi_chip = label(s_wifi_scr, &lv_font_montserrat_16, C_DIM, "");
+    lv_obj_set_pos(s_wifi_chip, 24, 450 + s_dy);
     lv_obj_set_style_bg_color(s_wifi_list, C_PANEL, 0);
     lv_obj_set_style_border_color(s_wifi_list, C_BORDER, 0);
 
@@ -1276,6 +1279,10 @@ static void wifi_tick(void)
     default: snprintf(buf, sizeof(buf), s_wifi_scanning ? "Starting the radio..." : "Radio off"); break;
     }
     lv_label_set_text(s_wifi_status, buf);
+    const char *c6 = lx_c6_version();
+    snprintf(buf, sizeof(buf), "Wi-Fi chip firmware %s (launcher: esp_hosted %s)",
+             !c6[0] ? "-" : c6[0] == '?' ? "unknown" : c6, lx_c6_host_version());
+    lv_label_set_text(s_wifi_chip, buf);
     if (!s_wifi_scanning) return;
     int n = lx_net_scan_results(s_wifi_aps, LX_NET_MAX_APS);
     if (n < 0) return;
@@ -1412,6 +1419,8 @@ static void show_settings(void)
     focus_add(s_map_btn);
     focus_add(s_wifi_btn);
     focus_add(s_update_btn);
+    for (int i = 0; i < s_nfocus; i++)      /* back from Wi-Fi or a dialog: no ring left on the old one */
+        lv_obj_remove_state(s_focusable[i], LV_STATE_FOCUSED);
     focus_set(s_vol_slider);
 }
 
@@ -1840,8 +1849,104 @@ static void upd_box(const char *text, bool ask)
     focus_set(yes);
 }
 
+/* Wi-Fi chip (C6) firmware from the card: /sd/update/c6.bin, offered first by Settings > Update */
+#define C6_FILE "/sd/update/c6.bin"
+static bool s_c6_updating;
+
+static void on_c6_install(lv_event_t *ev)
+{
+    lv_msgbox_close(s_upd_box);
+    s_upd_box = lv_msgbox_create(NULL);         /* no buttons: it ends in a restart or an error */
+    lv_msgbox_add_title(s_upd_box, LV_SYMBOL_WIFI "  Wi-Fi chip update");
+    s_upd_text = lv_msgbox_add_text(s_upd_box, "Updating the Wi-Fi chip... 0%\nDon't turn the board off.");
+    lv_obj_set_width(s_upd_box, 560);
+    focus_clear_list();
+    s_focused = NULL;
+    s_c6_updating = true;
+    lx_net_c6_update(C6_FILE);
+}
+
+static void c6_tick(void)
+{
+    static int last = -2;
+    int p = lx_c6_update_percent();
+    if (lx_c6_update_error()[0]) {
+        s_c6_updating = false;
+        last = -2;
+        upd_close();
+        upd_message(LV_SYMBOL_WARNING "  Wi-Fi chip update", lx_c6_update_error());
+        return;
+    }
+    if (p == last || !s_upd_text) return;
+    last = p;
+    char buf[80];
+    if (p >= 100) snprintf(buf, sizeof(buf), "Done. The board restarts in a few seconds.");
+    else snprintf(buf, sizeof(buf), "Updating the Wi-Fi chip... %d%%\nDon't turn the board off.", p < 0 ? 0 : p);
+    lv_label_set_text(s_upd_text, buf);
+}
+
+/* Install / Later for C6 firmware ver; Later is the default */
+static void c6_ask(const char *ver, lv_event_cb_t on_yes)
+{
+    char text[200];
+    const char *cur = lx_c6_version();
+    snprintf(text, sizeof(text), "Update the Wi-Fi chip to firmware %s?\nNow: %s\nTakes about a minute, then the board restarts.",
+             ver, cur[0] && cur[0] != '?' ? cur : "unknown");
+    s_upd_box = lv_msgbox_create(NULL);
+    lv_msgbox_add_title(s_upd_box, LV_SYMBOL_WIFI "  Wi-Fi chip update");
+    s_upd_text = lv_msgbox_add_text(s_upd_box, text);
+    lv_obj_t *yes = lv_msgbox_add_footer_button(s_upd_box, "Install");
+    lv_obj_t *no = lv_msgbox_add_footer_button(s_upd_box, "Later");
+    lv_obj_add_event_cb(yes, on_yes, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(no, on_upd_later, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_width(s_upd_box, 560);
+    if (s_focused) lv_obj_remove_state(s_focused, LV_STATE_FOCUSED);
+    focus_clear_list();
+    focus_add(yes);
+    focus_add(no);
+    focus_set(no);                      /* a chip update is never the default */
+}
+
+/* true when it showed something about the card's C6 image */
+static bool c6_offer(void)
+{
+    struct stat st;
+    if (stat(C6_FILE, &st) != 0) return false;
+    char ver[33], why[96], text[200];
+    if (!lx_c6_update_supported()) {
+        upd_message("Wi-Fi chip update", "This board can't update its Wi-Fi chip.");
+        return true;
+    }
+    if (!lx_c6_check_image(C6_FILE, ver, sizeof(ver), why, sizeof(why))) {
+        snprintf(text, sizeof(text), "%s is not usable:\n%s", C6_FILE, why);
+        upd_message(LV_SYMBOL_WARNING "  Wi-Fi chip update", text);
+        return true;
+    }
+    if (strcmp(lx_c6_version(), ver) == 0) return false;   /* already on it: carry on with the launcher */
+    c6_ask(ver, on_c6_install);
+    return true;
+}
+
+/* The release's C6 firmware, when it is another version than the chip runs and fits this launcher */
+static bool c6_online_wanted(void)
+{
+    const char *v = lx_update_online_c6_version(), *host = lx_c6_host_version();
+    int a, b, c, d;
+    return v[0] && lx_c6_update_supported() && strcmp(v, lx_c6_version()) != 0 &&
+           sscanf(v, "%d.%d", &a, &b) == 2 && sscanf(host, "%d.%d", &c, &d) == 2 && a == c && b == d;
+}
+
+static void on_c6_download(lv_event_t *ev)
+{
+    upd_close();
+    upd_box("Downloading the Wi-Fi chip firmware...", false);
+    s_upd_online = true;
+    lx_update_online_download_c6();
+}
+
 static void on_upd_check(lv_event_t *ev)
 {
+    if (c6_offer()) return;
     if (lx_net_state() != LX_NET_CONNECTED) {
         upd_message("Launcher update", "Connect to Wi-Fi first.");
         return;
@@ -1872,7 +1977,13 @@ static void upd_online_tick(void)
         s_upd_online = false;
         upd_close();
         lx_update_online_reset();
-        upd_message("Launcher update", "This is the latest version.");
+        if (c6_online_wanted()) c6_ask(lx_update_online_c6_version(), on_c6_download);
+        else upd_message("Launcher update", "This is the latest version.");
+        break;
+    case LX_ONLINE_C6_READY:
+        s_upd_online = false;
+        lx_update_online_reset();
+        on_c6_install(NULL);            /* checked by its SHA-256; lx_c6 checks the image again */
         break;
     case LX_ONLINE_FAILED:
         s_upd_online = false;
@@ -2202,6 +2313,7 @@ static void home_task(void *arg)
         }
         uint32_t wait = lv_timer_handler();
         if (s_upd_online) upd_online_tick();
+        if (s_c6_updating) c6_tick();
         if (s_upd_go) upd_install();
         if (s_launch[0]) {
             char path[160];

@@ -70,6 +70,24 @@ def main():
             "size": len(data),
             "sha256": hashlib.sha256(data).hexdigest(),
         }
+        # Wi-Fi chip firmware matching this board's esp_hosted (tools/build_c6_fw.py), offered by Settings > Update
+        hosted = re.search(r'espressif/esp_hosted:\s*"?([0-9.]+)',
+                           open(os.path.join(ROOT, "boards", board, "board", "idf_component.yml")).read())
+        c6 = os.path.join(ROOT, "build", "c6_fw", f"c6_{hosted.group(1)}.bin") if hosted else ""
+        if c6 and os.path.isfile(c6):
+            c6_name = os.path.basename(c6)
+            if c6_name not in files:
+                shutil.copyfile(c6, os.path.join(args.out, c6_name))
+                files.append(c6_name)
+            c6_data = open(c6, "rb").read()
+            boards[board]["c6"] = {
+                "version": hosted.group(1),
+                "url": f"https://github.com/{REPO}/releases/download/{tag}/{c6_name}",
+                "size": len(c6_data),
+                "sha256": hashlib.sha256(c6_data).hexdigest(),
+            }
+        elif hosted and hosted.group(1).startswith("2."):
+            print(f"note: {board}: no {os.path.relpath(c6, ROOT)} (python tools/build_c6_fw.py --board {board})")
     if not boards:
         raise SystemExit("no board image built at this version")
     if FIRST not in boards:
