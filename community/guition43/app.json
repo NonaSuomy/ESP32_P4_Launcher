@@ -1,0 +1,7 @@
+{
+  "author": "Gil Tal",
+  "description": "Guition 4.3-inch teaching demo: one control state shared by screen and SD card, plus a board and input explorer.",
+  "category": "education",
+  "license": "Apache-2.0",
+  "source": "https://github.com/giltal/ESP32P4_Guition4_7_Project/tree/main/papp"
+}
