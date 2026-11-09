@@ -1,0 +1,7 @@
+{
+  "author": "chneeb",
+  "description": "Current weather and a 5-day forecast from Open-Meteo.com (needs Wi-Fi and launcher 0.29 or newer)",
+  "license": "MIT",
+  "category": "tools",
+  "source": "https://github.com/chneeb/p4-weather"
+}
