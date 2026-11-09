@@ -205,7 +205,15 @@ static esp_err_t attiny_power_on(void)
         .scl_speed_hz = 400000,
     };
     ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(board_i2c_bus(), &dev_cfg, &s_attiny), TAG, "ATTINY device");
-    ESP_RETURN_ON_ERROR(attiny_write(ATTINY_REG_PWM, 0), TAG, "ATTINY not answering");
+    /* After a reset in the middle of an I2C transfer (flashing, a panic) the ATTINY can miss
+     * the first writes: free the bus and try again for about a second */
+    esp_err_t err = attiny_write(ATTINY_REG_PWM, 0);
+    for (int i = 0; err != ESP_OK && i < 10; i++) {
+        i2c_master_bus_reset(board_i2c_bus());
+        vTaskDelay(pdMS_TO_TICKS(100));
+        err = attiny_write(ATTINY_REG_PWM, 0);
+    }
+    ESP_RETURN_ON_ERROR(err, TAG, "ATTINY not answering");
     ESP_RETURN_ON_ERROR(attiny_write(ATTINY_REG_PORTC, 0x00), TAG, "ATTINY PORTC");
     vTaskDelay(pdMS_TO_TICKS(10));
     ESP_RETURN_ON_ERROR(attiny_write(ATTINY_REG_PORTA, ATTINY_PA_LCD_LR), TAG, "ATTINY PORTA");
