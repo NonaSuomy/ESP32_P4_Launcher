@@ -32,7 +32,8 @@ static const char *TAG = "lx_net";
 #define MAX_RETRIES   4
 #define TASK_STACK    6144
 
-typedef enum { CMD_SCAN, CMD_CONNECT, CMD_FORGET, CMD_PAUSE, CMD_RESUME, CMD_RETRY, CMD_C6_INFO, CMD_C6_UPDATE } cmd_t;
+typedef enum { CMD_SCAN, CMD_CONNECT, CMD_FORGET, CMD_PAUSE, CMD_RESUME, CMD_RETRY, CMD_JOIN, CMD_C6_INFO, CMD_C6_UPDATE, CMD_RADIO,
+               CMD_APP_HOLD, CMD_APP_RELEASE, CMD_APP_JOIN, CMD_AP_START, CMD_AP_STOP, CMD_RESTORE } cmd_t;
 
 static const struct { const char *name, *posix; } k_zones[] = {
     { "Not set", NULL },
@@ -60,6 +61,30 @@ static char s_ssid[33], s_pass[65], s_ip[16];
 static lx_net_ap_t s_aps[LX_NET_MAX_APS];
 static volatile int s_ap_count = -1;
 static char s_c6_path[96];
+static esp_timer_handle_t s_retry_timer;
+
+/* An app using NET holds the radio (no pause), may join another network for its run (s_temp:
+   the saved one is kept in s_saved_*) and may run a SoftAP beside the station. */
+static bool s_app, s_temp, s_saved_want, s_ap_on;
+static char s_saved_ssid[33], s_saved_pass[65];
+static char s_app_ssid[33], s_app_pass[65];
+static struct { char ssid[33], pass[65]; uint8_t channel, max; } s_ap_req;
+static esp_netif_t *s_ap_netif;
+static volatile int s_ap_clients;
+static QueueHandle_t s_app_ev;
+static SemaphoreHandle_t s_call_lock, s_call_done;
+static esp_err_t s_call_err;
+
+static void app_event(uint8_t type, uint16_t code)
+{
+    if (!s_app || !s_app_ev) return;
+    lx_net_app_event_t e = { .type = type, .code = code, .time_ms = (uint32_t)(esp_timer_get_time() / 1000) };
+    if (xQueueSend(s_app_ev, &e, 0) != pdTRUE) {      /* full: the oldest goes */
+        lx_net_app_event_t old;
+        xQueueReceive(s_app_ev, &old, 0);
+        xQueueSend(s_app_ev, &e, 0);
+    }
+}
 
 static void post(cmd_t c)
 {
@@ -172,8 +197,9 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         ESP_LOGW(TAG, "disconnected, reason %d, rssi %d", dis->reason, dis->rssi);
         s_drops++;
         s_last_reason = dis->reason;
+        app_event(LX_NET_EV_DISCONNECTED, dis->reason);
         if (s_paused || !s_want) return;
-        if (++s_retries > MAX_RETRIES && s_save) {      /* a saved network is worth waiting for */
+        if (++s_retries > MAX_RETRIES && (s_save || s_temp)) {   /* a new or app network: give up */
             s_want = false;
             s_state = LX_NET_FAILED;
             ESP_LOGW(TAG, "could not join %s", s_ssid);
@@ -181,8 +207,19 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         }
         s_state = LX_NET_CONNECTING;
         post(CMD_RETRY);
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
+        s_ap_clients++;
+        app_event(LX_NET_EV_AP_JOINED, (uint16_t)s_ap_clients);
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STADISCONNECTED) {
+        if (s_ap_clients > 0) s_ap_clients--;
+        app_event(LX_NET_EV_AP_LEFT, (uint16_t)s_ap_clients);
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *ev = data;
+        wifi_ap_record_t cur;           /* late, from the network an app's join just left */
+        if (s_temp && esp_wifi_sta_get_ap_info(&cur) == ESP_OK && strcmp((char *)cur.ssid, s_ssid)) {
+            ESP_LOGW(TAG, "address on %s while joining %s: ignored", (char *)cur.ssid, s_ssid);
+            return;
+        }
         snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&ev->ip_info.ip));
         s_retries = 0;
         s_state = LX_NET_CONNECTED;
@@ -190,6 +227,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         if (!s_ssid[0] && esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
             snprintf(s_ssid, sizeof(s_ssid), "%s", (char *)ap.ssid);
         ESP_LOGI(TAG, "connected to %s, %s", s_ssid, s_ip);
+        app_event(LX_NET_EV_CONNECTED, 0);
         esp_netif_dns_info_t dns = { 0 };
         esp_netif_get_dns_info(ev->esp_netif, ESP_NETIF_DNS_MAIN, &dns);
         ESP_LOGI(TAG, "DNS " IPSTR, IP2STR(&dns.ip.u_addr.ip4));
@@ -291,12 +329,54 @@ static void do_scan(void)
         snprintf(s_aps[out].ssid, sizeof(s_aps[out].ssid), "%s", (char *)rec[i].ssid);
         s_aps[out].rssi = rec[i].rssi;
         s_aps[out].secure = rec[i].authmode != WIFI_AUTH_OPEN;
+        s_aps[out].channel = rec[i].primary;
         out++;
     }
     free(rec);
     s_state = s_state == LX_NET_SCANNING ? was : s_state;
     s_ap_count = out;
+    app_event(LX_NET_EV_SCAN_DONE, (uint16_t)out);
 }
+
+static esp_err_t ap_start(void)
+{
+    if (!radio_start()) return ESP_ERR_INVALID_STATE;
+    if (!s_ap_netif) s_ap_netif = esp_netif_create_default_wifi_ap();
+    if (!s_ap_netif) return ESP_ERR_NO_MEM;
+    wifi_config_t c = { 0 };
+    size_t n = strnlen(s_ap_req.ssid, sizeof(c.ap.ssid));
+    memcpy(c.ap.ssid, s_ap_req.ssid, n);
+    c.ap.ssid_len = n;
+    memcpy(c.ap.password, s_ap_req.pass, strnlen(s_ap_req.pass, sizeof(c.ap.password)));
+    c.ap.authmode = s_ap_req.pass[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+    c.ap.max_connection = s_ap_req.max ? s_ap_req.max : 4;
+    c.ap.channel = s_ap_req.channel;
+    wifi_ap_record_t ap;                /* beside a station, the AP must use its channel */
+    if (s_state == LX_NET_CONNECTED && esp_wifi_sta_get_ap_info(&ap) == ESP_OK) c.ap.channel = ap.primary;
+    if (!c.ap.channel) c.ap.channel = 1;
+    esp_err_t e = esp_wifi_set_mode(WIFI_MODE_APSTA);
+    if (e == ESP_OK) e = esp_wifi_set_config(WIFI_IF_AP, &c);
+    if (e != ESP_OK) {
+        ESP_LOGW(TAG, "SoftAP failed: %s", esp_err_to_name(e));
+        esp_wifi_set_mode(WIFI_MODE_STA);
+        return e;
+    }
+    s_ap_on = true;
+    s_ap_clients = 0;
+    ESP_LOGI(TAG, "SoftAP %s on channel %d", s_ap_req.ssid, c.ap.channel);
+    return ESP_OK;
+}
+
+static void ap_stop(void)
+{
+    if (!s_ap_on) return;
+    s_ap_on = false;
+    s_ap_clients = 0;
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    ESP_LOGI(TAG, "SoftAP stopped");
+}
+
+static void retry_fire(void *arg) { post(CMD_JOIN); }
 
 static void net_task(void *arg)
 {
@@ -313,15 +393,97 @@ static void net_task(void *arg)
             do_scan();
             break;
         case CMD_CONNECT:
+            s_temp = false;                 /* a saved network replaces what an app joined for its run */
             s_want = true;
             s_retries = 0;
             s_state = LX_NET_CONNECTING;
             if (s_started && !s_paused) esp_wifi_disconnect();
             if (radio_start()) join();
             break;
-        case CMD_RETRY:
-            vTaskDelay(pdMS_TO_TICKS(s_retries > MAX_RETRIES ? 15000 : 1500));
-            if (s_want && !s_paused) join();
+        case CMD_RETRY:                     /* a timer: the task stays free for other requests */
+            esp_timer_stop(s_retry_timer);
+            esp_timer_start_once(s_retry_timer, (s_retries > MAX_RETRIES ? 15000 : 1500) * 1000ULL);
+            break;
+        case CMD_JOIN:                      /* a retry armed by a disconnect that a new join already mended */
+            if (s_want && !s_paused && s_state != LX_NET_CONNECTED) join();
+            break;
+        case CMD_APP_HOLD:
+            s_app = true;
+            s_call_err = radio_start() ? ESP_OK : ESP_FAIL;     /* BLE needs the C6 link too */
+            if (s_call_err == ESP_OK && s_paused) {
+                s_paused = false;
+                esp_wifi_start();
+                if (s_want) {
+                    s_retries = 0;
+                    s_state = LX_NET_CONNECTING;
+                    join();
+                } else if (s_state != LX_NET_FAILED) {
+                    s_state = LX_NET_IDLE;
+                }
+            }
+            xSemaphoreGive(s_call_done);
+            break;
+        case CMD_APP_JOIN:
+            if (!s_temp) {
+                s_temp = true;
+                s_saved_want = s_want;
+                memcpy(s_saved_ssid, s_ssid, sizeof(s_ssid));
+                memcpy(s_saved_pass, s_pass, sizeof(s_pass));
+            }
+            memcpy(s_ssid, s_app_ssid, sizeof(s_ssid));
+            memcpy(s_pass, s_app_pass, sizeof(s_pass));
+            s_save = false;
+            s_want = true;
+            s_retries = 0;
+            s_state = LX_NET_CONNECTING;
+            if (s_started && !s_paused) esp_wifi_disconnect();
+            if (radio_start()) join();
+            xSemaphoreGive(s_call_done);
+            break;
+        case CMD_RADIO:                     /* BLE: the C6 link without holding Wi-Fi */
+            s_call_err = radio_start() ? ESP_OK : ESP_FAIL;
+            xSemaphoreGive(s_call_done);
+            break;
+        case CMD_AP_START:
+            s_call_err = ap_start();
+            xSemaphoreGive(s_call_done);
+            break;
+        case CMD_AP_STOP:
+            ap_stop();
+            xSemaphoreGive(s_call_done);
+            break;
+        case CMD_APP_RELEASE:               /* the app ended: its SoftAP and network go */
+            ap_stop();
+            if (s_temp) {
+                s_temp = false;
+                memcpy(s_ssid, s_saved_ssid, sizeof(s_ssid));
+                memcpy(s_pass, s_saved_pass, sizeof(s_pass));
+                s_want = s_saved_want && s_ssid[0];
+                if (s_started && !s_paused) esp_wifi_disconnect();
+                if (s_want) {
+                    s_retries = 0;
+                    s_state = LX_NET_CONNECTING;
+                    if (!s_paused) join();
+                } else {
+                    s_state = s_started ? LX_NET_IDLE : LX_NET_OFF;
+                }
+            }
+            s_app = false;
+            xQueueReset(s_app_ev);
+            xSemaphoreGive(s_call_done);
+            break;
+        case CMD_RESTORE:                   /* a new network failed or was given up: the saved one again */
+            s_save = false;
+            if (!file_load()) s_ssid[0] = s_pass[0] = 0;
+            s_want = s_ssid[0] != 0;
+            if (s_started && !s_paused) esp_wifi_disconnect();
+            if (s_want) {
+                s_retries = 0;
+                s_state = LX_NET_CONNECTING;
+                if (!s_paused && radio_start()) join();
+            } else {
+                s_state = s_started ? LX_NET_IDLE : LX_NET_OFF;
+            }
             break;
         case CMD_FORGET:
             s_want = false;
@@ -354,6 +516,7 @@ static void net_task(void *arg)
             }
             break;
         case CMD_PAUSE:
+            if (s_app) break;               /* the app uses the network */
             if (s_started && !s_paused) {
                 s_paused = true;
                 esp_wifi_stop();
@@ -385,8 +548,13 @@ esp_err_t lx_net_init(void)
         setenv("TZ", k_zones[s_tz].posix, 1);
         tzset();
     }
-    s_q = xQueueCreate(8, sizeof(cmd_t));
-    if (!s_q) return ESP_ERR_NO_MEM;
+    s_q = xQueueCreate(12, sizeof(cmd_t));
+    s_app_ev = xQueueCreate(16, sizeof(lx_net_app_event_t));
+    s_call_lock = xSemaphoreCreateMutex();
+    s_call_done = xSemaphoreCreateBinary();
+    const esp_timer_create_args_t ta = { .callback = retry_fire, .name = "lx_net_retry" };
+    if (!s_q || !s_app_ev || !s_call_lock || !s_call_done || esp_timer_create(&ta, &s_retry_timer) != ESP_OK)
+        return ESP_ERR_NO_MEM;
     if (xTaskCreatePinnedToCore(net_task, "lx_net", TASK_STACK, NULL, 4, NULL, 1) != pdPASS)
         return ESP_ERR_NO_MEM;
     return ESP_OK;
@@ -416,8 +584,11 @@ void lx_net_connect(const char *ssid, const char *password)
     snprintf(s_ssid, sizeof(s_ssid), "%s", ssid);
     snprintf(s_pass, sizeof(s_pass), "%s", password ? password : "");
     s_save = true;
+    s_state = LX_NET_CONNECTING;        /* now, so a caller polling the state doesn't see the old one */
     post(CMD_CONNECT);
 }
+
+void lx_net_restore(void) { post(CMD_RESTORE); }
 
 void lx_net_forget(void)      { post(CMD_FORGET); }
 void lx_net_c6_refresh(void)  { post(CMD_C6_INFO); }
@@ -428,6 +599,92 @@ void lx_net_c6_update(const char *path)
     post(CMD_C6_UPDATE);
 }
 void lx_net_pause(bool pause) { post(pause ? CMD_PAUSE : CMD_RESUME); }
+
+/* For apps (NET, lx_loader) */
+
+/* Runs a request on the lx_net task and waits for it; gives up when *abort is set */
+static esp_err_t call(cmd_t c, volatile bool *abort)
+{
+    if (!s_q) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_call_lock, portMAX_DELAY);
+    xSemaphoreTake(s_call_done, 0);
+    s_call_err = ESP_OK;
+    esp_err_t e = ESP_ERR_TIMEOUT;
+    if (xQueueSend(s_q, &c, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        for (int i = 0; i < 300; i++) {                     /* 30 s at most (a scan in progress) */
+            if (xSemaphoreTake(s_call_done, pdMS_TO_TICKS(100)) == pdTRUE) {
+                e = s_call_err;
+                break;
+            }
+            if (abort && *abort) break;
+        }
+    }
+    xSemaphoreGive(s_call_lock);
+    return e;
+}
+
+esp_err_t lx_net_app_hold(volatile bool *abort)
+{
+    return s_app ? ESP_OK : call(CMD_APP_HOLD, abort);
+}
+
+esp_err_t lx_net_radio_up(volatile bool *abort) { return s_started ? ESP_OK : call(CMD_RADIO, abort); }
+
+void lx_net_app_release(void)
+{
+    if (s_app) call(CMD_APP_RELEASE, NULL);
+}
+
+bool lx_net_joining(void) { return s_want; }
+
+esp_err_t lx_net_app_join(const char *ssid, const char *password, volatile bool *abort)
+{
+    copy_field(s_app_ssid, sizeof(s_app_ssid), ssid);
+    copy_field(s_app_pass, sizeof(s_app_pass), password ? password : "");
+    return call(CMD_APP_JOIN, abort);
+}
+
+bool lx_net_app_event(lx_net_app_event_t *out)
+{
+    return s_app_ev && xQueueReceive(s_app_ev, out, 0) == pdTRUE;
+}
+
+esp_err_t lx_net_ap_start(const char *ssid, const char *password, uint8_t channel, uint8_t max_clients,
+                          volatile bool *abort)
+{
+    copy_field(s_ap_req.ssid, sizeof(s_ap_req.ssid), ssid);
+    copy_field(s_ap_req.pass, sizeof(s_ap_req.pass), password ? password : "");
+    s_ap_req.channel = channel;
+    s_ap_req.max = max_clients;
+    return call(CMD_AP_START, abort);
+}
+
+void lx_net_ap_stop(void) { call(CMD_AP_STOP, NULL); }
+
+void lx_net_info(lx_net_info_t *o)
+{
+    memset(o, 0, sizeof(*o));
+    o->state = s_state;
+    memcpy(o->ssid, s_ssid, sizeof(o->ssid));
+    o->ap_running = s_ap_on;
+    o->ap_clients = (uint8_t)s_ap_clients;
+    if (!s_started || s_paused) return;
+    wifi_ap_record_t ap;
+    if (s_state == LX_NET_CONNECTED && esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+        o->rssi = ap.rssi;
+        o->channel = ap.primary;
+    }
+    esp_wifi_get_mac(WIFI_IF_STA, o->mac);
+    esp_netif_ip_info_t ip;
+    if (s_sta && esp_netif_get_ip_info(s_sta, &ip) == ESP_OK) {
+        o->ip = ip.ip.addr;
+        o->mask = ip.netmask.addr;
+        o->gw = ip.gw.addr;
+        esp_netif_dns_info_t d;
+        if (esp_netif_get_dns_info(s_sta, ESP_NETIF_DNS_MAIN, &d) == ESP_OK) o->dns = d.ip.u_addr.ip4.addr;
+    }
+    if (s_ap_on && s_ap_netif && esp_netif_get_ip_info(s_ap_netif, &ip) == ESP_OK) o->ap_ip = ip.ip.addr;
+}
 
 int         lx_net_tz_count(void)      { return ZONES; }
 const char *lx_net_tz_name(int index)  { return index >= 0 && index < ZONES ? k_zones[index].name : ""; }

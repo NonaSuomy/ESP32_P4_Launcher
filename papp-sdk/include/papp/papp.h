@@ -163,6 +163,90 @@ int  papp_ui_menu(const char *title, const char *const *items, int n, int initia
 /* The launcher's volume overlay (what Y does in the emulators). Returns the
  * new level 0..100, or -1 on a launcher without it. */
 int  papp_ui_volume(void);
+/* The launcher's Wi-Fi picker: the user chooses a network and types its
+ * password; it becomes the board's saved network. Returns 1 connected, 0
+ * cancelled, < 0 no Wi-Fi or a launcher before 0.29 (PAPP_E_UNSUPPORTED).
+ *   if (papp_net()->up() < 0 && papp_ui_wifi() == 1) ... connected */
+int  papp_ui_wifi(void);
+
+/* ── Network ────────────────────────────────────────────────────────────── */
+/* Wi-Fi, sockets, TLS and HTTP(S): the NET interface (papp_abi.h has the calls). NULL on a
+ * launcher before 0.29. The first call keeps Wi-Fi on for the run; what the app opens is
+ * closed when it ends.
+ *   const papp_if_net_t *net = papp_net();
+ *   if (net && net->up(15000) == PAPP_E_OK) {
+ *       int status;
+ *       papp_http_req_t req = { .url = "https://example.com/data.json" };
+ *       papp_http_t *h = net->http_open(&req, &status);
+ *       if (h) { char buf[512]; int n; while ((n = net->http_read(h, buf, sizeof(buf))) > 0) use(buf, n);
+ *                net->http_close(h); }
+ *   } */
+const papp_if_net_t *papp_net(void);
+
+/* ── Bluetooth LE ───────────────────────────────────────────────────────── */
+/* The BLE interface (papp_abi.h has the calls). NULL on a launcher before 0.29 and on boards
+ * without BLE; available() starts the host (false: the C6 firmware has no BLE). A peripheral:
+ *   static uint16_t h_val;
+ *   static const papp_ble_chr_t chrs[] = { { PAPP_BLE_UUID16(0x2A19), PAPP_BLE_READ | PAPP_BLE_NOTIFY, 1, &h_val } };
+ *   static const papp_ble_svc_t svc = { PAPP_BLE_UUID16(0x180F), chrs, 1 };
+ *   ble->gatt_register(&svc, 1);              (first: the table goes in when the host starts)
+ *   uint8_t adv[31]; int n = 0;
+ *   papp_ble_ad_flags(adv, &n); papp_ble_ad_name(adv, &n, "my-app");
+ *   papp_ble_adv_cfg_t a = { .adv = adv, .adv_len = n, .connectable = 1 };
+ *   ble->adv_start(&a);    then wait_event() for CONNECTED / WRITE / SUBSCRIBE, notify() values */
+const papp_if_ble_t *papp_ble(void);
+
+#define PAPP_BLE_UUID16(v) { 2, { (uint8_t)((v) & 0xFF), (uint8_t)((v) >> 8) } }
+
+/* Advertising data: appends one AD structure to buf (31 bytes at most); false if it doesn't fit */
+static inline bool papp_ble_ad_add(uint8_t *buf, int *len, uint8_t type, const void *data, int n)
+{
+    if (*len + 2 + n > 31) return false;
+    buf[(*len)++] = (uint8_t)(n + 1);
+    buf[(*len)++] = type;
+    for (int i = 0; i < n; i++) buf[(*len)++] = ((const uint8_t *)data)[i];
+    return true;
+}
+static inline bool papp_ble_ad_flags(uint8_t *buf, int *len)        /* general discoverable, LE only */
+{
+    uint8_t f = 0x06;
+    return papp_ble_ad_add(buf, len, 0x01, &f, 1);
+}
+static inline bool papp_ble_ad_name(uint8_t *buf, int *len, const char *name)
+{
+    int n = 0;
+    while (name[n]) n++;
+    return papp_ble_ad_add(buf, len, 0x09, name, n);
+}
+static inline bool papp_ble_ad_uuid(uint8_t *buf, int *len, const papp_ble_uuid_t *u)  /* complete list of one */
+{
+    return papp_ble_ad_add(buf, len, u->len == 2 ? 0x03 : u->len == 4 ? 0x05 : 0x07, u->u, u->len);
+}
+/* Finds an AD structure in received data (an ADV event): its payload and length, or NULL */
+static inline const uint8_t *papp_ble_ad_find(const uint8_t *data, int len, uint8_t type, int *out_len)
+{
+    for (int i = 0; i + 1 < len && data[i];) {
+        int n = data[i];
+        if (i + 1 + n > len) break;
+        if (data[i + 1] == type) { *out_len = n - 1; return &data[i + 2]; }
+        i += n + 1;
+    }
+    return 0;
+}
+/* "6e400001-b5a3-f393-e0a9-e50e24dcca9e" -> a 128-bit UUID (stored little endian, as on air) */
+static inline bool papp_ble_uuid_parse(const char *s, papp_ble_uuid_t *out)
+{
+    int k = 15, half = -1;
+    out->len = 16;
+    for (; *s && k >= 0; s++) {
+        int v = *s >= '0' && *s <= '9' ? *s - '0' : *s >= 'a' && *s <= 'f' ? *s - 'a' + 10 :
+                *s >= 'A' && *s <= 'F' ? *s - 'A' + 10 : -1;
+        if (v < 0) { if (*s == '-') continue; return false; }
+        if (half < 0) half = v;
+        else { out->u[k--] = (uint8_t)(half << 4 | v); half = -1; }
+    }
+    return k < 0 && !*s;
+}
 
 /* ── Raw interfaces ─────────────────────────────────────────────────────── */
 extern const papp_if_sys_t *papp_if_sys(void);

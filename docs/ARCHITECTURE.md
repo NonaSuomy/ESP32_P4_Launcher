@@ -251,9 +251,11 @@ function-pointer-table speed and no symbol strings on the device.
 | `AUDI` | Audio | stream open (rate, channels, format, latency), write/push, pull callback, pause, `get_queued` | launcher mixes + resamples |
 | `INPT` | Input | gamepad state (player N, standard layout + analog axes + triggers), keyboard state, event queue (key/text/button/axis/touch/mouse/device-added), rumble (reserved) | §7.5 |
 | `KV  ` | Settings | per-app key/value (int, string, blob); read-only global prefs (volume, brightness, language) | replaces NVS-path hacks |
-| `UI  ` | Launcher dialogs | **file picker** (extension filter, start dir), message box, on-screen keyboard, progress, toast | rendered by the launcher on the overlay layer |
+| `UI  ` | Launcher dialogs | **file picker** (extension filter, start dir), message box, menu, volume, **Wi-Fi picker** (v4: the network chosen becomes the board's saved one; the app never sees the password), on-screen keyboard, progress, toast | rendered by the launcher on the overlay layer |
 | `PWR ` | Power / board | battery %, charging, backlight, LED | optional |
-| `NET `, `BTHD`, `USBD`, `CAM ` | Reserved | Wi-Fi via esp_hosted, BLE HID, USB device/MSC, MIPI-CSI camera | later phases |
+| `NET ` | Network | Wi-Fi (up with the saved network, info, scan, join for the run, SoftAP, events), DNS, TCP/UDP sockets with poll, TLS client, HTTP/1.1 client | v1 (launcher 0.29); the first call keeps Wi-Fi on for the run; `docs/NET_BLE_PROPOSAL.md` |
+| `BLE ` | Bluetooth LE | scan, connect, GATT client (discover, read, write, subscribe), GATT server (one table, values kept by the launcher, notify/indicate), advertising, events | v1 (launcher 0.29), Guition boards and Tab5; NimBLE runs only during the app's run; `docs/NET_BLE_PROPOSAL.md` |
+| `BTHD`, `USBD`, `CAM ` | Reserved | BLE HID, USB device/MSC, MIPI-CSI camera | later phases |
 
 ---
 

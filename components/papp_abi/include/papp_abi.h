@@ -450,7 +450,7 @@ typedef struct {
  * next present. They return early (CANCEL) when the app is asked to exit. */
 
 #define PAPP_IF_UI        PAPP_FOURCC('U', 'I', ' ', ' ')
-#define PAPP_IF_UI_VER    3      /* v2: menu, v3: volume */
+#define PAPP_IF_UI_VER    4      /* v2: menu, v3: volume, v4: wifi */
 
 typedef struct {
     const char *title;           /* header, e.g. "NES"                               */
@@ -497,7 +497,293 @@ typedef struct {
     /* v3: the launcher's volume control over the app's picture (Y in the
      * emulators): adjusts and saves the master volume. Returns 0..100. */
     int  (*volume)(void);
+    /* v4: the launcher's Wi-Fi picker: networks nearby, password on an
+     * on-screen keyboard. The network joined is saved as the board's network
+     * (/sd/config/wifi.txt) and stays after the app; the app never sees the
+     * password. Returns 1 connected, 0 the user cancelled, or PAPP_E_EXIT /
+     * PAPP_E_UNSUPPORTED (no Wi-Fi). Holds Wi-Fi for the run, like a NET call. */
+    int  (*wifi)(void);
 } papp_if_ui_t;
+
+/* ── NET interface ──────────────────────────────────────────────────────── */
+/* Wi-Fi, sockets, TLS and HTTP(S) through the launcher's network stack.
+ * The radio is stopped while an app runs; the first NET call keeps it on for
+ * the rest of the run. Everything the app opens is closed at teardown, a
+ * SoftAP is stopped and a network joined with join() is left for the saved one.
+ * Blocking calls take a timeout in ms (0 = don't wait, PAPP_WAIT_FOREVER) and
+ * return PAPP_E_EXIT as soon as the app is asked to exit. One socket may be
+ * used by a reader thread and a writer thread at once (not for TLS). */
+
+#define PAPP_IF_NET       PAPP_FOURCC('N', 'E', 'T', ' ')
+#define PAPP_IF_NET_VER   1
+
+enum {                                   /* results: >= 0 success, these on failure */
+    PAPP_E_OK = 0,
+    PAPP_E_TIMEOUT = -1,
+    PAPP_E_EXIT = -2,                    /* the app is asked to exit                 */
+    PAPP_E_NOMEM = -3,
+    PAPP_E_LIMIT = -4,                   /* too many sockets / sessions             */
+    PAPP_E_NOT_CONNECTED = -5,           /* no network (or none saved)              */
+    PAPP_E_REFUSED = -6,
+    PAPP_E_RESET = -7,                   /* connection lost                          */
+    PAPP_E_DNS = -8,
+    PAPP_E_TLS = -9,
+    PAPP_E_CERT = -10,                   /* server certificate not trusted          */
+    PAPP_E_ARG = -11,
+    PAPP_E_UNSUPPORTED = -12,            /* not on this board / C6 firmware          */
+    PAPP_E_IO = -13,
+    PAPP_E_HTTP = -14,                   /* malformed HTTP reply, too many redirects */
+};
+
+#define PAPP_NET_MAX_SOCKETS  8          /* TLS and HTTP use one each                */
+#define PAPP_NET_MAX_TLS      2
+#define PAPP_NET_MAX_HTTP     2
+
+enum { PAPP_NET_OFF, PAPP_NET_IDLE, PAPP_NET_CONNECTING, PAPP_NET_CONNECTED, PAPP_NET_FAILED };
+
+typedef struct {
+    uint8_t  state;                      /* PAPP_NET_*                               */
+    int8_t   rssi;                       /* dBm, 0 if not connected                  */
+    uint8_t  channel;
+    uint8_t  ap_clients;                 /* SoftAP: stations joined (0 if off)       */
+    uint8_t  ap_running;
+    uint8_t  reserved[3];
+    char     ssid[33];                   /* network joined (or being joined)         */
+    uint8_t  mac[6];
+    uint8_t  ip[4], mask[4], gateway[4], dns[4];
+    uint8_t  ap_ip[4];                   /* SoftAP address (192.168.4.1)             */
+} papp_net_info_t;
+
+typedef struct {
+    char    ssid[33];
+    int8_t  rssi;
+    uint8_t channel;
+    uint8_t secure;                      /* needs a password                         */
+} papp_net_ap_t;
+
+enum { PAPP_AF_INET = 4 };
+typedef struct {
+    uint8_t  family;                     /* PAPP_AF_INET                             */
+    uint8_t  reserved;
+    uint16_t port;                       /* host byte order                          */
+    uint8_t  ip[16];                     /* IPv4 in ip[0..3]; room for IPv6          */
+} papp_addr_t;
+
+typedef struct papp_sock papp_sock_t;
+enum { PAPP_SOCK_TCP = 1, PAPP_SOCK_UDP = 2 };
+
+enum {                                   /* set_opt */
+    PAPP_SO_NODELAY = 1,                 /* TCP: 0/1                                 */
+    PAPP_SO_KEEPALIVE,                   /* TCP: idle seconds, 0 = off               */
+    PAPP_SO_BROADCAST,                   /* UDP: 0/1                                 */
+    PAPP_SO_MCAST_JOIN,                  /* UDP: IPv4 group, a.b.c.d = a | b<<8 | c<<16 | d<<24 */
+    PAPP_SO_MCAST_LEAVE,
+    PAPP_SO_REUSEADDR,                   /* 0/1, before bind                         */
+};
+
+enum { PAPP_POLL_IN = 1, PAPP_POLL_OUT = 2, PAPP_POLL_ERR = 4 };
+typedef struct {
+    papp_sock_t *sock;
+    uint8_t      want;                   /* PAPP_POLL_IN / OUT                       */
+    uint8_t      got;                    /* filled in                                */
+} papp_poll_t;
+
+typedef struct {
+    const char  *ca_pem;                 /* NULL = the launcher's certificate bundle */
+    size_t       ca_len;                 /* with the terminating 0                   */
+    const char **alpn;                   /* NULL-terminated list, or NULL            */
+    uint32_t     timeout_ms;             /* resolve + connect + handshake; 0 = 15 s  */
+    uint8_t      insecure;               /* 1 = don't check the certificate (tests)  */
+} papp_tls_cfg_t;
+
+typedef struct papp_http papp_http_t;
+typedef struct {
+    const char *method;                  /* "GET", "POST", ...; NULL = GET           */
+    const char *url;                     /* http:// or https://                      */
+    const char *headers;                 /* extra "Name: value\r\n" lines, or NULL   */
+    const void *body;                    /* sent with Content-Length; NULL = none    */
+    size_t      body_len;
+    uint32_t    timeout_ms;              /* per wait; 0 = 15 s                       */
+    uint8_t     max_redirects;           /* 0 = 5                                    */
+    uint8_t     insecure;                /* https without certificate check (tests)  */
+} papp_http_req_t;
+
+enum {
+    PAPP_NET_EV_CONNECTED = 1,           /* got an address                           */
+    PAPP_NET_EV_DISCONNECTED,            /* code = Wi-Fi reason                      */
+    PAPP_NET_EV_SCAN_DONE,               /* code = networks found                    */
+    PAPP_NET_EV_AP_CLIENT_JOINED,        /* code = stations now on the SoftAP        */
+    PAPP_NET_EV_AP_CLIENT_LEFT,
+};
+typedef struct {
+    uint8_t  type;                       /* PAPP_NET_EV_*                            */
+    uint8_t  reserved;
+    uint16_t code;
+    uint32_t time_ms;
+} papp_net_event_t;
+
+typedef struct {
+    papp_iface_hdr_t hdr;
+
+    /* Wi-Fi station. up() joins the launcher's saved network (Settings > Wi-Fi)
+     * and waits for an address: PAPP_E_OK, or NOT_CONNECTED (none saved / failed). */
+    int   (*up)(uint32_t timeout_ms);
+    void  (*info)(papp_net_info_t *out);
+    int   (*scan)(papp_net_ap_t *out, int max, uint32_t timeout_ms);   /* count, strongest first */
+    /* Another network for this run only: nothing is saved, the saved one is back after the app. */
+    int   (*join)(const char *ssid, const char *password, uint32_t timeout_ms);
+    bool  (*poll_event)(papp_net_event_t *out);
+
+    /* SoftAP beside the station (local multiplayer, setup pages); open if password is NULL/"".
+     * channel 0 = the station's. UNSUPPORTED where the C6 firmware can't. */
+    int   (*ap_start)(const char *ssid, const char *password, uint8_t channel, uint8_t max_clients);
+    void  (*ap_stop)(void);
+
+    /* Name or "a.b.c.d" to an address (port left 0). */
+    int   (*resolve)(const char *host, papp_addr_t *out, uint32_t timeout_ms);
+
+    /* Sockets. NULL from socket()/accept() on failure (err gets the reason when not NULL). */
+    papp_sock_t *(*socket)(int type, int *err);
+    int   (*connect)(papp_sock_t *s, const papp_addr_t *to, uint32_t timeout_ms);
+    int   (*bind)(papp_sock_t *s, uint16_t port);                    /* all local addresses   */
+    int   (*listen)(papp_sock_t *s, int backlog);
+    papp_sock_t *(*accept)(papp_sock_t *s, papp_addr_t *from, uint32_t timeout_ms, int *err);
+    int   (*send)(papp_sock_t *s, const void *buf, size_t len, uint32_t timeout_ms);   /* bytes sent */
+    int   (*recv)(papp_sock_t *s, void *buf, size_t len, uint32_t timeout_ms);  /* 0 = peer closed */
+    int   (*sendto)(papp_sock_t *s, const void *buf, size_t len, const papp_addr_t *to);
+    int   (*recvfrom)(papp_sock_t *s, void *buf, size_t len, papp_addr_t *from, uint32_t timeout_ms);
+    int   (*set_opt)(papp_sock_t *s, int opt, int value);
+    int   (*poll)(papp_poll_t *set, int n, uint32_t timeout_ms);    /* sockets ready, 0 = timeout */
+    int   (*local_addr)(papp_sock_t *s, papp_addr_t *out);          /* after bind / connect  */
+    void  (*close)(papp_sock_t *s);
+
+    /* TLS client over TCP: the returned socket works with send/recv/poll/close. */
+    papp_sock_t *(*tls_connect)(const char *host, uint16_t port, const papp_tls_cfg_t *cfg, int *err);
+
+    /* HTTP/1.1 client. http_open sends the request, follows redirects and reads the
+     * reply headers: the result is the status (200...) or a PAPP_E_* code. */
+    papp_http_t *(*http_open)(const papp_http_req_t *req, int *status);
+    int   (*http_header)(papp_http_t *h, const char *name, char *out, size_t out_len);  /* length, -1 */
+    long  (*http_length)(papp_http_t *h);                    /* Content-Length, -1 unknown/chunked */
+    int   (*http_read)(papp_http_t *h, void *buf, size_t len);   /* bytes, 0 = end of body       */
+    void  (*http_close)(papp_http_t *h);
+} papp_if_net_t;
+
+/* ── BLE interface ──────────────────────────────────────────────────────── */
+/* Bluetooth LE through the launcher's NimBLE host (the controller is on the
+ * C6). The host starts on the first call and is shut down at teardown, with
+ * advertising, scans, connections and the GATT table. Results use the
+ * PAPP_E_* codes of NET (>= 0 success). Blocking calls take a timeout in ms
+ * and return PAPP_E_EXIT as soon as the app is asked to exit. No pairing in
+ * v1: characteristics are open. */
+
+#define PAPP_IF_BLE       PAPP_FOURCC('B', 'L', 'E', ' ')
+#define PAPP_IF_BLE_VER   1
+
+#define PAPP_BLE_MAX_CONN     3
+#define PAPP_BLE_MAX_SVCS     8
+#define PAPP_BLE_MAX_CHRS     32
+#define PAPP_BLE_CONN_NONE    0xFFFF
+#define PAPP_BLE_CONN_ALL     0xFFFF     /* notify: every subscribed peer               */
+
+typedef struct { uint8_t type; uint8_t a[6]; } papp_ble_addr_t;   /* type 0 public, 1 random; a[0] = last byte */
+typedef struct { uint8_t len; uint8_t u[16]; } papp_ble_uuid_t;   /* len 2, 4 or 16; little endian (as on air) */
+typedef uint16_t papp_ble_conn_t;
+
+/* Scanning (central) */
+typedef struct {
+    uint8_t  active;                     /* ask for scan responses                      */
+    uint8_t  filter_duplicates;
+    uint16_t interval_ms, window_ms;     /* 0 = defaults                                */
+    uint32_t duration_ms;                /* 0 = until scan_stop                         */
+} papp_ble_scan_cfg_t;
+
+/* Advertising (peripheral) */
+typedef struct {
+    const uint8_t *adv;  uint8_t adv_len;      /* raw AD structures, <= 31 bytes         */
+    const uint8_t *rsp;  uint8_t rsp_len;      /* scan response, <= 31 bytes (optional)  */
+    uint8_t  connectable;
+    uint16_t interval_ms;                      /* 0 = 100 ms                             */
+} papp_ble_adv_cfg_t;
+
+/* GATT server: the app describes its services once; reads return the stored value */
+enum {
+    PAPP_BLE_READ = 1, PAPP_BLE_WRITE = 2, PAPP_BLE_WRITE_NR = 4,     /* write without response */
+    PAPP_BLE_NOTIFY = 8, PAPP_BLE_INDICATE = 16,
+};
+typedef struct {
+    papp_ble_uuid_t uuid;
+    uint16_t        flags;               /* PAPP_BLE_*                                  */
+    uint16_t        max_len;             /* value size, 1..512                          */
+    uint16_t       *handle;              /* filled in by gatt_register (value handle)   */
+} papp_ble_chr_t;
+typedef struct {
+    papp_ble_uuid_t       uuid;
+    const papp_ble_chr_t *chrs;
+    uint8_t               chr_count;
+} papp_ble_svc_t;
+
+/* GATT client discovery */
+typedef struct {
+    papp_ble_uuid_t uuid;
+    uint16_t        handle;              /* value handle                                */
+    uint16_t        cccd;                /* 0: none (no notify/indicate)                */
+    uint16_t        flags;               /* PAPP_BLE_*                                  */
+    uint16_t        svc_index;           /* which entry of the services array           */
+} papp_ble_found_chr_t;
+typedef struct { papp_ble_uuid_t uuid; uint16_t start, end; } papp_ble_found_svc_t;
+
+/* Events. Data is copied into the event, up to 244 bytes (more: read the value). */
+enum {
+    PAPP_BLE_EV_ADV = 1,                 /* addr, rssi, code = adv type, data = AD structures */
+    PAPP_BLE_EV_SCAN_DONE,
+    PAPP_BLE_EV_CONNECTED,               /* conn, addr; code = 0 or an error            */
+    PAPP_BLE_EV_DISCONNECTED,            /* conn, code = HCI reason                     */
+    PAPP_BLE_EV_NOTIFY,                  /* client: conn, handle, data; code 1 = indication */
+    PAPP_BLE_EV_WRITE,                   /* server: a peer wrote conn, handle, data     */
+    PAPP_BLE_EV_SUBSCRIBE,               /* server: conn, handle; code 0 off, 1 notify, 2 indicate */
+    PAPP_BLE_EV_MTU,                     /* conn, code = new MTU                        */
+    PAPP_BLE_EV_ADV_DONE,                /* advertising stopped (a central connected)  */
+};
+typedef struct {
+    uint8_t         type;
+    int8_t          rssi;
+    papp_ble_conn_t conn;
+    uint16_t        handle;
+    uint16_t        code;
+    papp_ble_addr_t addr;
+    uint16_t        len;
+    uint8_t         data[244];
+} papp_ble_event_t;
+
+typedef struct {
+    papp_iface_hdr_t hdr;
+    bool  (*available)(void);            /* starts the host; false: no BLE on this board/C6 */
+    int   (*own_addr)(papp_ble_addr_t *out);
+    bool  (*poll_event)(papp_ble_event_t *out);
+    bool  (*wait_event)(papp_ble_event_t *out, uint32_t timeout_ms);  /* false: timeout or exit */
+
+    /* Central */
+    int   (*scan_start)(const papp_ble_scan_cfg_t *cfg);
+    void  (*scan_stop)(void);
+    int   (*connect)(const papp_ble_addr_t *peer, uint32_t timeout_ms, papp_ble_conn_t *out);
+    void  (*disconnect)(papp_ble_conn_t c);
+    int   (*mtu_exchange)(papp_ble_conn_t c, uint32_t timeout_ms);       /* result: the MTU */
+    int   (*discover)(papp_ble_conn_t c, papp_ble_found_svc_t *svcs, int max_svcs, int *n_svcs,
+                      papp_ble_found_chr_t *chrs, int max_chrs, int *n_chrs, uint32_t timeout_ms);
+    int   (*read)(papp_ble_conn_t c, uint16_t handle, void *buf, size_t len, uint32_t timeout_ms); /* bytes */
+    int   (*write)(papp_ble_conn_t c, uint16_t handle, const void *buf, size_t len, bool response,
+                   uint32_t timeout_ms);
+    int   (*subscribe)(papp_ble_conn_t c, uint16_t cccd, int mode, uint32_t timeout_ms);  /* 0 off, 1, 2 */
+
+    /* Peripheral */
+    int   (*gatt_register)(const papp_ble_svc_t *svcs, int count);   /* once, before adv_start */
+    int   (*set_value)(uint16_t handle, const void *buf, size_t len);     /* what reads return */
+    int   (*notify)(papp_ble_conn_t c, uint16_t handle, const void *buf, size_t len); /* also sets the value */
+    int   (*adv_start)(const papp_ble_adv_cfg_t *cfg);
+    void  (*adv_stop)(void);
+    int   (*set_name)(const char *name);                             /* GAP device name   */
+} papp_if_ble_t;
 
 /* ── Entry point ────────────────────────────────────────────────────────── */
 

@@ -32,6 +32,18 @@ extern const papp_if_audi_t lx_if_audi;
 extern const papp_if_inpt_t lx_if_inpt;
 extern const papp_if_thrd_t lx_if_thrd;
 extern const papp_if_ui_t lx_if_ui;
+extern const papp_if_net_t lx_if_net;
+extern const papp_if_ble_t lx_if_ble;     /* only on boards with BLE (lx_svc_ble_present) */
+
+/* NET bookkeeping (lx_svc_net.c) */
+void lx_svc_net_init(void);
+int  lx_svc_net_end_run(void);              /* -> sockets / requests the app left open */
+int  lx_svc_net_hold(void);                 /* Wi-Fi for the run (UI's picker): PAPP_E_* */
+
+/* BLE bookkeeping (lx_svc_ble.c): the host runs only during a BLE app's run */
+void lx_svc_ble_init(void);
+int  lx_svc_ble_end_run(void);              /* -> 1 if the host was running */
+bool lx_svc_ble_present(void);
 
 /* THRD bookkeeping (lx_svc_thrd.c), driven by the App Manager */
 void lx_thrd_begin_run(void *main_task);

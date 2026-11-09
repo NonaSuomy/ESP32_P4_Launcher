@@ -10,6 +10,7 @@
 #include "lx_comp.h"
 #include "lx_input.h"
 #include "lx_audio.h"
+#include "lx_net.h"
 #include "nvs.h"
 #include "bsp.h"
 
@@ -616,7 +617,7 @@ static bool poll_action(act_t *a)
             I.rep_code = code;
             I.rep_next = now + REPEAT_DELAY_US;
         }
-        *a = (act_t){ .act = act };
+        *a = (act_t){ .act = act, .ch = code >= 0x10000 ? -1 : 0 };     /* ch -1: from a keyboard */
         return true;
     }
     if (I.rep_act != A_NONE && now >= I.rep_next) {
@@ -1292,4 +1293,340 @@ done:
     guard_out();
     lx_input_flush();
     return result;
+}
+
+/* ── Wi-Fi picker (UI v4) ──────────────────────────────────────────────── */
+
+#define WF_ROW_H   48
+#define WF_PASS    64           /* WPA: up to 63 characters */
+#define WF_BTN_W   160
+#define WF_SCAN_US   15000000
+#define WF_JOIN_US   45000000
+
+static const char *const PW_ROWS[3][KB_ROWN] = {
+    { "1234567890", "qwertyuiop", "asdfghjkl@", "zxcvbnm.-_" },
+    { "1234567890", "QWERTYUIOP", "ASDFGHJKL@", "ZXCVBNM.-_" },
+    { "!@#$%^&*()", "~`-_=+[]{}", "\\|;:'\",.<>", "/?        " },     /* a blank is no key */
+};
+enum { PW_PAGE, PW_SPACE, PW_DEL, PW_SHOW, PW_BACK, PW_JOIN, PW_NSPECIAL };
+
+static struct {
+    lx_net_ap_t aps[LX_NET_MAX_APS];
+    int  n, sel, top;
+    char pass[WF_PASS];
+} W;
+
+static int wf_rows(void) { return (S.cv.h - HDR_H - FTR_H - 8) / WF_ROW_H; }
+
+static bool wf_is_current(const char *ssid)
+{
+    return lx_net_state() == LX_NET_CONNECTED && strcmp(lx_net_ssid(), ssid) == 0;
+}
+
+static void wf_header(const char *title)
+{
+    lx_fill(&S.cv, 0, 0, S.cv.w, S.cv.h, C_BG);
+    lx_fill(&S.cv, 0, 0, S.cv.w, HDR_H, C_HDR);
+    text_clip(MARGIN, (HDR_H - 32) / 2, title, C_TEXT, (S.cv.w - 2 * MARGIN) / CW);
+}
+
+static void wf_bars(int x, int y, int rssi)
+{
+    int n = rssi >= -55 ? 4 : rssi >= -67 ? 3 : rssi >= -75 ? 2 : 1;
+    for (int i = 0; i < 4; i++) {
+        int h = 8 + i * 6;
+        lx_fill(&S.cv, x + i * 9, y + 32 - h, 6, h, i < n ? C_TEXT : C_BTN);
+    }
+}
+
+static void wf_lock(int x, int y, uint16_t c)
+{
+    lx_fill(&S.cv, x + 3, y, 10, 3, c);
+    lx_fill(&S.cv, x + 3, y, 3, 10, c);
+    lx_fill(&S.cv, x + 10, y, 3, 10, c);
+    lx_fill(&S.cv, x, y + 9, 16, 13, c);
+}
+
+static void draw_wifi_list(const char *status)
+{
+    if (!frame_begin()) return;
+    lx_canvas_t *c = &S.cv;
+    wf_header("Choose a Wi-Fi network");
+    if (status) {
+        wrap_text(MARGIN, HDR_H + 24, (c->w - 2 * MARGIN) / CW, status, true);
+    } else {
+        int rows = wf_rows();
+        for (int i = W.top; i < W.n && i < W.top + rows; i++) {
+            const lx_net_ap_t *ap = &W.aps[i];
+            int y = HDR_H + 4 + (i - W.top) * WF_ROW_H;
+            if (i == W.sel) lx_fill(c, 0, y, c->w, WF_ROW_H - 4, C_SEL);
+            wf_bars(MARGIN, y + 4, ap->rssi);
+            int right = c->w - MARGIN - 16;
+            if (ap->secure) wf_lock(right, y + 10, C_DIM);
+            if (wf_is_current(ap->ssid)) {
+                right -= 9 * CW + 12;
+                lx_text(c, right, y + 6, "connected", C_SAVE, 2);
+            }
+            text_clip(MARGIN + 48, y + 6, ap->ssid, C_TEXT, (right - MARGIN - 48 - 12) / CW);
+        }
+    }
+    int fy = c->h - FTR_H;
+    lx_fill(c, 0, fy, c->w, FTR_H, C_BOX);
+    lx_text(c, MARGIN, fy + 8, "A Join  Y Scan  B Cancel", C_DIM, 2);
+    button(c->w - MARGIN - 2 * WF_BTN_W - 8, fy + 4, WF_BTN_W, FTR_H - 8, "Scan", false);
+    button(c->w - MARGIN - WF_BTN_W, fy + 4, WF_BTN_W, FTR_H - 8, "Cancel", false);
+    frame_end();
+}
+
+/* Returns false when the user backs out (or the app must exit) while it looks */
+static bool wf_scan(volatile bool *abort)
+{
+    draw_wifi_list("Looking for networks...");
+    guard_in();
+    lx_net_scan();
+    guard_out();
+    int64_t until = esp_timer_get_time() + WF_SCAN_US;
+    int n = -1;
+    while (n < 0 && esp_timer_get_time() < until) {
+        if (abort && *abort) return false;
+        act_t a;
+        if (poll_action(&a) && a.act == A_BACK) return false;
+        vTaskDelay(pdMS_TO_TICKS(100));
+        guard_in();
+        n = lx_net_scan_results(W.aps, LX_NET_MAX_APS);
+        guard_out();
+    }
+    W.n = n < 0 ? 0 : n;
+    W.sel = W.top = 0;
+    for (int i = 0; i < W.n; i++)           /* start on the network in use */
+        if (wf_is_current(W.aps[i].ssid)) W.sel = i;
+    return true;
+}
+
+/* ── Password keyboard: lower case, upper case, symbols ── */
+
+static int pw_spec_w(void) { return (KB_COLS * (KEY_W + 4)) / PW_NSPECIAL; }
+
+static void draw_password(const char *ssid, int page, int r, int col, bool show)
+{
+    if (!frame_begin()) return;
+    lx_canvas_t *c = &S.cv;
+    char title[64];
+    snprintf(title, sizeof(title), "Password for %s", ssid);
+    wf_header(title);
+    int fx = MARGIN, fy = HDR_H + 12, fw = c->w - 2 * MARGIN;
+    lx_fill(c, fx, fy, fw, 48, C_BOX);
+    char shown[WF_PASS + 1];
+    size_t n = strlen(W.pass);
+    for (size_t i = 0; i < n; i++) shown[i] = show ? W.pass[i] : '*';
+    shown[n] = '_';
+    shown[n + 1] = 0;
+    int fit = (fw - 24) / CW;
+    const char *t = (int)n + 1 > fit ? shown + (n + 1 - fit) : shown;     /* the end, where you type */
+    lx_text(c, fx + 12, fy + 8, t, C_TEXT, 2);
+    lx_text(c, MARGIN, fy + 60, "X Del  Y abc/ABC/#+=  START Join  B Back", C_DIM, 2);
+
+    int y0 = kb_top(), x0 = kb_left();
+    lx_fill(c, 0, y0 - 8, c->w, c->h - y0 + 8, C_BOX);
+    char k[2] = { 0, 0 };
+    for (int i = 0; i < KB_ROWN; i++)
+        for (int j = 0; j < KB_COLS; j++) {
+            k[0] = PW_ROWS[page][i][j];
+            if (k[0] != ' ') button(x0 + j * (KEY_W + 4), y0 + i * (KEY_H + 4), KEY_W, KEY_H, k, i == r && j == col);
+        }
+    static const char *const next_page[3] = { "ABC", "#+=", "abc" };
+    const char *spec[PW_NSPECIAL] = { next_page[page], "Space", "Del", show ? "Hide" : "Show", "Back", "Join" };
+    int sw = pw_spec_w();
+    for (int j = 0; j < PW_NSPECIAL; j++)
+        button(x0 + j * sw, y0 + KB_ROWN * (KEY_H + 4), sw - 4, KEY_H, spec[j], r == KB_ROWN && j == col);
+    frame_end();
+}
+
+static void pw_add(char ch)
+{
+    size_t n = strlen(W.pass);
+    if (n < WF_PASS - 1) { W.pass[n] = ch; W.pass[n + 1] = 0; }
+}
+
+/* Edits W.pass. Returns 1 join, 0 back, -1 abort */
+static int wf_password(const char *ssid, volatile bool *abort)
+{
+    static int page;            /* stays as the user left it */
+    bool show = false;
+    int r = 1, kx = 0;
+    for (;;) {
+        int col = r < KB_ROWN ? kx : kx * PW_NSPECIAL / KB_COLS;
+        draw_password(ssid, page, r, col, show);
+        act_t a = wait_action(abort);
+        int press = -1;                     /* row*16+col */
+        switch (a.act) {
+        case A_UP:    r = (r + KB_ROWN) % (KB_ROWN + 1); break;
+        case A_DOWN:  r = (r + 1) % (KB_ROWN + 1); break;
+        case A_LEFT:
+        case A_RIGHT: {
+            int d = a.act == A_LEFT ? -1 : 1;
+            if (r < KB_ROWN) kx = (kx + d + KB_COLS) % KB_COLS;
+            else kx = (((col + d + PW_NSPECIAL) % PW_NSPECIAL) * KB_COLS + PW_NSPECIAL / 2) / PW_NSPECIAL;
+            break;
+        }
+        case A_OK:
+            if (a.ch < 0) return 1;         /* Enter on a keyboard */
+            press = r * 16 + col;
+            break;
+        case A_RUN:    return 1;
+        case A_DEL:
+        case A_FAV:    press = KB_ROWN * 16 + PW_DEL; break;
+        case A_SEARCH: press = KB_ROWN * 16 + PW_PAGE; break;
+        case A_CLEAR:  W.pass[0] = 0; break;
+        case A_CHAR:   pw_add((char)a.ch); break;
+        case A_BACK:   return 0;
+        case A_ABORT:  return -1;
+        case A_TAP: {
+            int y0 = kb_top(), x0 = kb_left();
+            int i = (a.y - y0) / (KEY_H + 4);
+            if (a.y < y0) break;
+            if (i >= 0 && i < KB_ROWN) {
+                int j = (a.x - x0) / (KEY_W + 4);
+                if (a.x >= x0 && j >= 0 && j < KB_COLS) { r = i; kx = j; press = i * 16 + j; }
+            } else if (i == KB_ROWN) {
+                int j = (a.x - x0) / pw_spec_w();
+                if (a.x >= x0 && j >= 0 && j < PW_NSPECIAL) {
+                    r = i;
+                    kx = (j * KB_COLS + PW_NSPECIAL / 2) / PW_NSPECIAL;
+                    press = i * 16 + j;
+                }
+            }
+            break;
+        }
+        default: break;
+        }
+        if (press < 0) continue;
+        int pr = press / 16, pc = press % 16;
+        if (pr < KB_ROWN) {
+            char ch = PW_ROWS[page][pr][pc];
+            if (ch != ' ') pw_add(ch);
+        } else if (pc == PW_PAGE) {
+            page = (page + 1) % 3;
+        } else if (pc == PW_SPACE) {
+            pw_add(' ');
+        } else if (pc == PW_DEL) {
+            size_t n = strlen(W.pass);
+            if (n) W.pass[n - 1] = 0;
+        } else if (pc == PW_SHOW) {
+            show = !show;
+        } else if (pc == PW_BACK) {
+            return 0;
+        } else {
+            return 1;
+        }
+    }
+}
+
+/* Joins and waits. Returns 1 connected (and saved), 0 failed (told), 2 cancelled, -1 abort */
+static int wf_join(const char *ssid, volatile bool *abort)
+{
+    char text[96];
+    snprintf(text, sizeof(text), "Joining %s ...", ssid);
+    message_box("Wi-Fi", text, "Cancel", false);
+    guard_in();
+    lx_net_connect(ssid, W.pass);
+    guard_out();
+    int64_t until = esp_timer_get_time() + WF_JOIN_US;
+    for (;;) {
+        if (abort && *abort) {
+            lx_net_restore();
+            return -1;
+        }
+        act_t a;
+        if (poll_action(&a) && (a.act == A_BACK || a.act == A_OK || a.act == A_TAP)) {
+            lx_net_restore();
+            return 2;
+        }
+        lx_net_state_t st = lx_net_state();
+        if (st == LX_NET_CONNECTED && strcmp(lx_net_ssid(), ssid) == 0) {
+            snprintf(text, sizeof(text), "Connected to %s. Saved as this board's network.", ssid);
+            message_box("Wi-Fi", text, "OK", false);
+            vTaskDelay(pdMS_TO_TICKS(1200));
+            return 1;
+        }
+        if (st == LX_NET_FAILED || st == LX_NET_NO_RADIO || esp_timer_get_time() > until) {
+            lx_net_restore();
+            snprintf(text, sizeof(text), "Could not join %s. Check the password and try again.", ssid);
+            message_box("Wi-Fi", text, "OK", false);
+            for (;;) {
+                act_t b = wait_action(abort);
+                if (b.act == A_ABORT) return -1;
+                if (b.act == A_OK || b.act == A_BACK || b.act == A_TAP || b.act == A_RUN) break;
+            }
+            return 0;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+int lx_ui_wifi(volatile bool *abort)
+{
+    input_reset();
+    memset(&W, 0, sizeof(W));
+    int r = 0;
+    bool scan = true;
+    for (;;) {
+        if (scan) {
+            scan = false;
+            if (!wf_scan(abort)) { r = abort && *abort ? -1 : 0; break; }
+        }
+        draw_wifi_list(W.n ? NULL : "No networks found. Press Y or Scan to look again.");
+        /* Wait for input; redraw when the connection changes (the "connected" mark) */
+        bool was = lx_net_state() == LX_NET_CONNECTED;
+        act_t a;
+        for (;;) {
+            if (abort && *abort) { a = (act_t){ .act = A_ABORT }; break; }
+            if (poll_action(&a)) break;
+            vTaskDelay(pdMS_TO_TICKS(15));
+            if ((lx_net_state() == LX_NET_CONNECTED) != was) { a = (act_t){ .act = A_NONE }; break; }
+        }
+        int rows = wf_rows(), pick = -1;
+        switch (a.act) {
+        case A_UP:     if (W.sel > 0) W.sel--; break;
+        case A_DOWN:   if (W.sel < W.n - 1) W.sel++; break;
+        case A_PGUP:   W.sel = W.sel > rows ? W.sel - rows : 0; break;
+        case A_PGDN:   W.sel = W.sel + rows < W.n ? W.sel + rows : (W.n ? W.n - 1 : 0); break;
+        case A_OK:
+        case A_RUN:    pick = W.sel; break;
+        case A_SEARCH: scan = true; break;
+        case A_BACK:   r = 0; goto out;
+        case A_ABORT:  r = -1; goto out;
+        case A_TAP:
+            if (a.y >= S.cv.h - FTR_H) {
+                if (a.x >= S.cv.w - MARGIN - WF_BTN_W) { r = 0; goto out; }
+                if (a.x >= S.cv.w - MARGIN - 2 * WF_BTN_W - 8) scan = true;
+            } else if (a.y >= HDR_H) {
+                int i = W.top + (a.y - HDR_H - 4) / WF_ROW_H;
+                if (i >= 0 && i < W.n) pick = W.sel = i;
+            }
+            break;
+        default: break;
+        }
+        if (W.sel < W.top) W.top = W.sel;
+        if (W.sel >= W.top + rows) W.top = W.sel - rows + 1;
+        if (pick < 0 || pick >= W.n) continue;
+
+        const lx_net_ap_t *ap = &W.aps[pick];
+        if (wf_is_current(ap->ssid)) { r = 1; goto out; }
+        memset(W.pass, 0, sizeof(W.pass));
+        for (;;) {
+            if (ap->secure) {
+                int k = wf_password(ap->ssid, abort);
+                if (k < 0) { r = -1; goto out; }
+                if (k == 0) break;                      /* back to the list */
+            }
+            int j = wf_join(ap->ssid, abort);
+            if (j == 1 || j < 0) { r = j; goto out; }
+            if (j == 2 || !ap->secure) break;           /* cancelled, or an open network failed */
+        }                                               /* failed: the password again, as typed */
+    }
+out:
+    memset(W.pass, 0, sizeof(W.pass));
+    lx_input_flush();
+    return r;
 }

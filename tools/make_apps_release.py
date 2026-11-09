@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Prepares the online app catalogue for the launcher's Store: copies every built app that
-is not a developer app (PAPP_MF_HIDDEN), its icon and the folder icons, and writes
+is not a developer app (PAPP_MF_HIDDEN) or an education app (edu.*: those ship on the starter
+card, SDcard/apps/Education, built by apps/education/build.py into build/education), its icon and the folder icons, and writes
 apps.json next to them. --publish uploads them to the "apps" release on GitHub.
 
     python apps/build_all.py                       # build the apps first
@@ -143,6 +144,9 @@ def main():
             print(f"skip {name}: no manifest")
             continue
         if m["flags"] & MF_HIDDEN:
+            continue
+        if m["id"].startswith("edu."):              # education apps ship on the card (SDcard/apps/Education)
+            print(f"skip {name}: education app")
             continue
         folder = next((f for p, f in FOLDERS.items() if m["id"].startswith(p)), "")
         entry = dict(id=m["id"], name=m["name"], version=m["version"], folder=folder, dir=name,

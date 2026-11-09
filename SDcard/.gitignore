@@ -7,6 +7,7 @@
 !.gitkeep
 !README.md
 !config/gamepads.txt
+!apps/Education/**
 !Tyrian/data/**
 !roms/doom/doom1.wad
 !roms/quake/id1/pak0.pak

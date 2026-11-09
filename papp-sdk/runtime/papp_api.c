@@ -14,6 +14,8 @@ papp_import_t __papp_imports[] = {
     { PAPP_IF_INPT, 1, PAPP_IMPORT_OPTIONAL, 0 },          /* v2 functions checked at call */
     { PAPP_IF_THRD, PAPP_IF_THRD_VER, PAPP_IMPORT_OPTIONAL, 0 },
     { PAPP_IF_UI, 1, PAPP_IMPORT_OPTIONAL, 0 },              /* v2 functions checked at call */
+    { PAPP_IF_NET, 1, PAPP_IMPORT_OPTIONAL, 0 },             /* launcher 0.29+ */
+    { PAPP_IF_BLE, 1, PAPP_IMPORT_OPTIONAL, 0 },             /* launcher 0.29+, boards with BLE */
 };
 
 #define SYS ((const papp_if_sys_t *)__papp_imports[0].iface)
@@ -24,6 +26,8 @@ papp_import_t __papp_imports[] = {
 #define INPT ((const papp_if_inpt_t *)__papp_imports[5].iface)
 #define THRD ((const papp_if_thrd_t *)__papp_imports[6].iface)
 #define UI   ((const papp_if_ui_t *)__papp_imports[7].iface)
+#define NET  ((const papp_if_net_t *)__papp_imports[8].iface)
+#define BLE  ((const papp_if_ble_t *)__papp_imports[9].iface)
 
 const papp_if_sys_t *papp_if_sys(void) { return SYS; }
 const papp_if_mem_t *papp_if_mem(void) { return MEM; }
@@ -213,3 +217,16 @@ int papp_ui_volume(void)
 {
     return UI && UI->hdr.version >= 3 ? UI->volume() : -1;
 }
+
+int papp_ui_wifi(void)
+{
+    return UI && UI->hdr.version >= 4 ? UI->wifi() : PAPP_E_UNSUPPORTED;
+}
+
+/* ── NET ────────────────────────────────────────────────────────────────── */
+
+const papp_if_net_t *papp_net(void) { return NET; }
+
+/* ── BLE ────────────────────────────────────────────────────────────────── */
+
+const papp_if_ble_t *papp_ble(void) { return BLE; }

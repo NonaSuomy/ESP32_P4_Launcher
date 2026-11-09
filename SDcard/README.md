@@ -7,6 +7,7 @@ then on Wi-Fi open the **Store** (first tile on the home screen) and choose **In
 
 ```
 apps/                    the apps (the Store puts them here)
+apps/Education/          apps for students, in the Education folder of the home screen (only here, not in the Store)
 config/gamepads.txt      controller button mappings shared by everyone (see below)
 roms/<system>/           your ROMs, one folder per emulator
 roms/doom/doom1.wad      Doom shareware episode
@@ -49,3 +50,21 @@ password=MyPassword
 
 Delete the file, or choose Forget, to forget the network. The password is in plain text: keep
 the file to yourself (git ignores it here).
+
+## Education apps
+
+`apps/Education/` holds apps for teaching, each in its own folder (`<app>/<app>.papp` + `icon.png`). Copy the
+folder to the card as it is (or the whole starter card) and they appear in the **Education** folder on the home
+screen. They are not in the Store. Their sources are in `apps/education/` of the project, and
+`python apps/education/build.py` rebuilds them into this folder.
+
+- **BLE Remote**: the board as a Bluetooth LE peripheral named `gution-p4`. A phone (any BLE app, e.g. nRF Connect)
+  or a PC sets its mode, level, LED and message, and talks to its console over the Nordic UART service
+  (`help` lists the commands). The screen shows the values and a log of what goes in and out.
+- **Wi-Fi Remote**: the board as a web server. Open the address it shows (`http://<board>/`) in a browser on the
+  same network to set the same values. Scripts can use `GET /state`, `POST /state` with JSON such as
+  `{"level": 80, "led": true}`, or `http://<board>/set?level=80&led=on&msg=Hi` from the address bar.
+  The **Network** button lists the networks nearby: the one you join (with its password, typed on the screen) becomes
+  the board's saved network, as in Settings → Wi-Fi.
+  Without a saved network (or with the Hotspot button) the board opens its own Wi-Fi network
+  `P4-Remote-xxxx`, password `p4remote`, and the page is at `http://192.168.4.1/`.

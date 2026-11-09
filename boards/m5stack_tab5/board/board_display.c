@@ -186,7 +186,7 @@ esp_err_t bsp_display_init(void)
     esp_lcd_dsi_bus_config_t bus_cfg = {
         .bus_id = 0,
         .num_data_lanes = 2,
-        .phy_clk_src = MIPI_DSI_PHY_CLK_SRC_DEFAULT,
+        .phy_clk_src = 0,       /* esp_lcd picks: PLL_F20M on v1.x, XTAL on v3.x (the legacy source aborts there) */
         .lane_bit_rate_mbps = type == BOARD_PANEL_ILI9881C ? BOARD_DSI_LANE_MBPS : 965,
     };
     ESP_RETURN_ON_ERROR(esp_lcd_new_dsi_bus(&bus_cfg, &dsi), TAG, "DSI bus");

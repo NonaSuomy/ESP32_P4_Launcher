@@ -5,7 +5,7 @@ with an emblem on its front. Drawn at 4x and scaled down for smooth edges.
 
     python apps/common/icons/make_folder_icons.py
 
-Writes folder_games.png, folder_emulators.png and folder_community.png next to this script. Copy one to
+Writes folder_games.png, folder_emulators.png, folder_community.png and folder_education.png next to this script. Copy one to
 /sd/apps/<folder>/icon.png to use it.
 """
 import os
@@ -81,6 +81,16 @@ def people(d, cx, cy, ink, hole):
         d.pieslice([x - 13 * S, y + 7 * S, x + 13 * S, y + 31 * S], 180, 360, fill=ink)
 
 
+def cap(d, cx, cy, ink, hole):
+    """Graduation cap: a board seen at an angle, the cap under it and a tassel."""
+    d.polygon([(cx - 22 * S, cy - 6 * S), (cx, cy - 15 * S), (cx + 22 * S, cy - 6 * S), (cx, cy + 3 * S)], fill=ink)
+    d.polygon([(cx - 12 * S, cy - 1 * S), (cx, cy + 4 * S), (cx + 12 * S, cy - 1 * S),
+               (cx + 12 * S, cy + 9 * S), (cx, cy + 14 * S), (cx - 12 * S, cy + 9 * S)], fill=ink)
+    d.line([(cx, cy - 6 * S), (cx + 17 * S, cy - 2 * S)], fill=hole, width=2 * S)                  # tassel cord
+    d.line([(cx + 17 * S, cy - 2 * S), (cx + 17 * S, cy + 11 * S)], fill=ink, width=2 * S)
+    d.ellipse([cx + 14 * S, cy + 9 * S, cx + 20 * S, cy + 15 * S], fill=ink)
+
+
 def make(name, emblem):
     img = base()
     d = ImageDraw.Draw(img)
@@ -93,3 +103,4 @@ if __name__ == "__main__":
     make("folder_games.png", gamepad)
     make("folder_emulators.png", cartridge)
     make("folder_community.png", people)
+    make("folder_education.png", cap)

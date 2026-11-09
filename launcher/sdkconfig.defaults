@@ -59,3 +59,8 @@ CONFIG_LV_USE_LODEPNG=y
 # Decoded images (app icons) are cached instead of decoded on every redraw
 CONFIG_LV_CACHE_DEF_SIZE=4194304
 CONFIG_LV_IMAGE_HEADER_CACHE_DEF_CNT=64
+
+# Apps' network (NET): up to 8 sockets of their own beside the launcher's (web file manager,
+# updates); TLS buffers (about 20 KB per session) in PSRAM, so internal RAM stays for esp_hosted
+CONFIG_LWIP_MAX_SOCKETS=16
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y

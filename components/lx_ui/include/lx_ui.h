@@ -34,6 +34,11 @@ int  lx_ui_menu(const char *title, const char *const *items, int n, int initial,
  * closes by itself after 3 s; saved for the next boot. Returns the level. */
 int  lx_ui_volume(volatile bool *abort);
 
+/* The Wi-Fi picker: scan, choose, password keyboard, join; the network joined is
+ * saved (lx_net_connect). Returns 1 connected, 0 cancelled, -1 abort. The caller
+ * holds the radio (an app: lx_svc_net_hold). */
+int  lx_ui_wifi(volatile bool *abort);
+
 /* Frees what an interrupted call left behind (app killed while browsing). */
 void lx_ui_reset(void);
 

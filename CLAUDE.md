@@ -17,13 +17,20 @@ boards/<id>/board/        BSP implementation (component "board", pins esp_hosted
                           power rails on two PI4IOE5V6408 I2C expanders, esp_hosted 1.4 for M5Stack's C6 firmware)
 components/bsp/           BSP contract (bsp.h) — the core only talks to hardware through it
 components/papp_abi/      papp_abi.h — .papp v2 format + interfaces (shared with apps; no IDF includes)
-components/lx_loader/     App Manager: loader, relocation, imports, services (SYS/MEM/FS/DISP/AUDI/INPT/THRD/UI), teardown
+components/lx_loader/     App Manager: loader, relocation, imports, services (SYS/MEM/FS/DISP/AUDI/INPT/THRD/UI/NET/BLE), teardown;
+                          NET (lx_svc_net.c) = Wi-Fi, sockets, TLS, HTTP(S) for apps: the first call holds the radio
+                          for the run (lx_net_app_hold), every wait gives up on exit, teardown closes sockets and rejoins the saved network;
+                          BLE (lx_svc_ble.c) = NimBLE on the P4, controller on the C6 over esp_hosted (VHCI): the host
+                          starts on the first call (gatt_register restarts it with the app's table) and stops at teardown;
+                          Guition boards and Tab5 (CONFIG_BT_* in their sdkconfig.board; on Tab5's esp_hosted 1.4 the C6 runs its
+                          controller from boot, lx_svc_ble.c stubs the 2.x controller calls), the slot is NULL on Waveshare
 components/lx_devlink/    DevLink: framed protocol over USB-Serial-JTAG (devlink_proto.h)
 components/lx_common/     crc32, launcher version
 components/lx_gfx/        software drawing + 8x16 font for launcher screens (rotation-aware)
 components/lx_comp/       compositor: app surfaces → PPA scale/rotate → panel; launcher screens draw via it
 components/lx_audio/      audio engine: per-stream rings → resample → mix → BSP codec (fixed rate)
-components/lx_ui/         launcher-drawn screens for apps: content browser (pick_file) + message box
+components/lx_ui/         launcher-drawn screens for apps: content browser (pick_file) + message box; UI v4 wifi() = Wi-Fi picker
+                          (scan list, password keyboard, joins with lx_net_connect = saved to wifi.txt; lx_net_restore on fail/cancel)
 components/lx_input/      input manager: USB HID gamepads/keyboards, XInput (Xbox 360) pads (lx_input_xinput) + board buttons (merged into P1) → players + event queue; HOME chord;
                           lx_hid_parse = HID descriptor parser; lx_padmap = per-pad button mapping as text on the card:
                           /sd/config/gamepads_mine.txt (Map controller) wins over /sd/config/gamepads.txt (shared database,
@@ -41,8 +48,21 @@ apps/                     Test/demo apps (hello, libc_test, gfx_demo: DISP test,
                           audio_test: AUDI test, args mix|cycles|block; input_test: INPT event log, arg secs;
                           thread_test: THRD test (--libc), args all|leave|exit|spin;
                           fast_bench: PSRAM vs FAST (internal SRAM) placement benchmark, arg rounds;
-                          browse_test: UI browser test, args root exts save_dir picks — all test apps are
+                          browse_test: UI browser test, args root exts save_dir picks;
+                          net_test: NET test (--libc), args all|serve|ap|hang|join ssid pass [url]|fetch url [method] [body];
+                          ble_test: BLE test (--libc), args periph [secs]|scan [secs]|central [name] [secs]|hang;
+                          periph = "gution-p4" for ESP32P4_Gution4_7project/tools/ble_client.py — all test apps are
                           PAPP_MF_HIDDEN: shown on the home screen only with Settings → Show developer apps)
+apps/education/<app>/     Education apps for students (ids edu.*): `python apps/education/build.py` (build_all runs it too)
+                          builds them into build/education and copies .papp + icon to SDcard/apps/Education/<app>/ (committed;
+                          the "Education" home screen folder, icon from apps/common/icons/folder_education.png). Never in the Store
+                          catalogue (make_apps_release reads build/apps only and skips edu.*). common/edu_ui.c (linked into each):
+                          touch UI on an 800x480 surface, log panel, the remotes' shared state + Control screen.
+                          ble_remote = BLE Remote, the Gution BLE demo ("gution-p4": control service mode/level/led/msg + Nordic
+                          UART console, same protocol as ESP32P4_Gution4_7project's GutionTerminal); wifi_remote = Wi-Fi Remote,
+                          web server on port 80 (page, GET/POST /state in the Gution JSON, GET /set?level=..), hotspot
+                          "P4-Remote-xxxx" (password p4remote) when there is no network or on the Hotspot button; Network button /
+                          "Choose network" = the launcher's Wi-Fi picker (papp_ui_wifi)
 apps/<emu>/               Emulators, cores copied from RetroESP32_P4, each with a build.py:
                           nes (own glue), gb+gbc, sms+gg+col, pce, a78, spectrum, genesis, snes, lynx (C++),
                           a26 (C++), a800 (C++), neogeo. No args = ROM browser, or `-- <rom> [resume]`.
