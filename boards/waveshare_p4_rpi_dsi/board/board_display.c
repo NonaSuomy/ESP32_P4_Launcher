@@ -414,10 +414,14 @@ bool bsp_display_wait_vsync(uint32_t timeout_ms)
     return xSemaphoreTake(s_vsync, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
 }
 
+/* The backlight stays dark below PWM 39-40 (Cuqi 5", measured): 1-100 % map onto 44-255 so that
+ * every setting above 0 lights it, the launcher's idle dim (15 %) included; 0 = off */
+#define BL_PWM_MIN  44
+
 void bsp_display_backlight(int percent)
 {
     if (!s_attiny) return;
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
-    attiny_write(ATTINY_REG_PWM, 255 * percent / 100);
+    attiny_write(ATTINY_REG_PWM, percent ? BL_PWM_MIN + (255 - BL_PWM_MIN) * (percent - 1) / 99 : 0);
 }

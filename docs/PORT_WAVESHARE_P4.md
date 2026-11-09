@@ -73,7 +73,9 @@ Bring-up order, as in the esp32-scummvm BSP (don't reorder):
 5. Continuous HS clock, no command ACK.
 6. ATTINY releases the bridge and LCD, SYSPMCTRL wake through the ATTINY's register proxy.
 7. TC358762 registers by DSI generic long writes (`LCDCTRL = 0x00100150`: RGB888).
-8. ATTINY releases the touch reset; backlight through the PWM register.
+8. ATTINY releases the touch reset; backlight through the PWM register. The backlight stays dark
+   below PWM 39-40 (on the tested Cuqi 5"), so `bsp_display_backlight` maps 1-100 % onto 44-255
+   (0 = off): before, everything up to 15 % was dark, the home screen's idle dim (15 %) included.
 
 **RGB565 contract vs RGB888 panel.** RGB565 to the bridge wraps the picture about 200 px sideways
 (a TC358762 FIFO phase issue). The contract stays RGB565: `bsp_display_fb()` returns two RGB565
@@ -133,8 +135,8 @@ Genesis, Game Boy, Doom, Clock); 3 in part (touch, USB pad on the lower port); 4
 relocation, hello, libc_test, hid_test, thread_test, no crash record; Wi-Fi join; `papp_dev.py net`:
 gateway, pings, TCP, DNS; the Guition 7"'s `launcher_guition_p4_7.bin` in `/sd/update/` refused,
 "not a launcher image for this chip and board"); 5 in part (software and panic reboots bring the
-panel back). Open: Quake (no game data on the test card), the HOME menu, sound and volume, power
-cycle, backlight dimming.
+panel back); 6 (2026-11-09: 16 % = PWM 40 still lit, 15 % = PWM 38 dark, hence the mapping above).
+Open: Quake (no game data on the test card), the HOME menu, sound and volume, power cycle.
 
 1. `info`, `bootlog`; `shot` of the home screen: full 800x480, colours right (red/blue not swapped
    on the panel itself: the screenshot reads the RGB565 shadow, so check by eye too).
