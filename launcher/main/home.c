@@ -2225,6 +2225,50 @@ static void poll_keys(void)
     }
 }
 
+/* The input event queue only reports digital buttons. Sample the left stick
+ * separately while the launcher is active so it can navigate like a D-pad. */
+static void poll_stick_navigation(void)
+{
+    enum { STICK_DEADZONE = 12000 };
+    static int last_dir;
+    static int64_t repeat_at;
+    papp_gamepad_t g = { 0 };
+    if (!lx_input_gamepad(0, &g)) {
+        last_dir = 0;
+        return;
+    }
+
+    int dir = 0;
+    int ax = g.lx < 0 ? -g.lx : g.lx;
+    int ay = g.ly < 0 ? -g.ly : g.ly;
+    if (ax >= STICK_DEADZONE || ay >= STICK_DEADZONE) {
+        if (ax > ay) dir = g.lx < 0 ? 1 : 2;       /* left, right */
+        else         dir = g.ly < 0 ? 3 : 4;       /* up, down */
+    }
+
+    int64_t now = esp_timer_get_time();
+    if (!dir) {
+        last_dir = 0;
+        return;
+    }
+    if (dir != last_dir) {
+        last_dir = dir;
+        repeat_at = now + 350000;
+    } else if (now < repeat_at) {
+        return;
+    } else {
+        repeat_at = now + 150000;
+    }
+
+    s_last_input = now;
+    switch (dir) {
+    case 1: focus_move(-1, 0); break;
+    case 2: focus_move(1, 0); break;
+    case 3: focus_move(0, -1); break;
+    case 4: focus_move(0, 1); break;
+    }
+}
+
 /* Select + Y anywhere: the visible picture, landscape, as a BMP on the card */
 static void screenshot(void)
 {
@@ -2299,7 +2343,10 @@ static void home_task(void *arg)
         dim_tick();
         screenshot_tick();
         if (s_map_step >= 0) map_tick();
-        else poll_keys();
+        else {
+            poll_keys();
+            poll_stick_navigation();
+        }
         wifi_tick();
         store_tick();
         if (store_updates() != s_badge_shown) badge_update();
