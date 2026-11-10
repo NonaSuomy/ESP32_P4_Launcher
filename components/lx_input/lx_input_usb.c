@@ -197,8 +197,21 @@ static pad_fmt_t detect_format(const dev_t *d, const uint8_t *p, int len)
 static void parse_hid(dev_t *d, const uint8_t *p, int len)
 {
     lx_pad_state_t s;
-    if (lx_pad_layout(&d->layout, p, (size_t)len, &s))
-        lx_input_pad_update(d->player, s.b, s.lx, s.ly, s.rx, s.ry, s.lt, s.rt);
+    if (!lx_pad_layout(&d->layout, p, (size_t)len, &s)) return;
+    /* This wired Switch controller reports as a generic HID pad rather than
+     * the Switch Pro 0x30 protocol. Its face-button usages are in Xbox
+     * position order, while Launcher actions follow the printed Nintendo
+     * labels (Switch A = confirm, Switch B = back). */
+    if (d->vid == 0x20D6 && d->pid == 0xA713) {
+        uint32_t ab = s.b & (PAPP_BTN_A | PAPP_BTN_B);
+        uint32_t xy = s.b & (PAPP_BTN_X | PAPP_BTN_Y);
+        s.b &= ~(PAPP_BTN_A | PAPP_BTN_B | PAPP_BTN_X | PAPP_BTN_Y);
+        if (ab & PAPP_BTN_A) s.b |= PAPP_BTN_B;
+        if (ab & PAPP_BTN_B) s.b |= PAPP_BTN_A;
+        if (xy & PAPP_BTN_X) s.b |= PAPP_BTN_Y;
+        if (xy & PAPP_BTN_Y) s.b |= PAPP_BTN_X;
+    }
+    lx_input_pad_update(d->player, s.b, s.lx, s.ly, s.rx, s.ry, s.lt, s.rt);
 }
 
 static void parse_pad(dev_t *d, const uint8_t *p, int len)
@@ -224,13 +237,13 @@ static void parse_pad(dev_t *d, const uint8_t *p, int len)
         if (len < 13 || p[0] != 0x30) return;
         d->switch_report_seen = true;
         uint32_t sb = (uint32_t)p[3] | ((uint32_t)p[4] << 8) | ((uint32_t)p[5] << 16);
-        /* The PAPP button ABI uses Xbox positions (A=bottom, B=right,
-         * X=left, Y=top). Switch Pro labels put A/B and X/Y at the opposite
-         * positions, so translate the four face buttons by position. */
-        if (sb & (1u << 3)) b |= PAPP_BTN_B; /* Switch A is on the right */
-        if (sb & (1u << 2)) b |= PAPP_BTN_A; /* Switch B is on the bottom */
-        if (sb & (1u << 1)) b |= PAPP_BTN_Y; /* Switch X is on the top */
-        if (sb & (1u << 0)) b |= PAPP_BTN_X; /* Switch Y is on the left */
+        /* Preserve the labels printed on a Nintendo controller. The launcher
+         * uses A to confirm and B to go back, so mapping by Xbox face-button
+         * position would make Switch A act as Back. */
+        if (sb & (1u << 3)) b |= PAPP_BTN_A; /* Switch A, right */
+        if (sb & (1u << 2)) b |= PAPP_BTN_B; /* Switch B, bottom */
+        if (sb & (1u << 1)) b |= PAPP_BTN_X; /* Switch X, top */
+        if (sb & (1u << 0)) b |= PAPP_BTN_Y; /* Switch Y, left */
         if (sb & (1u << 22)) b |= PAPP_BTN_L1;
         if (sb & (1u << 6)) b |= PAPP_BTN_R1;
         if (sb & (1u << 23)) { b |= PAPP_BTN_L2; lt = 0xFFFF; }
