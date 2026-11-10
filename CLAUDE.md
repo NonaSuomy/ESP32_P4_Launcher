@@ -151,7 +151,8 @@ python tests\host\test_reloc.py                                               # 
 Apps in `/sd/apps/<dir>/<file>.papp` appear on the home screen; a directory there with no `.papp` is a folder of apps (its own `icon.png` optional)
 (`/sd/apps/<folder>/<dir>/<file>.papp`, one level; `deploy` finds an app moved into one). Icon: an `icon.png` in the app's source
 folder (PNG, square, best 88x88, transparency OK; corners are rounded by the launcher) is copied by
-`papp_build.py` and uploaded by `deploy` to `/sd/apps/<dir>/icon.png`; without one the tile shows the initial. Every `papp_dev.py`
+`papp_build.py` and uploaded by `deploy` to `/sd/apps/<dir>/icon.png`; without one the tile shows the initial.
+`deploy` into a folder also uploads the folder's icon (`apps/common/icons/folder_<folder>.png`) when the folder has none. Every `papp_dev.py`
 command also sets the board clock from the PC (`--no-time` skips it; `info` shows `time` and `rtc`).
 `deploy` = upload to `/sd/apps/<name>/<name>.papp` → run → stream logs → exit code of the app
 (124 timeout). `shot out.png` = screenshot of the visible framebuffer, in landscape (open it to see

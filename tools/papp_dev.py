@@ -410,6 +410,25 @@ def app_remote_path(dl, name):
     return f"/sd/apps/{name}/{name}.papp"
 
 
+FOLDER_ICONS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "apps", "common", "icons")
+
+
+def put_folder_icon(dl, remote):
+    """An app deployed into a home screen folder (/sd/apps/<folder>/<dir>/...): give the folder
+    its icon (apps/common/icons/folder_<folder>.png) if it has none, as the starter card does"""
+    parts = remote.split("/")                      # "", "sd", "apps", folder, dir, file
+    if len(parts) != 6 or parts[:3] != ["", "sd", "apps"]:
+        return
+    folder = parts[3]
+    icon = os.path.join(FOLDER_ICONS, f"folder_{folder.lower().replace(' ', '_')}.png")
+    if not os.path.isfile(icon):
+        return
+    entries = json.loads(dl.request(LS, f"/sd/apps/{folder}".encode()).decode().split("\n#")[0])
+    if not any(e["n"] == "icon.png" and not e["d"] for e in entries):
+        dl.put(icon, f"/sd/apps/{folder}/icon.png")
+        print(f"folder icon -> /sd/apps/{folder}/icon.png", file=sys.stderr)
+
+
 def cmd_deploy(dl, args, exit_box):
     name = os.path.splitext(os.path.basename(args.file))[0]
     remote = args.dest or app_remote_path(dl, name)
@@ -422,6 +441,7 @@ def cmd_deploy(dl, args, exit_box):
     icon = os.path.join(os.path.dirname(os.path.abspath(args.file)), "icon.png")
     if os.path.isfile(icon):                       # home screen icon (papp_build copies it here)
         dl.put(icon, remote.rsplit("/", 1)[0] + "/icon.png")
+    put_folder_icon(dl, remote)
 
     done = threading.Event()
 
