@@ -46,7 +46,9 @@ extern const ui_font_t *const ui_large;      /* 55 px line */
 /* ── Frame ── */
 papp_surface_t *ui_open(void);               /* the 800x480 surface; NULL: no display */
 void ui_begin(papp_surface_t *s);            /* lock, clear to C_BG, forget the touch targets */
+void ui_begin_keep(papp_surface_t *s);       /* the same without clearing: the buffer keeps what it had */
 void ui_end(papp_surface_t *s);              /* present (waits for vsync) */
+uint16_t *ui_pixels(int *stride);           /* the frame being drawn (RGB565), stride in pixels */
 
 /* ── Shapes (x, y = top left unless noted) ── */
 uint16_t ui_mix(uint16_t a, uint16_t b, int t);                  /* t 0..256 = a..b */

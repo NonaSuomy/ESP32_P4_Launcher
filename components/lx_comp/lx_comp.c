@@ -39,9 +39,41 @@ struct lx_surface {
 
 static SemaphoreHandle_t s_lock;
 static ppa_client_handle_t s_srm;
+static ppa_client_handle_t s_blend;        /* lx_comp_blit, registered on first use */
+static ppa_client_handle_t s_fill;         /* lx_comp_fill */
+static void *s_tmp;                        /* lx_comp_blit: the scaled/turned picture */
+static size_t s_tmp_size;
 static lx_surface_t *s_surface;           /* v1: one surface at a time */
 static bool s_fb_clean[2];                /* fb holds only black outside the surface rect */
 static int s_dw, s_dh;                    /* landscape display size */
+
+/* Async present: the worker waits for the flip, scales with the PPA and flips while the app
+ * goes on with its next frame. One frame in flight: s_idle is taken by the presenter when it
+ * queues a job and given back by the worker when the job is done. The worker holds s_lock
+ * while it works, so everything else that takes s_lock is ordered with it. */
+static SemaphoreHandle_t s_go, s_idle;
+static struct { lx_surface_t *s; const void *src; } s_job;
+
+static void wait_idle(void)
+{
+    if (!s_idle) return;
+    xSemaphoreTake(s_idle, portMAX_DELAY);
+    xSemaphoreGive(s_idle);
+}
+
+static esp_err_t present_job(lx_surface_t *s, const void *src);
+
+static void present_worker(void *arg)
+{
+    for (;;) {
+        xSemaphoreTake(s_go, portMAX_DELAY);
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        if (s_job.s && s_job.s == s_surface) present_job(s_job.s, s_job.src);
+        s_job.s = NULL;
+        xSemaphoreGive(s_lock);
+        xSemaphoreGive(s_idle);
+    }
+}
 
 esp_err_t lx_comp_init(void)
 {
@@ -56,6 +88,15 @@ esp_err_t lx_comp_init(void)
     esp_err_t err = ppa_register_client(&cfg, &s_srm);
     if (err != ESP_OK) return err;
     s_lock = xSemaphoreCreateMutex();
+    s_go = xSemaphoreCreateBinary();
+    SemaphoreHandle_t idle = xSemaphoreCreateBinary();
+    if (s_go && idle) {
+        xSemaphoreGive(idle);
+        /* internal stack: the PPA driver and the flip may touch flash-cache-sensitive code */
+        if (xTaskCreatePinnedToCore(present_worker, "lx_present", 4096, NULL, 15, NULL, tskNO_AFFINITY) == pdPASS)
+            s_idle = idle;
+    }
+    if (!s_idle) ESP_LOGW(TAG, "no present worker: presents are synchronous");
     ESP_LOGI(TAG, "display %dx%d (panel %ux%u, rot %u)", s_dw, s_dh, b->display_w, b->display_h, b->display_rot);
     return ESP_OK;
 }
@@ -147,6 +188,9 @@ out:
 
 static void destroy_locked(lx_surface_t *s)
 {
+    heap_caps_free(s_tmp);
+    s_tmp = NULL;
+    s_tmp_size = 0;
     if (s->frames > 1) {
         int64_t dt = esp_timer_get_time() - s->t_first;
         ESP_LOGI(TAG, "surface %dx%d: %lu frames, %.1f fps, PPA %.2f + flip wait %.2f ms/frame", s->w, s->h,
@@ -161,6 +205,7 @@ static void destroy_locked(lx_surface_t *s)
 void lx_comp_surface_destroy(lx_surface_t *s)
 {
     if (!s || !s_lock) return;
+    wait_idle();                            /* a queued frame still uses the surface */
     xSemaphoreTake(s_lock, portMAX_DELAY);
     if (s == s_surface) destroy_locked(s);
     xSemaphoreGive(s_lock);
@@ -169,6 +214,7 @@ void lx_comp_surface_destroy(lx_surface_t *s)
 void lx_comp_destroy_all(void)
 {
     if (!s_lock) return;
+    wait_idle();
     xSemaphoreTake(s_lock, portMAX_DELAY);
     if (s_surface) destroy_locked(s_surface);
     xSemaphoreGive(s_lock);
@@ -181,20 +227,184 @@ uint16_t *lx_comp_lock(lx_surface_t *s, int *stride_px)
     return s->buf[s->cur];
 }
 
+static int blit_bpp(lx_blit_format_t f) { return f == LX_BLIT_ARGB8888 ? 4 : f == LX_BLIT_A8 ? 1 : 2; }
+
+static color_pixel_rgb888_data_t rgb888(uint16_t c)
+{
+    return (color_pixel_rgb888_data_t){ .r = (uint8_t)((c >> 11) << 3), .g = (uint8_t)(((c >> 5) & 63) << 2),
+                                        .b = (uint8_t)((c & 31) << 3) };
+}
+
+/* Scale / turn / mirror b's picture with the PPA's SRM engine into s_tmp; *out gets s_tmp as a
+ * picture of the same format. The SRM only invalidates its output (no write-back), so it never
+ * writes into the app's buffer directly: the blend below mixes s_tmp in. Called with s_lock. */
+static esp_err_t transform(const lx_blit_t *b, int stride, lx_blit_t *out)
+{
+    int qx = b->scale_x16 < 1 ? 1 : b->scale_x16 > 255 ? 255 : b->scale_x16;
+    int qy = b->scale_y16 < 1 ? 1 : b->scale_y16 > 255 ? 255 : b->scale_y16;
+    int sw = (qx >> 4) * b->w + (qx & 15) * b->w / 16;      /* as the driver works it out */
+    int sh = (qy >> 4) * b->h + (qy & 15) * b->h / 16;
+    bool turned = b->rotate & 1;
+    int tw = turned ? sh : sw, th = turned ? sw : sh;
+    if (tw <= 0 || th <= 0) return ESP_ERR_INVALID_ARG;
+    int bpp = blit_bpp(b->format);
+    size_t need = ((size_t)tw * th * bpp + 63) & ~(size_t)63;
+    if (need > s_tmp_size) {
+        heap_caps_free(s_tmp);
+        s_tmp = heap_caps_aligned_alloc(64, need, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+        s_tmp_size = s_tmp ? need : 0;
+        if (!s_tmp) return ESP_ERR_NO_MEM;
+    }
+    /* the SRM may round the last line or column away: start from "nothing there" */
+    if (b->format == LX_BLIT_RGB565 && b->colorkey) {
+        uint16_t *p = s_tmp;
+        for (int i = 0; i < tw * th; i++) p[i] = b->key;
+    } else {
+        memset(s_tmp, 0, (size_t)tw * th * bpp);
+    }
+    esp_cache_msync(s_tmp, need, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+
+    ppa_srm_color_mode_t cm = b->format == LX_BLIT_ARGB8888 ? PPA_SRM_COLOR_MODE_ARGB8888 : PPA_SRM_COLOR_MODE_RGB565;
+    ppa_srm_oper_config_t op = {
+        .in = { .buffer = b->pixels, .pic_w = stride, .pic_h = b->h, .block_w = b->w, .block_h = b->h, .srm_cm = cm },
+        .out = { .buffer = s_tmp, .buffer_size = need, .pic_w = tw, .pic_h = th, .srm_cm = cm },
+        .rotation_angle = b->rotate == 1 ? PPA_SRM_ROTATION_ANGLE_90 : b->rotate == 2 ? PPA_SRM_ROTATION_ANGLE_180 :
+                          b->rotate == 3 ? PPA_SRM_ROTATION_ANGLE_270 : PPA_SRM_ROTATION_ANGLE_0,
+        .scale_x = qx / 16.0f,
+        .scale_y = qy / 16.0f,
+        .mirror_x = b->mirror_x,
+        .mirror_y = b->mirror_y,
+        .alpha_update_mode = PPA_ALPHA_NO_CHANGE,
+        .mode = PPA_TRANS_MODE_BLOCKING,
+    };
+    esp_err_t err = ppa_do_scale_rotate_mirror(s_srm, &op);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "blit: PPA SRM failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    *out = *b;
+    out->pixels = s_tmp;
+    out->w = tw;
+    out->h = th;
+    return ESP_OK;
+}
+
+/* The PPA blend engine draws a picture into the surface's current buffer, in place (the buffer
+ * is both its background and its output; the driver writes back and invalidates the rows). */
+esp_err_t lx_comp_blit(lx_surface_t *s, const lx_blit_t *b)
+{
+    if (!s || !s_lock || !b || !b->pixels || b->w <= 0 || b->h <= 0 || (unsigned)b->format > LX_BLIT_A8)
+        return ESP_ERR_INVALID_ARG;
+    int stride = b->stride ? b->stride : b->w;
+    if (stride < b->w) return ESP_ERR_INVALID_ARG;
+    bool moved = b->rotate || b->scale_x16 != 16 || b->scale_y16 != 16 || b->mirror_x || b->mirror_y;
+    if (moved && b->format == LX_BLIT_A8) return ESP_ERR_INVALID_ARG;   /* the SRM has no A8 */
+    if (b->alpha == 0) return ESP_OK;                                  /* invisible */
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    if (s != s_surface) goto out;
+    if (!s_blend) {
+        ppa_client_config_t cfg = { .oper_type = PPA_OPERATION_BLEND, .max_pending_trans_num = 1 };
+        err = ppa_register_client(&cfg, &s_blend);
+        if (err != ESP_OK) goto out;
+    }
+    lx_blit_t t;
+    if (moved) {
+        err = transform(b, stride, &t);
+        if (err != ESP_OK) goto out;
+        b = &t;
+        stride = t.w;
+    }
+    /* clip to the surface */
+    int sx = 0, sy = 0, dx = b->x, dy = b->y, w = b->w, h = b->h;
+    if (dx < 0) { sx = -dx; w += dx; dx = 0; }
+    if (dy < 0) { sy = -dy; h += dy; dy = 0; }
+    if (dx + w > s->w) w = s->w - dx;
+    if (dy + h > s->h) h = s->h - dy;
+    err = ESP_OK;
+    if (w <= 0 || h <= 0) goto out;                     /* all outside */
+
+    uint16_t *buf = s->buf[s->cur];
+    size_t bytes = ((size_t)s->w * s->h * 2 + 63) & ~(size_t)63;
+    /* key range in RGB888: the 565 value with the low bits anything (covers either expansion) */
+    color_pixel_rgb888_data_t lo = rgb888(b->key);
+    color_pixel_rgb888_data_t hi = { .r = (uint8_t)(lo.r | 7), .g = (uint8_t)(lo.g | 3), .b = (uint8_t)(lo.b | 7) };
+    ppa_blend_color_mode_t fcm = b->format == LX_BLIT_ARGB8888 ? PPA_BLEND_COLOR_MODE_ARGB8888 :
+                                 b->format == LX_BLIT_A8 ? PPA_BLEND_COLOR_MODE_A8 : PPA_BLEND_COLOR_MODE_RGB565;
+    ppa_blend_oper_config_t op = {
+        .in_bg = { .buffer = buf, .pic_w = s->w, .pic_h = s->h, .block_w = w, .block_h = h,
+                   .block_offset_x = dx, .block_offset_y = dy, .blend_cm = PPA_BLEND_COLOR_MODE_RGB565 },
+        .in_fg = { .buffer = b->pixels, .pic_w = stride, .pic_h = b->h, .block_w = w, .block_h = h,
+                   .block_offset_x = sx, .block_offset_y = sy, .blend_cm = fcm },
+        .out = { .buffer = buf, .buffer_size = bytes, .pic_w = s->w, .pic_h = s->h,
+                 .block_offset_x = dx, .block_offset_y = dy, .blend_cm = PPA_BLEND_COLOR_MODE_RGB565 },
+        .bg_alpha_update_mode = PPA_ALPHA_NO_CHANGE,
+        .fg_alpha_update_mode = PPA_ALPHA_NO_CHANGE,
+        .fg_fix_rgb_val = rgb888(b->color),
+        .fg_ck_en = b->colorkey && b->format != LX_BLIT_A8,
+        .fg_ck_rgb_low_thres = lo,
+        .fg_ck_rgb_high_thres = hi,
+        .mode = PPA_TRANS_MODE_BLOCKING,
+    };
+    if (b->alpha > 0 && b->alpha < 255) {
+        if (b->format == LX_BLIT_RGB565) {              /* no alpha of its own: set it */
+            op.fg_alpha_update_mode = PPA_ALPHA_FIX_VALUE;
+            op.fg_alpha_fix_val = (uint32_t)b->alpha;
+        } else {                                        /* scale the picture's own alpha */
+            op.fg_alpha_update_mode = PPA_ALPHA_SCALE;
+            op.fg_alpha_scale_ratio = b->alpha / 256.0f;
+        }
+    }
+    err = ppa_do_blend(s_blend, &op);
+    if (err != ESP_OK) ESP_LOGE(TAG, "PPA blend failed: %s", esp_err_to_name(err));
+out:
+    xSemaphoreGive(s_lock);
+    return err;
+}
+
+esp_err_t lx_comp_fill(lx_surface_t *s, int x, int y, int w, int h, uint16_t color)
+{
+    if (!s || !s_lock) return ESP_ERR_INVALID_ARG;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    if (s != s_surface) goto out;
+    if (x + w > s->w) w = s->w - x;
+    if (y + h > s->h) h = s->h - y;
+    err = ESP_OK;
+    if (w <= 0 || h <= 0) goto out;
+    if (!s_fill) {
+        ppa_client_config_t cfg = { .oper_type = PPA_OPERATION_FILL, .max_pending_trans_num = 1 };
+        err = ppa_register_client(&cfg, &s_fill);
+        if (err != ESP_OK) goto out;
+    }
+    color_pixel_rgb888_data_t c = rgb888(color);
+    ppa_fill_oper_config_t op = {
+        .out = { .buffer = s->buf[s->cur], .buffer_size = ((size_t)s->w * s->h * 2 + 63) & ~(size_t)63,
+                 .pic_w = s->w, .pic_h = s->h, .block_offset_x = x, .block_offset_y = y,
+                 .fill_cm = PPA_FILL_COLOR_MODE_RGB565 },
+        .fill_block_w = w,
+        .fill_block_h = h,
+        .fill_argb_color = { .a = 255, .r = c.r, .g = c.g, .b = c.b },
+        .mode = PPA_TRANS_MODE_BLOCKING,
+    };
+    err = ppa_do_fill(s_fill, &op);         /* the driver writes back and invalidates the rows */
+    if (err != ESP_OK) ESP_LOGE(TAG, "PPA fill failed: %s", esp_err_to_name(err));
+out:
+    xSemaphoreGive(s_lock);
+    return err;
+}
+
 lx_rect_t lx_comp_surface_rect(const lx_surface_t *s)
 {
     return s->dst;
 }
 
-static esp_err_t present_pixels(lx_surface_t *s, const void *pixels)
+/* Wait for the flip, scale src onto the back framebuffer, flip. Called with s_lock. */
+static esp_err_t present_job(lx_surface_t *s, const void *src)
 {
-    if (!s || !s_lock) return ESP_ERR_INVALID_ARG;
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    if (s != s_surface) {
-        xSemaphoreGive(s_lock);
-        return ESP_ERR_INVALID_ARG;
-    }
-
     const bsp_info_t *b = bsp_info();
     int64_t t_w = esp_timer_get_time();
     bsp_display_wait_flip(FLIP_WAIT_MS);
@@ -216,7 +426,7 @@ static esp_err_t present_pixels(lx_surface_t *s, const void *pixels)
                                                              PPA_SRM_ROTATION_ANGLE_0;
     ppa_srm_oper_config_t op = {
         .in = {
-            .buffer = pixels ? pixels : s->buf[s->cur],
+            .buffer = src,
             .pic_w = s->w, .pic_h = s->h,
             .block_w = s->w, .block_h = s->h,
             .srm_cm = PPA_SRM_COLOR_MODE_RGB565,
@@ -240,11 +450,42 @@ static esp_err_t present_pixels(lx_surface_t *s, const void *pixels)
         bsp_display_show(back);
         if (s->frames++ == 0) s->t_first = t1;
         s->t_ppa += t1 - t0;
-        if (!pixels) s->cur = (s->cur + 1) % s->nbuf;
     } else {
         ESP_LOGE(TAG, "PPA SRM failed: %s", esp_err_to_name(err));
     }
+    return err;
+}
+
+/* pixels: the app's own frame (present_ext) or NULL = the surface's current buffer. With two
+ * buffers the frame is handed to the worker and this returns at once (an app frame is first
+ * copied into the surface's spare buffer, so the app may reuse its own right away); with one
+ * buffer the app draws into the very buffer being scaled, so it waits as before. */
+static esp_err_t present_pixels(lx_surface_t *s, const void *pixels)
+{
+    if (!s || !s_lock) return ESP_ERR_INVALID_ARG;
+    int64_t t_w = esp_timer_get_time();
+    if (s_idle) xSemaphoreTake(s_idle, portMAX_DELAY);     /* the previous frame is out */
+    int64_t waited = esp_timer_get_time() - t_w;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    if (s != s_surface) goto fail;
+    s->t_wait += waited;
+    if (!s_idle || s->nbuf < 2) {
+        err = present_job(s, pixels ? pixels : s->buf[s->cur]);
+        if (err == ESP_OK && !pixels) s->cur = (s->cur + 1) % s->nbuf;
+        goto fail;                                      /* not queued: release both */
+    }
+    const void *src = s->buf[s->cur];
+    if (pixels) memcpy(s->buf[s->cur], pixels, (size_t)s->w * s->h * 2);   /* the driver writes it back */
+    s->cur = (s->cur + 1) % s->nbuf;
+    s_job.s = s;
+    s_job.src = src;
     xSemaphoreGive(s_lock);
+    xSemaphoreGive(s_go);
+    return ESP_OK;
+fail:
+    xSemaphoreGive(s_lock);
+    if (s_idle) xSemaphoreGive(s_idle);
     return err;
 }
 
@@ -261,6 +502,7 @@ esp_err_t lx_comp_present_ext(lx_surface_t *s, const void *pixels)
 esp_err_t lx_comp_launcher_present(const uint16_t *frame)
 {
     if (!s_lock || !frame) return ESP_ERR_INVALID_ARG;
+    wait_idle();
     xSemaphoreTake(s_lock, portMAX_DELAY);
     if (s_surface) {                       /* an app owns the display */
         xSemaphoreGive(s_lock);
@@ -322,6 +564,7 @@ int lx_comp_touch_read(lx_surface_t *s, bsp_touch_point_t *pts, int max)
 static uint16_t *launcher_begin(bool over_app)
 {
     if (!s_lock) return NULL;
+    wait_idle();                        /* the app's last frame is on screen first */
     xSemaphoreTake(s_lock, portMAX_DELAY);
     if (s_surface && !over_app) {
         xSemaphoreGive(s_lock);

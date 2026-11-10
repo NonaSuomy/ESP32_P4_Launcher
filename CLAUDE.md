@@ -18,6 +18,8 @@ boards/<id>/board/        BSP implementation (component "board", pins esp_hosted
 components/bsp/           BSP contract (bsp.h) — the core only talks to hardware through it
 components/papp_abi/      papp_abi.h — .papp v2 format + interfaces (shared with apps; no IDF includes)
 components/lx_loader/     App Manager: loader, relocation, imports, services (SYS/MEM/FS/DISP/AUDI/INPT/THRD/UI/NET/BLE), teardown;
+                          MEM v2 code_alloc/code_free/code_sync = executable PSRAM for JITs (64 KB blocks mapped a second time
+                          with EXEC; esp_mmu_map runs on an internal-stack helper task, it disables the caches);
                           NET (lx_svc_net.c) = Wi-Fi, sockets, TLS, HTTP(S) for apps: the first call holds the radio
                           for the run (lx_net_app_hold), every wait gives up on exit, teardown closes sockets and rejoins the saved network;
                           BLE (lx_svc_ble.c) = NimBLE on the P4, controller on the C6 over esp_hosted (VHCI): the host
@@ -27,7 +29,9 @@ components/lx_loader/     App Manager: loader, relocation, imports, services (SY
 components/lx_devlink/    DevLink: framed protocol over USB-Serial-JTAG (devlink_proto.h)
 components/lx_common/     crc32, launcher version
 components/lx_gfx/        software drawing + 8x16 font for launcher screens (rotation-aware)
-components/lx_comp/       compositor: app surfaces → PPA scale/rotate → panel; launcher screens draw via it
+components/lx_comp/       compositor: app surfaces → PPA scale/rotate → panel; launcher screens draw via it;
+                          present is async with 2 buffers (task "lx_present" scales + flips while the app runs;
+                          present_ext copies the app's frame into the spare buffer first), synchronous with 1 buffer
 components/lx_audio/      audio engine: per-stream rings → resample → mix → BSP codec (fixed rate)
 components/lx_ui/         launcher-drawn screens for apps: content browser (pick_file) + message box; UI v4 wifi() = Wi-Fi picker
                           (scan list, password keyboard, joins with lx_net_connect = saved to wifi.txt; lx_net_restore on fail/cancel)
@@ -51,7 +55,8 @@ apps/                     Test/demo apps (hello, libc_test, gfx_demo: DISP test,
                           browse_test: UI browser test, args root exts save_dir picks;
                           net_test: NET test (--libc), args all|serve|ap|hang|join ssid pass [url]|fetch url [method] [body];
                           ble_test: BLE test (--libc), args periph [secs]|scan [secs]|central [name] [secs]|hang;
-                          periph = "gution-p4" for ESP32P4_Gution4_7project/tools/ble_client.py — all test apps are
+                          periph = "gution-p4" for ESP32P4_Gution4_7project/tools/ble_client.py;
+                          ppa_test: DISP v4 blit/fill self-check against a CPU model (--libc), exit code = failures — all test apps are
                           PAPP_MF_HIDDEN: shown on the home screen only with Settings → Show developer apps)
 apps/education/<app>/     Education apps for students (ids edu.*): `python apps/education/build.py` (build_all runs it too)
                           builds them into build/education and copies .papp + icon to SDcard/apps/Education/<app>/ (committed;
@@ -63,9 +68,25 @@ apps/education/<app>/     Education apps for students (ids edu.*): `python apps/
                           web server on port 80 (page, GET/POST /state in the Gution JSON, GET /set?level=..), hotspot
                           "P4-Remote-xxxx" (password p4remote) when there is no network or on the Hotspot button; Network button /
                           "Choose network" = the launcher's Wi-Fi picker (papp_ui_wifi)
+                          sprite_demo = Sprite Demo: pad moves a 64x96 spaceship sprite over a space background, drawn by the PPA
+                          (DISP v4 papp_disp_blit: RGB565 on magenta = key colour, or ARGB8888 with glow); modes Key on / Key off
+                          (the whole magenta rectangle) / Alpha (radio buttons or A); the ship faces where it flies (quarter turns;
+                          down = MIRROR_Y), L1/R1 = size 1/2x..2x in 1/16 steps; clear = papp_disp_fill; 3x zoom box; X exits.
+                          cpu_blit = the same in software for older launchers. Dirty rectangles per buffer (edu_ui ui_begin_keep +
+                          ui_pixels) for 30 fps on the 7"
+                          lvgl_demo = LVGL Demo: the app links its own LVGL 9.2.2 (launcher/managed_components/lvgl__lvgl,
+                          lv_conf.h beside main.c; edubuild.lvgl() adds the sources); LVGL draws straight into a 1-buffer
+                          800x480 surface (direct mode), touch = pointer, pad + USB keyboard = keypad (one group per tab).
+                          Tabs Widgets (slider/arc/switch/LED/button/dropdown colour/dark theme) / Chart / Text (lv_keyboard)
 apps/<emu>/               Emulators, cores copied from RetroESP32_P4, each with a build.py:
                           nes (own glue), gb+gbc, sms+gg+col, pce, a78, spectrum, genesis, snes, lynx (C++),
                           a26 (C++), a800 (C++), neogeo. No args = ROM browser, or `-- <rom> [resume]`.
+                          gba = gpSP (github.com/midworld/gpsp @3f112ae, RV32 JIT in core/riscv/, libretro core,
+                          frontend gba_run.c on the odroid shim): JIT code in MEM v2 code memory (launcher >= 0.29.1),
+                          else the interpreter; ROM paged in 32 KB pages (buffer = free PSRAM - 7 MB); BIOS optional
+                          /sd/roms/gba/gba_bios.bin; saves .srm/.sav in /sd/odroid/data/gba; files nojit / romlimit
+                          there = debug switches. gpSP auto frameskip, fed by the audio ring level (odroid_audio_queued_ms < 30 ms). Needs CONFIG_FATFS_USE_FASTSEEK (paging). core/ patches: memalign'd
+                          gamepak blocks, 32 KB aligned stdio buffer + seek return value in vfs_implementation.c
                           `python apps/build_all.py [name ...]` builds every app with a build.py
 apps/common/odroid/       RetroESP32 odroid_* / app_common / FreeRTOS / ESP-IDF shims on the SDK, so the cores
                           and their *_run.c build unchanged; emu_main.c (browser → EMU_RUN; Exit game → PAPP_EXIT_RELAUNCH = back to the browser), emubuild.py;

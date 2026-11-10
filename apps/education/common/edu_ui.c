@@ -31,14 +31,25 @@ papp_surface_t *ui_open(void)
     return papp_disp_surface_create(&cfg);
 }
 
-void ui_begin(papp_surface_t *s)
+void ui_begin_keep(papp_surface_t *s)
 {
     s_px = papp_disp_lock(s, &s_stride);
     s_nhit = 0;
+}
+
+void ui_begin(papp_surface_t *s)
+{
+    ui_begin_keep(s);
     ui_fill(0, 0, W, H, C_BG);
 }
 
 void ui_end(papp_surface_t *s) { papp_disp_present(s); }
+
+uint16_t *ui_pixels(int *stride)
+{
+    *stride = s_stride;
+    return s_px;
+}
 
 /* ── Shapes ────────────────────────────────────────────────────────────── */
 

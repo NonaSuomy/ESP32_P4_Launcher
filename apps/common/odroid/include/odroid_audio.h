@@ -56,6 +56,7 @@ void odroid_audio_volume_change(void);
  * @param frameCount         Number of frames (each frame = 2 samples)
  */
 void odroid_audio_submit(short *stereoAudioBuffer, int frameCount);
+int odroid_audio_queued_ms(void);     /* PAPP shim: sound waiting to be played, -1 = none */
 
 /**
  * @brief Submit silence to clear the DMA buffers.

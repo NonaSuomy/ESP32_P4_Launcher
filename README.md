@@ -6,7 +6,7 @@ The launcher is a permanent firmware that stays in flash. Applications are `.pap
 Pick one and it is loaded into PSRAM, relocated, linked to the launcher's services and started.
 There's no reflashing, no reboot and no flash wear. When it exits, every resource it used is reclaimed.
 
-21 applications run this way today, including NES through Neo Geo emulators, Doom, Quake,
+22 applications run this way today, including NES through Game Boy Advance and Neo Geo emulators, Doom, Quake,
 Duke Nukem 3D and OpenTyrian, plus Clock and Files.
 
 The same launcher runs on more than one board, and the same `.papp` files and SD card work on all of them:
@@ -20,7 +20,7 @@ copy the `SDcard` folder to a card and get the apps from the Store, see [Getting
 
 | Launcher version | App ABI | Toolchain | Boards |
 |---|---|---|---|
-| 0.29.0 | 2.0-preview | ESP-IDF v5.5.6 | Guition ESP32-P4 4.3" (480×800; chip v1.x, or v3.x with its own image), Guition JC1060P470C 7" (1024×600), M5Stack Tab5 (720×1280), Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (320×480, contributed) |
+| 0.29.1 | 2.0-preview | ESP-IDF v5.5.6 | Guition ESP32-P4 4.3" (480×800; chip v1.x, or v3.x with its own image), Guition JC1060P470C 7" (1024×600), M5Stack Tab5 (720×1280), Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (320×480, contributed) |
 
 > **Status: active development.** The ABI is a preview and may still change. Everything below describes
 > what exists in the code today; the plan for what comes next is in [docs/WORKPLAN.md](docs/WORKPLAN.md).
@@ -154,6 +154,7 @@ Two rules keep this portable: apps only see the ABI, and the launcher core only 
 | Atari 800 / XL / 5200 | atari800 | ZX Spectrum | spectemu |
 | Doom | prboom | Quake | WinQuake |
 | Duke Nukem 3D | Chocolate Duke3D | OpenTyrian | OpenTyrian |
+| Game Boy Advance | gpSP ([RISC-V JIT](https://github.com/midworld/gpsp)) | | |
 | Clock (clock, alarms, stopwatch, timer, world clock) | This project | Files (browse, preview, delete) | This project |
 
 The test apps (`hello`, `gfx_demo`, `audio_test`, `input_test`, `thread_test`, `fast_bench`, `browse_test`,
@@ -340,6 +341,7 @@ No ROMs, BIOS files or commercial game data are included. You need to supply you
 | OpenTyrian | the contents of the Tyrian 2.1 folder (`tyrian1.lvl`, `music.mus`, `*.shp`, ...) to `/sd/tyrian/data/` | Tyrian 2.1, [freeware](https://camanis.net/tyrian/tyrian21.zip) and the data OpenTyrian itself uses |
 | Quake | `id1/pak0.pak` to `/sd/roms/quake/id1/` | `pak0.pak`, the shareware episode |
 | Duke Nukem 3D | `DUKE3D.GRP` to `/sd/roms/duke3d/duke3d.grp` | not included (commercial); tested with the Atomic Edition file |
+| Game Boy Advance | the games to `/sd/roms/gba/`; optional BIOS `gba_bios.bin` there (a built-in replacement runs most games) | not included |
 | Neo Geo | `neogeo.zip` (BIOS) and the games to `/sd/roms/neogeo/` | `gngeo_data.zip`, the emulator's own data; the BIOS is not included |
 
 Doom's `prboom.wad` is built into the app; you don't need to copy it.
@@ -355,7 +357,7 @@ Doom's `prboom.wad` is built into the app; you don't need to copy it.
 | Genesis | `/sd/roms/gen` | SNES | `/sd/roms/snes` |
 | Neo Geo | `/sd/roms/neogeo` | Doom | `/sd/roms/doom/doom.wad` |
 | Quake | `/sd/roms/quake/id1/pak0.pak` | Duke Nukem 3D | `/sd/roms/duke3d/duke3d.grp` |
-| OpenTyrian | `/sd/tyrian/data` | | |
+| OpenTyrian | `/sd/tyrian/data` | Game Boy Advance | `/sd/roms/gba` |
 
 ## Controls
 
@@ -706,11 +708,12 @@ second of real time. Quake's figure comes from its own `timedemo demo1`.
 | Genesis | ~54 fps | 6 in 20 s | Emulates at 60, skips some frames when drawing |
 | SNES | ~35 fps | 8 in 20 s | Emulates at 60, skips frames when drawing |
 | Neo Geo | ~32 fps | not measured | Metal Slug, about 11 s to load |
+| Game Boy Advance | 37–60 fps (game at 60) | low | Launcher 0.29.1, 7": Golden Sun, Super Mario World, Kirby 60; Zelda Minish Cap 53; Castlevania Aria 47; Mario Kart 37 drawn, skipping frames to keep the game and sound at full speed. Needs 0.29.1 for the JIT |
 | Duke Nukem 3D | ~41 fps in E1L1, 52 in menus | low | Software renderer |
 | Doom | ~33 fps | 0 | Software renderer |
 | Quake | ~20 fps | 1 | `timedemo demo1`, software renderer |
 
-Each present costs about 5 ms of PPA time. Frames go to the PPA without a copy (`present_ext`).
+Each present costs about 5 ms of PPA time (7 ms for GBA on the 7"); since launcher 0.29.1 the PPA works while the app runs its next frame.
 
 SD reads reach about 11.5 MB/s through the launcher's file service. Every open file gets a 16 KB DMA-aligned
 buffer, because reads into an unaligned buffer fall back to one sector at a time, at about 1.5 MB/s.

@@ -45,6 +45,23 @@ uint16_t     *lx_comp_lock(lx_surface_t *s, int *stride_px);
 esp_err_t     lx_comp_present(lx_surface_t *s);
 esp_err_t     lx_comp_present_ext(lx_surface_t *s, const void *pixels);   /* surface-sized RGB565, no copy */
 lx_rect_t     lx_comp_surface_rect(const lx_surface_t *s);
+/* PPA drawing into the buffer lock() returns (clipped to the surface): sprites */
+typedef enum { LX_BLIT_RGB565, LX_BLIT_ARGB8888, LX_BLIT_A8 } lx_blit_format_t;
+typedef struct {
+    const void *pixels;
+    int w, h, stride;           /* stride in pixels, 0 = w */
+    lx_blit_format_t format;
+    int x, y;                   /* top left of the drawn (scaled, turned) picture */
+    bool colorkey;              /* pixels of colour key are left out */
+    uint16_t key;
+    uint16_t color;             /* A8: the colour */
+    int alpha;                  /* 0..255 for the whole picture, -1 = as it is */
+    int rotate;                 /* quarter turns counter-clockwise */
+    int scale_x16, scale_y16;   /* sixteenths: 16 = 1.0 */
+    bool mirror_x, mirror_y;
+} lx_blit_t;
+esp_err_t     lx_comp_blit(lx_surface_t *s, const lx_blit_t *b);
+esp_err_t     lx_comp_fill(lx_surface_t *s, int x, int y, int w, int h, uint16_t color);
 /* Touch points mapped into surface coordinates; points outside it are dropped. */
 int           lx_comp_touch_read(lx_surface_t *s, bsp_touch_point_t *pts, int max);
 

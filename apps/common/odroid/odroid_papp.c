@@ -495,6 +495,15 @@ void odroid_audio_submit(short *stereo, int frames)
     if (s_stream && frames > 0) papp_audio_write(s_stream, stereo, frames, 1000);
 }
 
+/* Sound waiting to be played, in ms (-1: no stream). Low = the emulation is falling behind. */
+int odroid_audio_queued_ms(void)
+{
+    if (!s_stream || !s_rate) return -1;
+    papp_audio_stats_t st;
+    papp_audio_stats(s_stream, &st);
+    return (int)((uint64_t)st.queued_frames * 1000 / (uint32_t)s_rate);
+}
+
 void odroid_audio_submit_zero(void)           { }
 int  odroid_audio_sample_rate_get(void)       { return s_rate; }
 odroid_volume_level odroid_audio_volume_get(void) { return (odroid_volume_level)volume_load(); }

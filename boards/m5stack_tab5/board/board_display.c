@@ -139,7 +139,7 @@ static esp_err_t ili9881c_init(esp_lcd_dsi_bus_handle_t dsi, esp_lcd_panel_io_ha
     esp_lcd_dpi_panel_config_t dpi_cfg = {
         .virtual_channel = 0,
         .dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT,
-        .dpi_clock_freq_mhz = 60,
+        .dpi_clock_freq_mhz = 75,               /* 940 x 1324 total: 60 Hz (60 MHz gave 48 Hz) */
         .pixel_format = LCD_COLOR_PIXEL_FORMAT_RGB565,
         .num_fbs = NUM_FBS,
         .video_timing = {

@@ -5,6 +5,7 @@
  "emu.a800":        {"category": "emulators", "description": "Atari 800 and 5200 games, disks and tapes from /sd/roms/a800"},
  "emu.col":         {"category": "emulators", "description": "ColecoVision games (.col) from /sd/roms/col; needs BIOS.col there too"},
  "emu.gb":          {"category": "emulators", "description": "Game Boy games (.gb) from /sd/roms/gb"},
+ "emu.gba":         {"category": "emulators", "description": "Game Boy Advance games (.gba) from /sd/roms/gba (gpSP with a RISC-V JIT; optional gba_bios.bin there)"},
  "emu.gbc":         {"category": "emulators", "description": "Game Boy Color games (.gbc) from /sd/roms/gbc"},
  "emu.genesis":     {"category": "emulators", "description": "Sega Genesis / Mega Drive games (.md, .gen, .bin) from /sd/roms/gen"},
  "emu.gg":          {"category": "emulators", "description": "Sega Game Gear games (.gg) from /sd/roms/gg"},

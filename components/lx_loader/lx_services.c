@@ -15,6 +15,9 @@
 #include <sys/stat.h>
 
 #include "esp_heap_caps.h"
+#include "esp_cache.h"
+#include "esp_mmu_map.h"
+#include "esp_memory_utils.h"
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -269,12 +272,142 @@ static size_t mem_free_size(uint32_t caps)
     return heap_caps_get_free_size(mem_idf_caps(caps, (caps & PAPP_MEM_FAST) ? 0 : 1024));
 }
 
+/* Code memory (MEM v2) for JITs: a PSRAM block mapped a second time with the EXEC
+ * capability, like the app image. The app uses only the executable alias (writes
+ * work there too, as they do for its own .data). Caches are tagged by virtual
+ * address: before the block goes back to the heap, the alias's dirty lines are
+ * written back and dropped, so they can't land on the next owner's data later. */
+#define CODE_PAGE   0x10000
+#define MAX_CODE    64
+typedef struct { void *buf, *exec; size_t size; } code_blk_t;
+static code_blk_t s_code[MAX_CODE];
+
+/* esp_mmu_map / unmap turn the caches off for a moment: the caller's stack must be
+ * in internal RAM. App threads may have PSRAM stacks, so those calls run on a
+ * short-lived helper task with an internal stack, and the caller waits. */
+typedef struct { void (*fn)(void *); void *arg; SemaphoreHandle_t done; } internal_call_t;
+
+static void internal_call_task(void *p)
+{
+    internal_call_t *c = p;
+    c->fn(c->arg);
+    xSemaphoreGive(c->done);
+    vTaskDelete(NULL);
+}
+
+static void run_on_internal_stack(void (*fn)(void *), void *arg)
+{
+    int here;
+    if (esp_ptr_internal(&here)) {
+        fn(arg);
+        return;
+    }
+    internal_call_t c = { fn, arg, xSemaphoreCreateBinary() };
+    if (c.done && xTaskCreate(internal_call_task, "lx_mmu", 4096, &c, uxTaskPriorityGet(NULL), NULL) == pdPASS)
+        xSemaphoreTake(c.done, portMAX_DELAY);
+    else
+        ESP_LOGE(TAG, "no memory for the mapping task");
+    if (c.done) vSemaphoreDelete(c.done);
+}
+
+static void code_unmap(void *p)
+{
+    code_blk_t *b = p;
+    esp_cache_msync(b->exec, b->size, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_INVALIDATE |
+                                      ESP_CACHE_MSYNC_FLAG_TYPE_DATA);
+    esp_mmu_unmap(b->exec);
+}
+
+static void code_release(code_blk_t *b)
+{
+    run_on_internal_stack(code_unmap, b);
+    heap_caps_free(b->buf);
+    memset(b, 0, sizeof(*b));
+}
+
+static void code_map(void *p)
+{
+    code_blk_t *b = p;
+    esp_paddr_t paddr;
+    mmu_target_t target;
+    b->exec = NULL;
+    if (esp_mmu_vaddr_to_paddr(b->buf, &paddr, &target) != ESP_OK ||
+        esp_mmu_map(paddr, b->size, MMU_TARGET_PSRAM0, MMU_MEM_CAP_EXEC | MMU_MEM_CAP_READ | MMU_MEM_CAP_32BIT,
+                    ESP_MMU_MMAP_FLAG_PADDR_SHARED, &b->exec) != ESP_OK) {
+        b->exec = NULL;
+        return;
+    }
+    /* nothing of the heap's may stay dirty in the cache under the old address */
+    esp_cache_msync(b->buf, b->size, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_INVALIDATE |
+                                     ESP_CACHE_MSYNC_FLAG_TYPE_DATA);
+}
+
+static void *mem_code_alloc(size_t size)
+{
+    if (!size) return NULL;
+    SVC_ENTER();
+    void *ret = NULL;
+    size = (size + CODE_PAGE - 1) & ~(size_t)(CODE_PAGE - 1);
+    code_blk_t *b = NULL;
+    for (int i = 0; i < MAX_CODE && !b; i++)
+        if (!s_code[i].buf) b = &s_code[i];
+    void *buf = b ? heap_caps_aligned_alloc(CODE_PAGE, size, MALLOC_CAP_SPIRAM) : NULL;
+    if (buf) {
+        code_blk_t nb = { buf, NULL, size };
+        run_on_internal_stack(code_map, &nb);
+        if (nb.exec) {
+            *b = nb;
+            ret = nb.exec;
+        } else {
+            heap_caps_free(buf);
+        }
+    }
+    if (!ret) ESP_LOGW(TAG, "code_alloc(%u) failed", (unsigned)size);
+    SVC_LEAVE();
+    return ret;
+}
+
+static void mem_code_free(void *code)
+{
+    if (!code) return;
+    SVC_ENTER();
+    for (int i = 0; i < MAX_CODE; i++)
+        if (s_code[i].exec == code) {
+            code_release(&s_code[i]);
+            break;
+        }
+    SVC_LEAVE();
+}
+
+static int mem_code_sync(void *code, size_t size)
+{
+    uintptr_t a = (uintptr_t)code & ~(uintptr_t)63, e = ((uintptr_t)code + size + 63) & ~(uintptr_t)63;
+    if (!code || !size) return PAPP_E_ARG;
+    SVC_ENTER();
+    int rc = PAPP_E_ARG;
+    for (int i = 0; i < MAX_CODE; i++) {
+        uintptr_t b = (uintptr_t)s_code[i].exec;
+        if (b && a >= b && e <= b + s_code[i].size) {
+            esp_cache_msync((void *)a, e - a, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_TYPE_DATA);
+            esp_cache_msync((void *)a, e - a, ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_TYPE_INST);
+            __asm__ volatile("fence.i" ::: "memory");
+            rc = PAPP_E_OK;
+            break;
+        }
+    }
+    SVC_LEAVE();
+    return rc;
+}
+
 static const papp_if_mem_t s_if_mem = {
     .hdr = { PAPP_IF_MEM, PAPP_IF_MEM_VER, sizeof(papp_if_mem_t) },
     .alloc     = mem_alloc,
     .realloc   = mem_realloc,
     .free      = mem_free,
     .free_size = mem_free_size,
+    .code_alloc = mem_code_alloc,
+    .code_free  = mem_code_free,
+    .code_sync  = mem_code_sync,
 };
 
 /* ── FS ─────────────────────────────────────────────────────────────────── */
@@ -436,6 +569,12 @@ void lx_svc_end_run(uint32_t *leaked_allocs, uint32_t *leaked_bytes, uint32_t *l
     }
     heap_caps_free(s_ptrs);
     s_ptrs = NULL; s_ptr_cap = 0; s_ptr_used = 0; s_ptr_live = 0;
+    for (int i = 0; i < MAX_CODE; i++)
+        if (s_code[i].buf) {
+            nb += s_code[i].size;
+            code_release(&s_code[i]);
+            na++;
+        }
 
     for (int i = 0; i < MAX_FILES; i++) {
         if (s_files[i]) {

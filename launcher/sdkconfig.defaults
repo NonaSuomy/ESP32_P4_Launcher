@@ -19,6 +19,8 @@ CONFIG_SPIRAM_USE_MALLOC=y
 # FATFS long file names
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255
+# Seeks in big files (ROMs paged from the card) without walking the cluster chain
+CONFIG_FATFS_USE_FASTSEEK=y
 
 # Wi-Fi through the ESP32-C6 companion (SDIO, slot 1; the SD card is slot 0)
 CONFIG_SLAVE_IDF_TARGET_ESP32C6=y

@@ -58,6 +58,12 @@ void  *papp_alloc(size_t size, uint32_t caps, size_t align);   /* PAPP_MEM_* cap
 void  *papp_realloc(void *ptr, size_t size);
 void   papp_free(void *ptr);
 size_t papp_mem_free_size(uint32_t caps);
+/* Memory for generated code (a JIT): written and run at the same address, whole 64 KB
+ * pages. papp_code_sync(range) after writing, before running it. NULL / PAPP_E_UNSUPPORTED
+ * before launcher 0.29.1 (MEM v2): use an interpreter then. */
+void  *papp_code_alloc(size_t size);
+void   papp_code_free(void *code);
+int    papp_code_sync(void *code, size_t size);
 
 /* ── Files (also reachable through stdio when linking libc) ─────────────── */
 const papp_if_fs_t *papp_fs(void);   /* NULL if the launcher has no FS */
@@ -79,6 +85,14 @@ int             papp_disp_present(papp_surface_t *s);        /* waits for vsync 
 /* Zero copy: show the app's own width x height RGB565 buffer (stride = width), no lock needed. */
 int             papp_disp_present_ext(papp_surface_t *s, const void *pixels);
 int             papp_disp_touch(papp_surface_t *s, papp_touch_point_t *pts, int max);
+/* The PPA (the P4's picture engine) draws into the buffer from papp_disp_lock, clipped.
+ * papp_disp_blit: a picture (sprite), see papp_blit_t: RGB565, ARGB8888 (alpha per pixel) or
+ * A8 (alpha only, in one colour), scaled in 1/16 steps, turned in quarter turns, mirrored,
+ * with a colour key and an alpha for the whole picture. papp_disp_fill: a rectangle in one
+ * colour. Finish the CPU's drawing under them first. Both return PAPP_E_UNSUPPORTED before
+ * launcher 0.29.1 (DISP v4): draw it yourself then. */
+int             papp_disp_blit(papp_surface_t *s, const papp_blit_t *b);
+int             papp_disp_fill(papp_surface_t *s, int x, int y, int w, int h, uint16_t color);
 
 /* ── Audio ──────────────────────────────────────────────────────────────────
  * Open a stream at the rate/format your engine produces; the launcher

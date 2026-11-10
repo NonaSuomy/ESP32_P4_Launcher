@@ -14,12 +14,23 @@ roms/doom/doom1.wad      Doom shareware episode
 roms/quake/id1/pak0.pak  Quake shareware episode
 roms/neogeo/gngeo_data.zip  data of the gngeo emulator (you still need your own neogeo.zip BIOS)
 roms/duke3d/             your own duke3d.grp
+roms/gba/                Game Boy Advance ROMs (.gba); optional gba_bios.bin (see below)
 saves/doom/              Doom saves
 Tyrian/data/             Tyrian 2.1, released as freeware, for OpenTyrian
 ```
 
 No ROMs, BIOS files or commercial game data are here; add your own legally obtained copies.
 This folder's `.gitignore` lists what may be shared, so what you add stays on your PC.
+
+## Game Boy Advance
+
+The **Game Boy Advance** emulator (gpSP, translating the game's code to RISC-V as it runs) plays `.gba` files from
+`roms/gba/` at full game speed. Heavy games (Mario Kart, Castlevania) skip drawing some frames to keep the game and the
+sound at full speed. It needs launcher 0.29.1 or newer for that translator and for drawing in the background; on older
+launchers it interprets the code, slower. Without a BIOS it uses a built-in replacement, which runs most games; a few need the real
+one: put your own dump as `roms/gba/gba_bios.bin`. Big ROMs (32 MB) load in pieces as you play, so the first seconds may
+stutter. In game, X or the left screen edge opens the menu (save, load, restart, exit), Y or the right edge the volume.
+Battery saves (`.srm`) and saved games (`.sav`) go to `odroid/data/gba/`.
 
 ## Controller mappings
 
@@ -68,3 +79,12 @@ screen. They are not in the Store. Their sources are in `apps/education/` of the
   the board's saved network, as in Settings → Wi-Fi.
   Without a saved network (or with the Hotspot button) the board opens its own Wi-Fi network
   `P4-Remote-xxxx`, password `p4remote`, and the page is at `http://192.168.4.1/`.
+- **Sprite Demo**: fly a spaceship sprite around space with the pad (D-pad or stick). The P4's picture engine (PPA)
+  draws it. The **Sprite** buttons (or A) pick how: **Key on**, the ship is painted on magenta, the key colour, and
+  the magenta is left out; **Key off**, the whole magenta rectangle is drawn; **Alpha**, every pixel has its own
+  transparency, so the edges are soft and the ship glows. The ship turns to face where it flies, and L1 / R1 make
+  it smaller or bigger. The zoom box shows the pixels 3x bigger. X exits.
+- **LVGL Demo**: a screen built with LVGL, the free graphics library the launcher's own home screen uses: a slider
+  that drives a gauge, a switch and an LED, a button that counts, a colour list and a light/dark theme; a live chart;
+  a text box with an on-screen keyboard. Touch it, or use the pad: Up / Down pick a control, Left / Right change it,
+  A presses, B goes back, L1 / R1 change tab, X exits. A USB keyboard types into the text box.

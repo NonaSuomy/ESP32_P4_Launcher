@@ -169,7 +169,7 @@ typedef struct {
 /* ── MEM interface ──────────────────────────────────────────────────────── */
 
 #define PAPP_IF_MEM       PAPP_FOURCC('M', 'E', 'M', ' ')
-#define PAPP_IF_MEM_VER   1
+#define PAPP_IF_MEM_VER   2           /* v2: code_alloc / code_free / code_sync */
 
 /* Abstract capabilities — mapped by the launcher, never ESP-IDF values. */
 #define PAPP_MEM_ANY      0u
@@ -183,6 +183,12 @@ typedef struct {
     void *(*realloc)(void *ptr, size_t size);
     void  (*free)(void *ptr);
     size_t (*free_size)(uint32_t caps);
+    /* v2: memory for generated code (a JIT). PSRAM the app can write and run at the same
+     * address; whole 64 KB pages. After writing code, call code_sync on the range before
+     * running it (writes back the data cache, drops stale instruction lines). */
+    void *(*code_alloc)(size_t size);
+    void  (*code_free)(void *code);
+    int   (*code_sync)(void *code, size_t size);     /* PAPP_E_OK, PAPP_E_ARG */
 } papp_if_mem_t;
 
 /* ── FS interface ───────────────────────────────────────────────────────── */
@@ -208,7 +214,7 @@ typedef struct {
 /* ── DISP interface ─────────────────────────────────────────────────────── */
 
 #define PAPP_IF_DISP      PAPP_FOURCC('D', 'I', 'S', 'P')
-#define PAPP_IF_DISP_VER  3      /* v2: touch_read(NULL) = display coordinates; v3: present_ext */
+#define PAPP_IF_DISP_VER  4      /* v2: touch_read(NULL) = display coordinates; v3: present_ext; v4: blit */
 
 enum { PAPP_PIXFMT_RGB565 = 1 };
 
@@ -234,6 +240,34 @@ typedef struct {
     uint32_t reserved[4];
 } papp_surface_cfg_t;
 
+/* DISP v4 blit: a picture drawn by the PPA, the P4's picture engine (sprites) */
+enum {
+    PAPP_BLIT_RGB565   = 0,              /* uint16_t pixels                                   */
+    PAPP_BLIT_ARGB8888 = 1,              /* uint32_t 0xAARRGGBB: alpha per pixel               */
+    PAPP_BLIT_A8       = 2,              /* uint8_t alpha only, drawn in .color (text, icons)  */
+};
+#define PAPP_BLIT_COLORKEY  (1u << 0)    /* pixels of colour .key are not drawn                */
+#define PAPP_BLIT_ALPHA     (1u << 1)    /* the whole picture at .alpha (0..255), on top of its own */
+#define PAPP_BLIT_MIRROR_X  (1u << 2)    /* the drawn picture flipped left-right (after .rotate) */
+#define PAPP_BLIT_MIRROR_Y  (1u << 3)    /* the drawn picture flipped upside down (after .rotate) */
+typedef struct {
+    const void *pixels;                  /* .format, w x h, stride pixels per line (0 = w)     */
+    uint16_t    w, h, stride;
+    uint8_t     format;                  /* PAPP_BLIT_RGB565 / _ARGB8888 / _A8                 */
+    uint8_t     flags;                   /* PAPP_BLIT_*                                        */
+    int16_t     x, y;                    /* top left of the drawn picture (after scaling and
+                                            turning) on the surface; may be partly outside     */
+    uint16_t    key;                     /* RGB565 colour left out (PAPP_BLIT_COLORKEY)        */
+    uint16_t    color;                   /* PAPP_BLIT_A8: the colour (RGB565)                  */
+    uint8_t     alpha;                   /* PAPP_BLIT_ALPHA                                    */
+    uint8_t     rotate;                  /* quarter turns counter-clockwise, 0..3              */
+    uint16_t    scale_x, scale_y;        /* 256 = 1.0 (0 = 1.0 too), in steps of 1/16, from 1/16
+                                            to 16; along the picture's own x and y, before turning.
+                                            Scaling is smooth (bilinear): with a colour key the edge
+                                            pixels mix with the key colour, so scale ARGB8888 sprites */
+    uint32_t    reserved[2];             /* 0 */
+} papp_blit_t;
+
 typedef struct {
     uint16_t x, y;               /* surface coordinates                      */
     uint16_t size;
@@ -256,6 +290,13 @@ typedef struct {
     /* v3: present the app's own buffer without copying it (width x height RGB565,
      * stride = width); like present, returns once the frame is in the back buffer. */
     int             (*present_ext)(papp_surface_t *s, const void *pixels, uint32_t flags);
+    /* v4: the PPA draws a picture into the buffer lock() returned, clipped to the surface:
+     * scaled, turned and mirrored (RGB565 / ARGB8888), then mixed in with its alpha, the colour
+     * key and .alpha. The PPA works in memory, so finish the CPU's drawing under it first.
+     * 0 = ok, PAPP_E_ARG. Scaling, turning and mirroring are not for PAPP_BLIT_A8. */
+    int             (*blit)(papp_surface_t *s, const papp_blit_t *b);
+    /* v4: the PPA fills a rectangle of that buffer with an RGB565 colour (clipped). 0 = ok */
+    int             (*fill)(papp_surface_t *s, int x, int y, int w, int h, uint16_t color);
 } papp_if_disp_t;
 
 /* ── AUDI interface ─────────────────────────────────────────────────────── */

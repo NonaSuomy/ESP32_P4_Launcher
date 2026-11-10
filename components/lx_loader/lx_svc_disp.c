@@ -61,6 +61,38 @@ static int disp_present_ext(papp_surface_t *s, const void *pixels, uint32_t flag
     return r;
 }
 
+static int disp_err(esp_err_t err)
+{
+    return err == ESP_OK ? 0 : err == ESP_ERR_INVALID_ARG ? PAPP_E_ARG : err == ESP_ERR_NO_MEM ? PAPP_E_NOMEM : PAPP_E_IO;
+}
+
+static int disp_blit(papp_surface_t *s, const papp_blit_t *b)
+{
+    if (!s || !b || b->format > PAPP_BLIT_A8) return PAPP_E_ARG;
+    lx_blit_t lb = {
+        .pixels = b->pixels, .w = b->w, .h = b->h, .stride = b->stride, .format = (lx_blit_format_t)b->format,
+        .x = b->x, .y = b->y,
+        .colorkey = (b->flags & PAPP_BLIT_COLORKEY) != 0, .key = b->key, .color = b->color,
+        .alpha = (b->flags & PAPP_BLIT_ALPHA) ? b->alpha : -1,
+        .rotate = b->rotate & 3,
+        .scale_x16 = b->scale_x ? b->scale_x / 16 : 16, .scale_y16 = b->scale_y ? b->scale_y / 16 : 16,
+        .mirror_x = (b->flags & PAPP_BLIT_MIRROR_X) != 0, .mirror_y = (b->flags & PAPP_BLIT_MIRROR_Y) != 0,
+    };
+    SVC_ENTER();
+    esp_err_t err = lx_comp_blit((lx_surface_t *)s, &lb);
+    SVC_LEAVE();
+    return disp_err(err);
+}
+
+static int disp_fill(papp_surface_t *s, int x, int y, int w, int h, uint16_t color)
+{
+    if (!s) return PAPP_E_ARG;
+    SVC_ENTER();
+    esp_err_t err = lx_comp_fill((lx_surface_t *)s, x, y, w, h, color);
+    SVC_LEAVE();
+    return disp_err(err);
+}
+
 static int disp_touch_read(papp_surface_t *s, papp_touch_point_t *pts, int max)
 {
     bsp_touch_point_t raw[BSP_TOUCH_MAX_POINTS];
@@ -84,4 +116,6 @@ const papp_if_disp_t lx_if_disp = {
     .present         = disp_present,
     .touch_read      = disp_touch_read,
     .present_ext     = disp_present_ext,
+    .blit            = disp_blit,
+    .fill            = disp_fill,
 };
