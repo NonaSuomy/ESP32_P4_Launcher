@@ -245,10 +245,13 @@ static void parse_pad(dev_t *d, const uint8_t *p, int len)
         if (len < 13 || p[0] != 0x30) return;
         d->switch_report_seen = true;
         uint32_t sb = (uint32_t)p[3] | ((uint32_t)p[4] << 8) | ((uint32_t)p[5] << 16);
-        if (sb & (1u << 3)) b |= PAPP_BTN_A;
-        if (sb & (1u << 2)) b |= PAPP_BTN_B;
-        if (sb & (1u << 1)) b |= PAPP_BTN_X;
-        if (sb & (1u << 0)) b |= PAPP_BTN_Y;
+        /* The PAPP button ABI uses Xbox positions (A=bottom, B=right,
+         * X=left, Y=top). Switch Pro labels put A/B and X/Y at the opposite
+         * positions, so translate the four face buttons by position. */
+        if (sb & (1u << 3)) b |= PAPP_BTN_B; /* Switch A is on the right */
+        if (sb & (1u << 2)) b |= PAPP_BTN_A; /* Switch B is on the bottom */
+        if (sb & (1u << 1)) b |= PAPP_BTN_Y; /* Switch X is on the top */
+        if (sb & (1u << 0)) b |= PAPP_BTN_X; /* Switch Y is on the left */
         if (sb & (1u << 22)) b |= PAPP_BTN_L1;
         if (sb & (1u << 6)) b |= PAPP_BTN_R1;
         if (sb & (1u << 23)) { b |= PAPP_BTN_L2; lt = 0xFFFF; }
