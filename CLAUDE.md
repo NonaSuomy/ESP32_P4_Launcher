@@ -78,6 +78,14 @@ apps/education/<app>/     Education apps for students (ids edu.*): `python apps/
                           lv_conf.h beside main.c; edubuild.lvgl() adds the sources); LVGL draws straight into a 1-buffer
                           800x480 surface (direct mode), touch = pointer, pad + USB keyboard = keypad (one group per tab).
                           Tabs Widgets (slider/arc/switch/LED/button/dropdown colour/dark theme) / Chart / Text (lv_keyboard)
+                          life = Game of Life (64x44 wrapping grid, touch draws, patterns); mandel_race = Mandelbrot timed
+                          1 core / 2 cores / 2 cores + FAST / fixed point (workers at PAPP_PRIO_NORMAL: a HIGH one on the
+                          main thread's core starves it before it starts the 2nd worker); synth = 2-octave multi-touch
+                          keyboard, 5 waves, echo, scope + 512-point FFT (audio thread, 32 kHz); paint = multi-touch
+                          canvas, flood fill, undo, BMP save/open in /sd/pictures (arg selftest); physics = balls as
+                          ARGB8888 PPA blits (papp_disp_fill clears the box; CPU fallback), energy bar; dashboard =
+                          LVGL tiles + chart: Wi-Fi RSSI/networks, BLE devices, free memory from a measuring thread,
+                          Record = CSV in /sd/logs. Plan and ideas: docs/EDUCATION_PLAN.md
 apps/<emu>/               Emulators, cores copied from RetroESP32_P4, each with a build.py:
                           nes (own glue), gb+gbc, sms+gg+col, pce, a78, spectrum, genesis, snes, lynx (C++),
                           a26 (C++), a800 (C++), neogeo. No args = ROM browser, or `-- <rom> [resume]`.

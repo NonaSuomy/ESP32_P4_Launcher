@@ -88,3 +88,26 @@ screen. They are not in the Store. Their sources are in `apps/education/` of the
   that drives a gauge, a switch and an LED, a button that counts, a colour list and a light/dark theme; a live chart;
   a text box with an on-screen keyboard. Touch it, or use the pad: Up / Down pick a control, Left / Right change it,
   A presses, B goes back, L1 / R1 change tab, X exits. A USB keyboard types into the text box.
+- **Game of Life**: cells live or die by two simple rules, and patterns walk, blink and grow. Touch the grid to draw
+  cells (or rub them out), then Play, Step one generation, or pick a speed. Ready-made patterns: glider, blinker,
+  and the glider gun that fires gliders for ever. Pad: A play / pause, B step, Y random, L1 / R1 speed, X exits.
+- **Mandelbrot Race**: the same fractal drawn four ways, each one timed: on 1 core, on both cores of the P4 (about
+  twice as fast), with the inner loop in fast internal memory (little change: the loop already fits in the cache),
+  and in fixed point (whole numbers) instead of float. Tap the picture to zoom in 2x; deep in, float runs out of
+  digits and the picture turns blocky while fixed point stays sharp. Pad: A race all, R1 zoom in, B / L1 zoom out,
+  Left / Right pick a way, Y runs it, X exits.
+- **Synth**: a two-octave keyboard (several fingers make a chord) with five wave shapes (sine, square, saw,
+  triangle, noise), an octave switch and an echo. The scope shows the wave going to the speaker and the spectrum
+  the frequencies in it: a sine is one bar, a saw a whole row of harmonics. Pad: A / B / Y play C / E / G, L1 / R1
+  change the shape, Up / Down the octave, X exits. A USB keyboard plays too (A S D F G H J K and W E T Y U).
+- **Touch Paint**: draw with several fingers at once; 12 colours, three brush sizes, Fill (flood fill), Eraser,
+  Undo (twice = redo), Clear. **Save** writes a BMP to `/sd/pictures/` (it opens on a PC too); **Open** loads one
+  back (24 or 32-bit BMP). Pad: A / B colour, L1 / R1 brush size, Y undo, Start save, Select open, X exits.
+- **Physics Playground**: balls that fall, bounce and knock into each other; big ones are heavier. Touch an empty
+  spot to drop a ball, drag one and let go to throw it. Sliders for gravity and bounciness; the energy bar shows
+  that at 100% bounce the energy stays, and less bounce lets the balls come to rest. The PPA draws the balls.
+  Pad: A add a ball, B shake, Left / Right (or the stick) tilt the box, L1 / R1 gravity, X exits.
+- **Sensor Dashboard**: the board's radios and memory as sensors: Wi-Fi signal (dBm), Wi-Fi networks and Bluetooth
+  devices nearby, free memory. Touch a tile to graph it. **Record** writes a line per sample to a CSV file in
+  `/sd/logs/` (`dash_001.csv`, ...) to open in a spreadsheet. Uses the saved Wi-Fi network for the signal.
+  Pad: Left / Right pick the value, A record, X exits.

@@ -3,7 +3,23 @@
 More apps for the **Education** folder (`apps/education/<app>/`, ids `edu.*`, never in the Store).
 Each one teaches one idea, shows it on screen and lets the student change it live.
 
-Status: not started (written 2026-11-09). Done so far: BLE Remote, Wi-Fi Remote, Sprite Demo, LVGL Demo.
+Status (2026-11-10): all six apps below are built, 0.1.0, on the starter card. Before them: BLE Remote,
+Wi-Fi Remote, Sprite Demo, LVGL Demo.
+
+| App | Measured on the 7" | Notes |
+|---|---|---|
+| Game of Life | 18 fps full redraw | Grid 64x44 (not 100x60: room for the side panel) |
+| Mandelbrot Race | 1 core 595 ms, 2 cores 299 ms (2.0x), FAST 298 ms, fixed point 345 ms | Workers must run at NORMAL priority (HIGH starves the main thread on its core: no speed-up) |
+| Synth | 32 kHz mono, 0 underruns | Keyboard instead of a frequency slider; echo; FFT 512 |
+| Touch Paint | flood fill of the canvas 26 ms | `selftest` argument checks fill + save |
+| Physics Playground | 28.6 fps with 12 balls (the 7"'s cap for an 800x480 2-buffer surface) | Speed arrows not done; energy bar instead |
+| Sensor Dashboard | a sample every ~7 s (Wi-Fi scan + 3 s BLE scan) | No "CPU time per frame" tile; one chart, tiles pick it |
+
+4.3" and Tab5: all six run and exit with 0; Mandelbrot 662 / 586 ms on 1 core (x2.0 on both), Physics 27 / 24 fps.
+
+Leaks: none, except 1 allocation after Paint saves or Dashboard records (newlib's stdio table, made by the first
+`fopen`; the launcher frees it). Don't print floats with `%f` in apps: newlib's dtoa keeps its buffers
+(4 allocations "leaked" per app); format tenths as integers instead.
 
 ## Common rules
 
