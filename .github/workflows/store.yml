@@ -1,0 +1,37 @@
+name: Store catalogue
+
+# A merged community PR (or a change to the Store descriptions or the gamepad list) is published
+# to the Store's "apps" release by itself. The project's own apps are kept as published
+# (they need ESP-IDF to build): see tools/make_apps_release.py --keep-apps.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "community/**"
+      - "apps/store.json"
+      - "SDcard/config/gamepads.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: write          # upload to the "apps" release
+
+concurrency:
+  group: store-catalogue
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check the community apps
+        run: python tools/community.py
+      - name: Publish the catalogue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/make_apps_release.py --keep-apps --publish

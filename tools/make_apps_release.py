@@ -7,6 +7,11 @@ apps.json next to them. --publish uploads them to the "apps" release on GitHub.
 
     python apps/build_all.py                       # build the apps first
     python tools/make_apps_release.py [--out build/apps_release] [--publish]
+    python tools/make_apps_release.py --keep-apps --publish   # CI: community/store.json/gamepads only
+
+.github/workflows/store.yml runs the --keep-apps form on every push to main that changes community/,
+apps/store.json or SDcard/config/gamepads.txt, so a merged community PR reaches the Store by itself.
+A new version of one of the project's own apps still needs the full form from a PC that built it.
 
 The "apps" release is a pre-release, so it never becomes releases/latest (where the
 launcher looks for its own update); its files are replaced in place on each publish.
@@ -125,6 +130,9 @@ def main():
                     "or the published catalogue")
     ap.add_argument("--base", default=BASE, help="where the files will be (to test from another server, "
                     "named in /sd/update/apps_url.txt on the card)")
+    ap.add_argument("--keep-apps", action="store_true", help="take the project's apps from the published "
+                    "catalogue instead of build/apps (nothing built, their files not uploaded again); "
+                    "community apps, store.json descriptions and gamepads.txt are refreshed. For CI")
     args = ap.parse_args()
     base = args.base if args.base.endswith("/") else args.base + "/"
     os.makedirs(args.out, exist_ok=True)
@@ -134,8 +142,28 @@ def main():
 
     store = json.load(open(STORE, encoding="utf-8"))
     apps, files, folders = [], [], {}
+
+    def store_info(app_id):
+        info = store.get(app_id)
+        if not info or info.get("category") not in CATEGORIES or not info.get("description"):
+            raise SystemExit(f"{app_id}: add its category and description to apps/store.json")
+        if len(info["description"]) > 120:
+            raise SystemExit(f"{app_id}: description in apps/store.json is longer than 120 characters")
+        return info
+
+    if args.keep_apps:
+        if base != BASE:
+            raise SystemExit("--keep-apps keeps the published files: it can't be used with --base")
+        with urllib.request.urlopen(BASE + "apps.json", timeout=30) as r:
+            live = json.load(r)
+        folders = {k: v for k, v in live.get("folders", {}).items() if k != COMMUNITY_FOLDER}
+        for entry in live.get("apps", []):
+            info = store_info(entry["id"])
+            entry["category"], entry["description"] = info["category"], info["description"]
+            apps.append(entry)
+            print(f"{entry['name']:16s} {entry['version']:8s} {entry['folder'] or '(main page)'} (as published)")
     built = os.path.join(ROOT, "build", "apps")
-    for name in sorted(os.listdir(built)):
+    for name in ([] if args.keep_apps else sorted(os.listdir(built))):
         papp = os.path.join(built, name, name + ".papp")
         if not os.path.isfile(papp):
             continue
@@ -152,11 +180,7 @@ def main():
         entry = dict(id=m["id"], name=m["name"], version=m["version"], folder=folder, dir=name,
                      file=name + ".papp", url=base + name + ".papp", size=os.path.getsize(papp),
                      sha256=sha256(papp))
-        info = store.get(m["id"])
-        if not info or info.get("category") not in CATEGORIES or not info.get("description"):
-            raise SystemExit(f"{m['id']}: add its category and description to apps/store.json")
-        if len(info["description"]) > 120:
-            raise SystemExit(f"{m['id']}: description in apps/store.json is longer than 120 characters")
+        info = store_info(m["id"])
         entry["category"], entry["description"] = info["category"], info["description"]
         shutil.copyfile(papp, os.path.join(args.out, name + ".papp"))
         files.append(name + ".papp")
