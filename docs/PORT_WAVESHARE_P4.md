@@ -35,6 +35,7 @@ The board facts come from the esp32-scummvm port, which runs on this hardware:
 | DSI PHY | LDO channel 3, 2500 mV | yes |
 | Flash / PSRAM | 16 MB QIO, 32 MB PSRAM at 200 MHz | mostly (DIO) |
 | USB host | HS root port only (the lower J8 USB-A, next to the Ethernet jack); the hub ports fail (no Transaction Translator in IDF) | - |
+| Wi-Fi / BLE | ESP32-C6 on SDIO, esp_hosted 2.12; BLE for apps after the C6 update to the release's 2.12.13 firmware (Settings > Update) | yes |
 | RTC, battery, buttons | none (BOOT button possible) | - |
 
 ## Phase 0: check on the board

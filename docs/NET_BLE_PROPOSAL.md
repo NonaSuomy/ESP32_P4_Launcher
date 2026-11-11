@@ -174,7 +174,10 @@ The launcher side needs some work first:
 - C6 firmware with BT. We build our own, so the Guition boards are covered. The Tab5 and Waveshare keep their makers' firmware, so the import stays optional there.
   (Done: M5Stack's Tab5 C6 firmware reports "HCI over SDIO, BLE only" at boot, so BLE is on for the Tab5 too, on
   esp_hosted 1.4, where the C6 starts its controller by itself. Tested: scan, the Tab5 as peripheral for the 7" and
-  for the PC, 5 start/stop cycles, NET afterwards. Waveshare is untested and stays without BLE.)
+  for the PC, 5 start/stop cycles, NET afterwards. The Waveshare 3.5" is untested and stays without BLE.
+  The Waveshare dev kit (`waveshare_p4_rpi_dsi`) has BLE once its C6 runs the release's 2.12.13 firmware
+  (Settings > Update): scan, start/stop cycles, NET afterwards. With the module's own C6 firmware
+  `available()` is false after about 5 s and Wi-Fi is unaffected.)
 
 NimBLE costs about 60–100 KB of RAM. It starts when a BLE app loads and is freed at teardown.
 

@@ -27,8 +27,9 @@ components/lx_loader/     App Manager: loader, relocation, imports, services (SY
                           for the run (lx_net_app_hold), every wait gives up on exit, teardown closes sockets and rejoins the saved network;
                           BLE (lx_svc_ble.c) = NimBLE on the P4, controller on the C6 over esp_hosted (VHCI): the host
                           starts on the first call (gatt_register restarts it with the app's table) and stops at teardown;
-                          Guition boards and Tab5 (CONFIG_BT_* in their sdkconfig.board; on Tab5's esp_hosted 1.4 the C6 runs its
-                          controller from boot, lx_svc_ble.c stubs the 2.x controller calls), the slot is NULL on Waveshare
+                          Guition boards, Tab5 and waveshare_p4_rpi_dsi (CONFIG_BT_* in their sdkconfig.board; on Tab5's esp_hosted 1.4
+                          the C6 runs its controller from boot, lx_svc_ble.c stubs the 2.x controller calls; waveshare_p4_rpi_dsi needs
+                          the release's C6 firmware), the slot is NULL on the Waveshare 3.5"
 components/lx_devlink/    DevLink: framed protocol over USB-Serial-JTAG (devlink_proto.h)
 components/lx_common/     crc32, launcher version
 components/lx_gfx/        software drawing + 8x16 font for launcher screens (rotation-aware)
@@ -44,7 +45,7 @@ components/lx_input/      input manager: USB HID gamepads/keyboards, XInput (Xbo
                           SDcard/config/gamepads.txt, downloaded by the Store); NVS "padmap" = pre-0.23, read-only fallback
 components/lx_update/     self-update from /sd/update/launcher.bin + rollback confirm; online update (latest.json);
                           lx_appstore = app catalogue for the Store (apps.json on the "apps" release; icons cached in /sd/launcher/store)
-components/lx_net/        Wi-Fi station, NTP, time zone via the ESP32-C6 (esp_hosted 2.12.13 on the Guition boards, 1.4 on Tab5/Waveshare);
+components/lx_net/        Wi-Fi station, NTP, time zone via the ESP32-C6 (esp_hosted 2.12.13 on the Guition boards and waveshare_p4_rpi_dsi, 1.4 on Tab5 and the Waveshare 3.5");
                           lx_c6 = the C6's firmware: version (DevLink info c6_fw) and update from /sd/update/c6.bin or the release;
                           saved network = /sd/config/wifi.txt (ssid=/password= lines; NVS "net" = pre-0.24, moved to the card at boot)
                           join = all-channel scan, strongest AP of the SSID (mesh/repeaters share one); no address 20 s after joining = rejoin
