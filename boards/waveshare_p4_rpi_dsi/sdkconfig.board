@@ -1,0 +1,18 @@
+# Waveshare ESP32-P4-Module-DEV-KIT + RPi 7" V1-style 5" 800x480 DSI panel — board-specific sdkconfig fragment
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+# Assumes a pre-v3 ESP32-P4 (rev v1.x) like the other boards: check with `esptool chip_id`
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_1=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
+# ESP32-C6 on SDIO with the Function EV board wiring: CLK 18, CMD 19, D0-D3 14-17, reset 54
+CONFIG_ESP_HOSTED_P4_DEV_BOARD_FUNC_BOARD=y
+# esp_hosted 2.12 takes its SDIO buffer pools from internal RAM; keep them small
+CONFIG_ESP_HOSTED_SDIO_TX_Q_SIZE=12
+CONFIG_ESP_HOSTED_SDIO_RX_Q_SIZE=12
+# The speaker amp's current peaks dip the 3.3 V rail on weak USB supplies
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_5=y
