@@ -68,6 +68,7 @@ static volatile bool audioTaskRunning = false;
 static uint16_t *snes_fb[2] = { NULL, NULL };  /* double-buffer for SNES output */
 static uint8_t  *snes_subscreen = NULL;         /* dedicated SubScreen buffer */
 static int snes_fb_write = 0;
+static uint16_t *volatile snes_fb_busy;        /* buffer the video task is presenting (read by the PPA) */
 static QueueHandle_t vidQueue;
 static TaskHandle_t videoTaskHandle;
 
@@ -197,6 +198,7 @@ static void snes_video_task(void *arg)
         xQueuePeek(vidQueue, &frame, portMAX_DELAY);
 
         if (frame == (uint16_t *)1) break;  /* Quit sentinel */
+        snes_fb_busy = frame;
 
         /* BUILD_PIXEL_RGB565 now produces true 6-bit green at render time,
          * so no post-render green expansion loop is needed. */
@@ -204,6 +206,7 @@ static void snes_video_task(void *arg)
         /* Direct 2× scale + 270° rotate — no 320×240 staging buffer */
         ili9341_write_frame_rgb565_custom(frame, SNES_FB_W, SNES_FB_H,
                                            2.0f, false);
+        snes_fb_busy = NULL;
 
         xQueueReceive(vidQueue, &frame, portMAX_DELAY);
     }
@@ -731,7 +734,7 @@ void snes_run(const char *rom_path)
 
     /* Profiling accumulators */
     int64_t prof_cpu_acc = 0, prof_audio_acc = 0, prof_vid_acc = 0;
-    int prof_cnt = 0, prof_skip = 0;
+    int prof_cnt = 0, prof_skip = 0, prof_busy = 0;
 
     odroid_gamepad_state gp_prev;
     odroid_input_gamepad_read(&gp_prev);
@@ -819,14 +822,21 @@ void snes_run(const char *rom_path)
             frame_deadline = now;                     /* can't keep up even skipping → slow down */
             consec_skips = 0;
         }
+        /* The next frame renders into snes_fb[snes_fb_write]. If the video task is still presenting
+         * that buffer (display slower than the game: 46.7 Hz panel, 50 Hz PAL), rendering into it
+         * would show a half-drawn frame (mostly backdrop: a black flash); skip this render instead */
+        if (IPPU.RenderThisFrame && snes_fb_busy == snes_fb[snes_fb_write]) {
+            IPPU.RenderThisFrame = false;
+            prof_busy++;
+        }
         now = esp_timer_get_time();                   /* real frame-end time for the FPS calc */
 
         /* FPS + profiling log (every ~2 seconds) */
         frame_no++;
         if (now - fps_timer > 2000000) {
             int fps = (int)(frame_no * 1000000LL / (now - fps_timer));
-            printf("SNES PROF (%d frames, %d skip): CPU=%.1fms  AUD=%.1fms  VID=%.1fms  total=%.1fms  FPS=%d\n",
-                   prof_cnt, prof_skip,
+            printf("SNES PROF (%d frames, %d skip, %d busy): CPU=%.1fms  AUD=%.1fms  VID=%.1fms  total=%.1fms  FPS=%d\n",
+                   prof_cnt, prof_skip, prof_busy,
                    prof_cpu_acc / (prof_cnt * 1000.0f),
                    prof_audio_acc / (prof_cnt * 1000.0f),
                    prof_vid_acc / (prof_cnt * 1000.0f),
@@ -875,7 +885,7 @@ void snes_run(const char *rom_path)
                 }
             }
             prof_cpu_acc = prof_audio_acc = prof_vid_acc = 0;
-            prof_cnt = prof_skip = 0;
+            prof_cnt = prof_skip = prof_busy = 0;
             frame_no = 0;
             fps_timer = now;
         }
