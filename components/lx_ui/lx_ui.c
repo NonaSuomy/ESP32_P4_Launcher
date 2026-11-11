@@ -540,6 +540,7 @@ static struct {
     int     rep_code;            /* button bit or key usage that started it (+0x10000 for keys) */
     int64_t rep_next;
     bool    touch_down;
+    bool    touch_held;          /* a finger down when the screen opened: ignored until lifted */
     int     tx0, ty0, tx, ty;
 } I;
 
@@ -630,7 +631,10 @@ static bool poll_action(act_t *a)
     if (bsp_info()->caps & BSP_CAP_TOUCH) {
         bsp_touch_point_t p[1];
         int n = bsp_touch_read(p, 1);
-        if (n > 0) {
+        if (n == 0) I.touch_held = false;
+        if (n > 0 && I.touch_held) {
+            /* the touch that opened the screen (an app's edge tap): its release is no tap here */
+        } else if (n > 0) {
             if (!I.touch_down) { I.tx0 = p[0].x; I.ty0 = p[0].y; }
             I.touch_down = true;
             I.tx = p[0].x;
@@ -664,6 +668,8 @@ static act_t wait_action(volatile bool *abort)
 static void input_reset(void)
 {
     memset(&I, 0, sizeof(I));
+    bsp_touch_point_t p[1];
+    I.touch_held = (bsp_info()->caps & BSP_CAP_TOUCH) && bsp_touch_read(p, 1) > 0;
     lx_input_flush();
 }
 
