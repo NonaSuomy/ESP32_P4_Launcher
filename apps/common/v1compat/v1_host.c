@@ -10,6 +10,9 @@
  *  - Input: P1 = board pad + first USB pad. MENU comes from V1_MENU_BUTTON
  *    (default X) or a tap on the left edge of the screen; the right edge (or
  *    V1_VOLUME_BUTTON, default none) opens the launcher's volume overlay.
+ *    Only the thread that draws handles the edges: games read input from
+ *    other threads too (Doom's exit watchdog), and an overlay opened there
+ *    was drawn over at once by the game's next frame.
  *  - HOME (launcher exit request) sets the game's own exit flag, which its
  *    glue already polls (renamed to v1_exit_requested at compile time).
  *  - task_delete of another task can't kill it (v2 threads end themselves);
@@ -46,6 +49,8 @@ extern volatile int v1_exit_requested;       /* the game's flag (see build) */
 static papp_surface_t *s_surf;
 static int s_sw, s_sh;
 static papp_mutex_t *s_disp_mx;
+static papp_thread_t *s_draw_thread;         /* the thread that presents frames */
+static bool s_drawn;
 
 static papp_surface_t *surface_for(int w, int h)
 {
@@ -67,6 +72,8 @@ static void d_write_frame_custom(const uint16_t *buf, uint16_t w, uint16_t h, fl
 {
     papp_surface_t *s = surface_for(w, h);
     if (!s || !buf) return;
+    s_draw_thread = papp_thread_self();
+    s_drawn = true;
     if (!swap) {                            /* no copy: the PPA reads the game's buffer */
         papp_disp_present_ext(s, buf);
         return;
@@ -166,12 +173,14 @@ static void i_read(papp_gamepad_state_t *st)
     st->values[PAPP_INPUT_L]      = !!(b & (PAPP_BTN_L1 | PAPP_BTN_L2));
     st->values[PAPP_INPUT_R]      = !!(b & (PAPP_BTN_R1 | PAPP_BTN_R2));
 
-    int edge = edge_tap();
+    bool draws = !s_drawn || papp_thread_self() == s_draw_thread;
+    int edge = draws ? edge_tap() : 0;
     if (edge < 0) { menu_touch = true; menu_hold = 6; }
-    if (menu_hold > 0 && --menu_hold == 0) menu_touch = false;
+    if (draws && menu_hold > 0 && --menu_hold == 0) menu_touch = false;
     st->values[PAPP_INPUT_MENU] = (V1_MENU_BUTTON && (b & V1_MENU_BUTTON)) || menu_touch;
 
     static uint32_t prev;
+    if (!draws) return;
     bool vol = edge > 0 || (V1_VOLUME_BUTTON && (b & V1_VOLUME_BUTTON) && !(prev & V1_VOLUME_BUTTON));
     prev = b;
     if (vol) papp_ui_volume();
