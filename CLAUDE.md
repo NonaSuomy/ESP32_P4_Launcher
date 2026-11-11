@@ -27,8 +27,9 @@ components/lx_loader/     App Manager: loader, relocation, imports, services (SY
                           for the run (lx_net_app_hold), every wait gives up on exit, teardown closes sockets and rejoins the saved network;
                           BLE (lx_svc_ble.c) = NimBLE on the P4, controller on the C6 over esp_hosted (VHCI): the host
                           starts on the first call (gatt_register restarts it with the app's table) and stops at teardown;
-                          Guition boards and Tab5 (CONFIG_BT_* in their sdkconfig.board; on Tab5's esp_hosted 1.4 the C6 runs its
-                          controller from boot, lx_svc_ble.c stubs the 2.x controller calls), the slot is NULL on Waveshare
+                          Guition boards, Tab5 and waveshare_p4_rpi_dsi (CONFIG_BT_* in their sdkconfig.board; on Tab5's esp_hosted 1.4
+                          the C6 runs its controller from boot, lx_svc_ble.c stubs the 2.x controller calls; waveshare_p4_rpi_dsi needs
+                          the release's C6 firmware), the slot is NULL on the Waveshare 3.5"
 components/lx_devlink/    DevLink: framed protocol over USB-Serial-JTAG (devlink_proto.h)
 components/lx_common/     crc32, launcher version
 components/lx_gfx/        software drawing + 8x16 font for launcher screens (rotation-aware)
