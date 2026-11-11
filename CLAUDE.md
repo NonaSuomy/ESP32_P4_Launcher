@@ -95,7 +95,7 @@ apps/<emu>/               Emulators, cores copied from RetroESP32_P4, each with 
                           /sd/roms/gba/gba_bios.bin; saves .srm/.sav in /sd/odroid/data/gba; files nojit / romlimit / maxskip
                           there = debug switches. gpSP auto frameskip, fed by the audio ring level (odroid_audio_queued_ms < 30 ms),
                           at most 2 frames skipped in a row (gpsp_frameskip_max; gpSP had 30: Doom II, which emulates at ~45 fps,
-                          showed 2 fps). The 5 s log line has fps, frames shown, ROM pages read and JIT flushes. Needs CONFIG_FATFS_USE_FASTSEEK (paging). In internal SRAM (PAPP_FAST_BSS, 128 KB): GBA iwram and the first 64 KB chunk of RAM JIT code (code chunks 64 KB; needs a launcher after 0.29.1, whose code_sync takes the FAST region; file nofastjit = off): Doom II 42 -> 47 fps; GBA_BENCH=1 or =JIT_DETAIL,INSTRET builds the profiler (5 s log lines). core/ patches: memalign'd
+                          showed 2 fps). The 5 s log line has fps, frames shown, ROM pages read and JIT flushes. Needs CONFIG_FATFS_USE_FASTSEEK (paging). In internal SRAM (PAPP_FAST_BSS, 128 KB): GBA iwram and the first 64 KB chunk of RAM JIT code (code chunks 64 KB; needs launcher >= 0.29.2, whose code_sync takes the FAST region; file nofastjit = off): Doom II 42 -> 47 fps; GBA_BENCH=1 or =JIT_DETAIL,INSTRET builds the profiler (5 s log lines). core/ patches: memalign'd
                           gamepak blocks, 32 KB aligned stdio buffer + seek return value in vfs_implementation.c
                           `python apps/build_all.py [name ...]` builds every app with a build.py
 apps/common/odroid/       RetroESP32 odroid_* / app_common / FreeRTOS / ESP-IDF shims on the SDK, so the cores

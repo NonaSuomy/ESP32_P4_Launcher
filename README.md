@@ -20,7 +20,7 @@ copy the `SDcard` folder to a card and get the apps from the Store, see [Getting
 
 | Launcher version | App ABI | Toolchain | Boards |
 |---|---|---|---|
-| 0.29.1 | 2.0-preview | ESP-IDF v5.5.6 | Guition ESP32-P4 4.3" (480×800; chip v1.x, or v3.x with its own image), Guition JC1060P470C 7" (1024×600), M5Stack Tab5 (720×1280), Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (320×480, contributed) |
+| 0.29.2 | 2.0-preview | ESP-IDF v5.5.6 | Guition ESP32-P4 4.3" (480×800; chip v1.x, or v3.x with its own image), Guition JC1060P470C 7" (1024×600), M5Stack Tab5 (720×1280), Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (320×480, contributed) |
 
 > **Status: active development.** The ABI is a preview and may still change. Everything below describes
 > what exists in the code today; the plan for what comes next is in [docs/WORKPLAN.md](docs/WORKPLAN.md).
