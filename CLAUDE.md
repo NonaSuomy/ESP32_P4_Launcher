@@ -47,6 +47,7 @@ components/lx_update/     self-update from /sd/update/launcher.bin + rollback co
 components/lx_net/        Wi-Fi station, NTP, time zone via the ESP32-C6 (esp_hosted 2.12.13 on the Guition boards, 1.4 on Tab5/Waveshare);
                           lx_c6 = the C6's firmware: version (DevLink info c6_fw) and update from /sd/update/c6.bin or the release;
                           saved network = /sd/config/wifi.txt (ssid=/password= lines; NVS "net" = pre-0.24, moved to the card at boot)
+                          join = all-channel scan, strongest AP of the SSID (mesh/repeaters share one); no address 20 s after joining = rejoin
 components/lx_web/        Wi-Fi file manager: web page for the SD card, on request, with a PIN per start
 papp-sdk/                 App SDK: include/papp/papp.h, runtime/ (crt0, libc glue), ld/papp.ld,
                           tools/papp_build.py, tools/papp_pack.py. App version: apps/<app>/version.txt
