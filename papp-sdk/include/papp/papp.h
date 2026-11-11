@@ -60,7 +60,9 @@ void   papp_free(void *ptr);
 size_t papp_mem_free_size(uint32_t caps);
 /* Memory for generated code (a JIT): written and run at the same address, whole 64 KB
  * pages. papp_code_sync(range) after writing, before running it. NULL / PAPP_E_UNSUPPORTED
- * before launcher 0.29.1 (MEM v2): use an interpreter then. */
+ * before launcher 0.29.1 (MEM v2): use an interpreter then. Launchers after 0.29.1 also sync
+ * code an app writes into its own PAPP_FAST_BSS (internal SRAM, faster fetch); older ones
+ * return PAPP_E_ARG for it. */
 void  *papp_code_alloc(size_t size);
 void   papp_code_free(void *code);
 int    papp_code_sync(void *code, size_t size);

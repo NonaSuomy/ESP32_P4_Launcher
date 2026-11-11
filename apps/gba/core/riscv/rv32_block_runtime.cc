@@ -453,12 +453,20 @@ static const char *arena_name(const gpsp_rv32_arena *arena)
   return arena == &gpsp_rv32_rom_arena ? "ROM" : "RAM";
 }
 
+/* Optional, from the frontend: one chunk of faster executable memory (internal SRAM)
+ * for the first RAM-code chunk, where hot IWRAM loops end up. NULL = none. */
+extern "C" void *gpsp_rv32_fast_ram_chunk(void) __attribute__((weak));
+
 extern "C" bool gpsp_rv32_arena_grow(gpsp_rv32_arena *arena)
 {
   if (arena->count >= arena->max)
     return false;
-  u8 *chunk = (u8 *)gpsp_rv32_exec_alloc(CODE_ALIGNMENT,
-      GPSP_RV32_CHUNK_BYTES);
+  u8 *chunk = NULL;
+  if (arena == &gpsp_rv32_ram_arena && arena->count == 0 && gpsp_rv32_fast_ram_chunk)
+    chunk = (u8 *)gpsp_rv32_fast_ram_chunk();
+  if (!chunk)
+    chunk = (u8 *)gpsp_rv32_exec_alloc(CODE_ALIGNMENT,
+        GPSP_RV32_CHUNK_BYTES);
   if (!chunk)
   {
     /* Stay at this size instead of retrying for every block. */

@@ -395,6 +395,15 @@ static int mem_code_sync(void *code, size_t size)
             break;
         }
     }
+    /* Executable internal SRAM (the app's FAST region, e.g. a JIT's hot code buffer): same sync.
+     * Launchers up to 0.29.1 return PAPP_E_ARG here, so apps can test for it. */
+    if (rc != PAPP_E_OK && esp_ptr_internal((void *)a) && esp_ptr_internal((void *)(e - 1)) &&
+        esp_ptr_executable((void *)a) && esp_ptr_executable((void *)(e - 1))) {
+        esp_cache_msync((void *)a, e - a, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_TYPE_DATA);
+        esp_cache_msync((void *)a, e - a, ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_TYPE_INST);
+        __asm__ volatile("fence.i" ::: "memory");
+        rc = PAPP_E_OK;
+    }
     SVC_LEAVE();
     return rc;
 }

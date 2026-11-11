@@ -128,7 +128,23 @@ static void *exec_alloc(size_t alignment, size_t size)
     return p;
 }
 
-static void exec_free(void *code) { papp_code_free(code); }
+/* First RAM-code chunk (IWRAM loops: Doom II's renderer) in internal SRAM: instruction fetch
+ * from PSRAM stalls the core. Needs a launcher whose code_sync takes the FAST region (after
+ * 0.29.1); SAVE_DIR/nofastjit = off. */
+static bool s_nofastjit;
+PAPP_FAST_BSS static uint8_t s_fast_code[64 * 1024] __attribute__((aligned(64)));
+
+void *gpsp_rv32_fast_ram_chunk(void)
+{
+    if (s_nojit || s_nofastjit || papp_code_sync(s_fast_code, 64) != PAPP_E_OK) return NULL;
+    papp_log("GBA: RAM code in internal SRAM (%u KB)\n", (unsigned)(sizeof(s_fast_code) / 1024));
+    return s_fast_code;
+}
+
+static void exec_free(void *code)
+{
+    if (code != s_fast_code) papp_code_free(code);
+}
 
 static bool exec_publish(void *code, size_t size) { return papp_code_sync(code, size) == PAPP_E_OK; }
 
@@ -406,6 +422,7 @@ void gba_run(const char *rom)
     rom_header_ok(rom);
     struct stat st;
     s_nojit = stat(SAVE_DIR "/nojit", &st) == 0;
+    s_nofastjit = stat(SAVE_DIR "/nofastjit", &st) == 0;
     /* gpSP keeps up to this many MB of the ROM in PSRAM and pages the rest from the card;
      * leave room for the JIT caches (up to 4 MB) and the rest of the app */
     size_t free_psram = papp_mem_free_size(PAPP_MEM_LARGE);
