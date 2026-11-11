@@ -1,0 +1,7 @@
+{
+  "author": "Gil Tal",
+  "description": "3D invaders on a lit plane: move anywhere in your zone, shoot down stacked formations, save and continue",
+  "category": "games",
+  "license": "MIT",
+  "source": "https://github.com/giltal/ESP32_P4_3D_Engine/tree/main/game/voidmarch"
+}
