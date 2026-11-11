@@ -1,4 +1,4 @@
-# ESP32-P4 Launcher
+# ESP32-P4 Launcher [![Discord Chat](https://img.shields.io/discord/1562983535898533920.svg)](https://discord.gg/nf5tPjMbUY)
 
 **Run applications from an SD card on an ESP32-P4, the way a PC runs a program from a disk.**
 
