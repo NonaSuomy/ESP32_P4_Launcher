@@ -29,7 +29,6 @@
 #include <unistd.h>
 #include "esp_heap_caps.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "ff.h"
 
 static const char *TAG = "store";
@@ -37,7 +36,6 @@ static const char *TAG = "store";
 /* Paths are capped on purpose; a longer one is cut, not overflowed */
 #pragma GCC diagnostic ignored "-Wformat-truncation"
 
-#define REFETCH_US   (5 * 60 * 1000000LL)   /* opening the Store reads the catalogue again after this */
 #define MAX_ITEMS    (LX_APPSTORE_MAX + 48)
 
 enum { CAT_ALL, CAT_EMU, CAT_GAMES, CAT_TOOLS, CAT_PROD, CAT_EDU, CAT_COMMUNITY, CAT_INSTALLED, CAT_N };
@@ -72,7 +70,6 @@ static lx_appstore_app_t *s_cat;        /* LX_APPSTORE_MAX, in PSRAM */
 static int s_ncat;
 static bool s_cat_ok;                   /* the catalogue has been read */
 static bool s_fetching, s_changed;
-static int64_t s_fetched_at;
 static int s_queue[LX_APPSTORE_MAX], s_nqueue;
 static int s_doing = -1;                /* catalogue index being installed */
 static char s_status_text[128];
@@ -833,7 +830,7 @@ void store_build(void)
 void store_open(const char *id)
 {
     bool online = lx_net_state() == LX_NET_CONNECTED;
-    if (online && idle() && (!s_cat_ok || esp_timer_get_time() - s_fetched_at > REFETCH_US)) fetch();
+    if (online && idle()) fetch();      /* every time: an app published a minute ago shows up */
     else if (!online && idle() && !s_cat_ok)
         snprintf(s_status_text, sizeof(s_status_text), LV_SYMBOL_WARNING " Offline: apps on the card only");
     items_refresh();
@@ -946,7 +943,6 @@ void store_tick(void)
             s_ncat = lx_appstore_count();
             for (int i = 0; i < s_ncat; i++) s_cat[i] = *lx_appstore_app(i);
             s_cat_ok = true;
-            s_fetched_at = esp_timer_get_time();
             bool pads = lx_appstore_gamepads_updated();
             if (pads) lx_input_pad_reload_maps();
             items_refresh();
