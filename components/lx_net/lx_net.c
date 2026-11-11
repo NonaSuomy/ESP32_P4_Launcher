@@ -30,6 +30,7 @@ static const char *TAG = "lx_net";
 
 #define NS            "net"
 #define MAX_RETRIES   4
+#define NO_IP_US      (20 * 1000000LL)    /* joined but no address after this: rejoin */
 #define TASK_STACK    6144
 
 typedef enum { CMD_SCAN, CMD_CONNECT, CMD_FORGET, CMD_PAUSE, CMD_RESUME, CMD_RETRY, CMD_JOIN, CMD_C6_INFO, CMD_C6_UPDATE, CMD_RADIO,
@@ -57,6 +58,7 @@ static QueueHandle_t s_q;
 static volatile lx_net_state_t s_state = LX_NET_OFF;
 static bool s_started, s_paused, s_want, s_save, s_sntp;
 static int s_retries, s_tz, s_drops, s_last_reason;
+static volatile int64_t s_joined_us;   /* when the link came up without an address yet, 0 = not waiting */
 static char s_ssid[33], s_pass[65], s_ip[16];
 static lx_net_ap_t s_aps[LX_NET_MAX_APS];
 static volatile int s_ap_count = -1;
@@ -191,8 +193,13 @@ static void on_sntp_sync(struct timeval *tv)
 
 static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
+        const wifi_event_sta_connected_t *ev = data;
+        ESP_LOGI(TAG, "joined " MACSTR " on channel %d, waiting for an address", MAC2STR(ev->bssid), ev->channel);
+        s_joined_us = esp_timer_get_time();
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         s_ip[0] = 0;
+        s_joined_us = 0;
         const wifi_event_sta_disconnected_t *dis = data;
         ESP_LOGW(TAG, "disconnected, reason %d, rssi %d", dis->reason, dis->rssi);
         s_drops++;
@@ -221,6 +228,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
             return;
         }
         snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&ev->ip_info.ip));
+        s_joined_us = 0;
         s_retries = 0;
         s_state = LX_NET_CONNECTED;
         wifi_ap_record_t ap;            /* the C6 may rejoin a network it saved itself (another firmware's) */
@@ -299,6 +307,10 @@ static void join(void)
     wifi_config_t c = { 0 };
     memcpy(c.sta.ssid, s_ssid, strnlen(s_ssid, sizeof(c.sta.ssid)));   /* may fill the field */
     memcpy(c.sta.password, s_pass, strnlen(s_pass, sizeof(c.sta.password)));
+    /* The strongest access point of the network, not the first one the scan finds: with a
+     * repeater or mesh node a fast scan often joins the far one, where DHCP can get lost */
+    c.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    c.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
     esp_wifi_set_config(WIFI_IF_STA, &c);
     esp_wifi_connect();
 }
@@ -387,7 +399,17 @@ static void net_task(void *arg)
     }
     for (;;) {
         cmd_t c;
-        if (!xQueueReceive(s_q, &c, portMAX_DELAY)) continue;
+        if (!xQueueReceive(s_q, &c, pdMS_TO_TICKS(1000))) {
+            /* Joined but no address (DHCP lost on a weak link): a drop never comes, so leave
+             * and let the disconnect handler retry */
+            int64_t t = s_joined_us;
+            if (t && !s_paused && s_want && esp_timer_get_time() - t > NO_IP_US) {
+                ESP_LOGW(TAG, "no address %lld s after joining, rejoining", NO_IP_US / 1000000);
+                s_joined_us = 0;
+                esp_wifi_disconnect();
+            }
+            continue;
+        }
         switch (c) {
         case CMD_SCAN:
             do_scan();
@@ -519,6 +541,7 @@ static void net_task(void *arg)
             if (s_app) break;               /* the app uses the network */
             if (s_started && !s_paused) {
                 s_paused = true;
+                s_joined_us = 0;
                 esp_wifi_stop();
             }
             break;
