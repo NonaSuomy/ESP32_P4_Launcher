@@ -56,10 +56,8 @@ static void rv32_branch_cache_clear(void)
 }
 
 u32 rv32_ram_cache_generation;
-#if defined(GPSP_BENCHMARK)
-u32 rv32_rom_cache_flush_count;
+u32 rv32_rom_cache_flush_count;      /* always: the frontend logs them (gba_run.c) */
 u32 rv32_ram_cache_flush_count;
-#endif
 #elif defined(MMAP_JIT_CACHE)
 u8* rom_translation_cache;
 u8* ram_translation_cache;
@@ -8005,8 +8003,8 @@ void flush_translation_cache_ram(void)
 #endif
   /* Flushes RAM caches avoiding doing too much work (ie. wiping unused memory) */
   flush_ram_count++;
-#if defined(GPSP_RV32_JIT) && defined(GPSP_BENCHMARK)
   rv32_ram_cache_flush_count++;
+#if defined(GPSP_RV32_JIT) && defined(GPSP_BENCHMARK)
   if (ram_translation_ptr)
   {
     u32 occupied = rv32_ram_offset(ram_translation_ptr);
@@ -8075,8 +8073,8 @@ void flush_translation_cache_rom(void)
   rv32_rom_entry_clear();
   memset(rv32_rom_slow_entries, 0, sizeof(rv32_rom_slow_entries));
 #endif
-#if defined(GPSP_RV32_JIT) && defined(GPSP_BENCHMARK)
   rv32_rom_cache_flush_count++;
+#if defined(GPSP_RV32_JIT) && defined(GPSP_BENCHMARK)
   if (rom_translation_ptr)
   {
     u32 occupied = rv32_rom_offset(rom_translation_ptr);

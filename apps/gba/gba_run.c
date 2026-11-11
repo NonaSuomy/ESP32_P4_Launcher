@@ -34,6 +34,87 @@ void app_return_to_launcher(void);
 bool gpsp_set_rom_buffer_limit(unsigned mib);           /* gba_memory.c */
 void gpsp_rom_page_stats(uint32_t *loads, uint32_t *reloads, uint32_t *remaps, uint32_t *cycles);
 
+#if defined(GPSP_BENCHMARK)
+/* Profiling build (GBA_BENCH=1 build.py): where a frame's time goes, summed over 5 s */
+#include "gpsp_benchmark.h"
+static struct { uint64_t cycles[GPSP_BENCHMARK_TIMING_BUCKET_COUNT]; uint32_t enters[GPSP_BENCHMARK_TIMING_BUCKET_COUNT];
+                uint64_t instret[GPSP_BENCHMARK_TIMING_BUCKET_COUNT];
+                uint64_t exec_us, audio_us, video_us; uint32_t frames; } s_bench;
+
+#if defined(GPSP_BENCHMARK_INSTRET)
+static uint32_t read_instret(void) { uint32_t n; __asm__ volatile("rdinstret %0" : "=r"(n)); return n; }
+#endif
+
+static void bench_frame(void)
+{
+    struct gpsp_benchmark_frame f;
+    gpsp_benchmark_get_last_frame(&f);
+    for (int i = 0; i < GPSP_BENCHMARK_TIMING_BUCKET_COUNT; i++) {
+        s_bench.cycles[i] += f.cpu.cycles[i];
+        s_bench.enters[i] += f.cpu.enters[i];
+        s_bench.instret[i] += f.cpu.instret[i];
+    }
+    s_bench.exec_us += f.execute_us;
+    s_bench.audio_us += f.audio_us;
+    s_bench.video_us += f.video_us;
+    s_bench.frames++;
+}
+
+static void bench_print(void)
+{
+    static const char *const name[GPSP_BENCHMARK_TIMING_BUCKET_COUNT] = { "cpu", "sched", "timer", "dma", "sound",
+                                                                         "scanline", "vsetup" };
+    if (!s_bench.frames) return;
+    char line[256];
+    int n = snprintf(line, sizeof(line), "GBA bench/frame: exec %u us (", (unsigned)(s_bench.exec_us / s_bench.frames));
+    for (int i = 0; i < GPSP_BENCHMARK_TIMING_BUCKET_COUNT && n < (int)sizeof(line); i++)
+        n += snprintf(line + n, sizeof(line) - n, "%s%s %u us x%u", i ? ", " : "", name[i],
+                      (unsigned)(s_bench.cycles[i] / 360 / s_bench.frames), (unsigned)(s_bench.enters[i] / s_bench.frames));
+    if (n < (int)sizeof(line))
+        snprintf(line + n, sizeof(line) - n, "), audio %u us, video %u us",
+                 (unsigned)(s_bench.audio_us / s_bench.frames), (unsigned)(s_bench.video_us / s_bench.frames));
+    papp_log("%s\n", line);
+#if defined(GPSP_BENCHMARK_INSTRET)
+    papp_log("GBA bench/frame: cpu %u instructions in %u cycles (IPC x100 %u), scanline IPC x100 %u\n",
+             (unsigned)(s_bench.instret[0] / s_bench.frames), (unsigned)(s_bench.cycles[0] / s_bench.frames),
+             (unsigned)(s_bench.instret[0] * 100 / (s_bench.cycles[0] + 1)),
+             (unsigned)(s_bench.instret[5] * 100 / (s_bench.cycles[5] + 1)));
+#endif
+
+    /* the JIT engine: per frame, from the change since the last print */
+    static struct gpsp_benchmark_engine prev;
+    static struct gpsp_benchmark_engine e;
+    gpsp_benchmark_get_engine(&e);
+    unsigned f = s_bench.frames;
+#define D(x) ((unsigned)((e.x - prev.x) / f))
+#define US(x) ((unsigned)((e.x - prev.x) / 360 / f))
+    papp_log("GBA bench/frame: blocks %u (bios %u ewram %u iwram %u rom %u), interp steps %u runs %u; "
+             "us: total %u lookup %u blocks %u interp %u\n",
+             D(blocks), D(block_region.bios), D(block_region.ewram), D(block_region.iwram), D(block_region.rom),
+             D(scalar_steps), D(scalar_runs), US(total_cycles), US(lookup_cycles), US(block_cycles), US(scalar_cycles));
+#if defined(GPSP_BENCHMARK_JIT_DETAIL)
+    papp_log("GBA bench/frame us: code %u helpers %u (x%u), memory %u (x%u: rom %u ram %u io %u other %u, stores %u); "
+             "blocks bios %u ewram %u iwram %u rom %u; ram ld fast/slow %u/%u st %u/%u\n",
+             US(jit_detail.code_cycles), US(jit_detail.helper_cycles), D(jit_detail.helper_calls),
+             US(jit_detail.memory_cycles), D(jit_detail.memory_calls), D(jit_detail.memory_rom_loads),
+             D(jit_detail.memory_ram_loads), D(jit_detail.memory_io_loads), D(jit_detail.memory_other_loads),
+             D(jit_detail.memory_stores), US(jit_detail.block_cycles.bios), US(jit_detail.block_cycles.ewram),
+             US(jit_detail.block_cycles.iwram), US(jit_detail.block_cycles.rom), D(jit_detail.ram_load_fast),
+             D(jit_detail.ram_load_slow), D(jit_detail.ram_store_fast), D(jit_detail.ram_store_slow));
+    struct gpsp_benchmark_jit_hot_sites hot;
+    gpsp_benchmark_take_hot_sites(&hot);
+    papp_log("GBA bench hot: %08x %u, %08x %u, %08x %u, %08x %u (of %u samples)\n",
+             (unsigned)hot.top[0].pc, (unsigned)hot.top[0].samples, (unsigned)hot.top[1].pc, (unsigned)hot.top[1].samples,
+             (unsigned)hot.top[2].pc, (unsigned)hot.top[2].samples, (unsigned)hot.top[3].pc, (unsigned)hot.top[3].samples,
+             (unsigned)hot.samples);
+#endif
+#undef D
+#undef US
+    prev = e;
+    memset(&s_bench, 0, sizeof(s_bench));
+}
+#endif
+
 /* ── JIT memory ────────────────────────────────────────────────────────── */
 
 static unsigned s_code_bytes;
@@ -339,8 +420,20 @@ void gba_run(const char *rom)
         if (v >= 1 && v < rom_mib) rom_mib = v;
     }
     gpsp_set_rom_buffer_limit(rom_mib);
+    extern uint32_t gpsp_frameskip_max;
+    lf = fopen(SAVE_DIR "/maxskip", "r");                 /* debugging: frames skipped in a row at most */
+    if (lf) {
+        char num[8] = { 0 };
+        fread(num, 1, sizeof(num) - 1, lf);
+        fclose(lf);
+        gpsp_frameskip_max = (uint32_t)atoi(num);
+        papp_log("GBA: frameskip at most %u in a row\n", (unsigned)gpsp_frameskip_max);
+    }
     papp_log("GBA: ROM buffer up to %u MB (PSRAM free %u KB)\n", rom_mib, (unsigned)(free_psram >> 10));
     gpsp_rv32_set_platform(&s_platform);
+#if defined(GPSP_BENCHMARK_INSTRET)
+    gpsp_benchmark_set_instret_counter(read_instret);
+#endif
     retro_set_environment(environment);
     retro_set_video_refresh(video_refresh);
     retro_set_audio_sample(audio_sample);
@@ -390,22 +483,34 @@ void gba_run(const char *rom)
             if (ms >= 0) s_audio_status(true, (unsigned)(ms > 100 ? 100 : ms), ms < SKIP_BELOW_MS);
         }
         retro_run();
+#if defined(GPSP_BENCHMARK)
+        bench_frame();
+#endif
         stat_frames++;
 
         int64_t now = papp_time_us();
         if (now - stat_t >= 5000000) {
-            static uint32_t last_loads, last_cycles;
+            extern uint32_t rv32_ram_cache_flush_count, rv32_rom_cache_flush_count;
+            static uint32_t last_loads, last_cycles, last_ram_fl, last_rom_fl;
             uint32_t loads, reloads, remaps, cycles;
             gpsp_rom_page_stats(&loads, &reloads, &remaps, &cycles);
-            papp_log("GBA: %.1f fps (%d shown), video %d ms, audio wait %d ms, ROM pages read %u (%u ms)\n",
+            papp_log("GBA: %.1f fps (%d shown), video %d ms, audio wait %d ms, ROM pages read %u (%u ms), "
+                     "JIT flushes RAM %u ROM %u\n",
                      stat_frames * 1e6 / (double)(now - stat_t), s_shown, (int)(s_video_us / 1000),
                      (int)(s_audio_us / 1000), (unsigned)(loads - last_loads),
-                     (unsigned)((cycles - last_cycles) / 360000));
+                     (unsigned)((cycles - last_cycles) / 360000),
+                     (unsigned)(rv32_ram_cache_flush_count - last_ram_fl),
+                     (unsigned)(rv32_rom_cache_flush_count - last_rom_fl));
+            last_ram_fl = rv32_ram_cache_flush_count;
+            last_rom_fl = rv32_rom_cache_flush_count;
             s_video_us = s_audio_us = 0;
             last_loads = loads;
             last_cycles = cycles;
             stat_t = now;
             stat_frames = 0;
+#if defined(GPSP_BENCHMARK)
+            bench_print();
+#endif
             s_shown = 0;
         }
         if (now - srm_t >= 3000000) {                   /* games write their save over a few frames */

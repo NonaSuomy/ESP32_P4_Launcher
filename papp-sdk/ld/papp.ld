@@ -75,7 +75,7 @@ SECTIONS
         __fast_image_end = .;
     }
 
-    .fast_bss (NOLOAD) : ALIGN(16) {
+    .fast_bss __fast_image_end (NOLOAD) : ALIGN(16) {       /* pinned: with an empty .fast it drifted out of the FAST region */
         *(.fast.bss .fast.bss.*)
         . = ALIGN(16);
         __fast_bss_end = .;

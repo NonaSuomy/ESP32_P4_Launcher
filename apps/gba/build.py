@@ -30,6 +30,12 @@ SRCS = ["../gba_run.c", "bios_data.S", "video.cc", "cpu.cc",
             "rv32_thumb_exit_shared.S")]
 DEFS = ["HAVE_STRINGS_H", "HAVE_STDINT_H", "HAVE_INTTYPES_H", "__LIBRETRO__", "INLINE=inline", "NDEBUG",
         "GPSP_RV32_JIT=1", 'GIT_VERSION="3f112ae"']
+# Profiling build: GBA_BENCH=1 (time per part of the frame, printed every 5 s), or a comma list of
+# gpSP's detail switches, e.g. GBA_BENCH=VIDEO_DETAIL,RAM_CODE (see core/riscv/README.md)
+BENCH = os.environ.get("GBA_BENCH", "")
+if BENCH:
+    DEFS += ["GPSP_BENCHMARK=1"] + ["GPSP_BENCHMARK_" + s.strip() for s in BENCH.split(",") if s.strip() not in ("", "1")]
+    SRCS.append("gpsp_benchmark_timing.c")
 
 build_emu("gba", CORE, SRCS, dict(id="emu.gba", name="Game Boy Advance", root="/sd/roms/gba", exts=".gba,.agb",
                                   save_dir="/sd/odroid/data/gba", run="gba_run", stack=65536),

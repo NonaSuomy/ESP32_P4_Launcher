@@ -1522,8 +1522,8 @@ u16 palette_ram_converted[512];
 u32 palette_ram_expanded[512];
 #endif
 u8 ewram[1024 * 256 * 2];
-u8 iwram[1024 * 32 * 2];
-u8 vram[1024 * 96];
+u8 iwram[1024 * 32 * 2] __attribute__((section(".fast.bss"), aligned(64)));
+u8 vram[1024 * 96] __attribute__((section(".fast.bss"), aligned(64)));
 u16 io_registers[512];
 #endif
 

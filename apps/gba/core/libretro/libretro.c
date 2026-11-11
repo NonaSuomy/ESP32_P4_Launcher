@@ -342,7 +342,9 @@ static void gpsp_apply_sound_rate(const char *value, retro_environment_t reinit_
 
 /* Maximum number of consecutive frames that
  * can be skipped */
-#define FRAMESKIP_MAX 30
+u32 gpsp_frameskip_max = 2;      /* frames skipped in a row at most (was 30: a game that can't keep
+                                    up showed 2 fps); the frontend may change it */
+#define FRAMESKIP_MAX gpsp_frameskip_max
 
 u32 skip_next_frame                          = 0;
 static frameskip_type current_frameskip_type = no_frameskip;
