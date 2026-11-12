@@ -8,12 +8,12 @@
  * happen on the home task. While an app runs the task only waits: the app
  * owns the display and input, and the home screen is redrawn when it exits.
  *
- * Apps: /sd/apps/<dir>/<file>.papp, named by their manifest, with an optional
+ * Apps: /sd/apps/<dir>/<file>.papp or .pax, named by their manifest, with an optional
  * /sd/apps/<dir>/icon.png (any size; shown at 88x88). Gamepad / keyboard move
  * the focus to the nearest item in the direction pressed; A / Enter starts.
  *
- * Folders: a directory in /sd/apps with no .papp in it, holding app directories
- * (/sd/apps/<folder>/<dir>/<file>.papp), one level only. X / Y, or holding a tile,
+ * Folders: a directory in /sd/apps with no app container in it, holding app directories
+ * (/sd/apps/<folder>/<dir>/<file>.papp or .pax), one level only. X / Y, or holding a tile,
  * opens its menu: move an app, rename or delete a folder.
  *
  * The Store (store.c), the first tile of the main page, finds, installs, updates
@@ -68,7 +68,7 @@ static const char *TAG = "home";
 static const uint32_t TILE_COLORS[] = { 0x2F7BF6, 0x8E44EC, 0x22B35E, 0xF39C12, 0x12A7A7, 0xE8457C, 0x5B4BDB, 0x3B4A63 };
 
 typedef struct {
-    char path[160];             /* .papp, or the directory of a folder */
+    char path[160];             /* app container, or the directory of a folder */
     char icon[176];             /* "S:/sd/apps/x/icon.png" or "" */
     char name[32];
     char id[32];
@@ -83,7 +83,7 @@ static int s_napps;             /* entries in s_apps */
 static int s_ninstalled;        /* of them, apps */
 static char s_folder[MAX_NAME + 8];     /* folder on screen, "" = main page */
 static char s_files_app[160];   /* the Files app: opened by the SD card panel, not a tile */
-static char s_last[160];        /* last launched .papp */
+static char s_last[160];        /* last launched app container */
 
 static lv_display_t *s_disp;
 static uint16_t *s_frame;
@@ -169,7 +169,16 @@ static int app_cmp(const void *a, const void *b)
     return strcasecmp(x->name, y->name);
 }
 
-/* Adds the app in dir; false if there is no .papp in it */
+/* Both suffixes contain PAPP2; container magic is validated by the loader. */
+static size_t app_file_suffix_len(const char *name)
+{
+    size_t n = strlen(name);
+    if (n > 5 && strcasecmp(name + n - 5, ".papp") == 0) return 5;
+    if (n > 4 && strcasecmp(name + n - 4, ".pax") == 0) return 4;
+    return 0;
+}
+
+/* Adds the app in dir; false if there is no recognized PAPP2 container */
 static bool scan_app(const char *dir, const char *parent)
 {
     bool found = false;
@@ -178,7 +187,8 @@ static bool scan_app(const char *dir, const char *parent)
     struct dirent *fe;
     while (s_napps < MAX_APPS && (fe = readdir(sd))) {
         size_t n = strlen(fe->d_name);
-        if (n < 6 || strcasecmp(fe->d_name + n - 5, ".papp") != 0) continue;
+        size_t suffix_len = app_file_suffix_len(fe->d_name);
+        if (!suffix_len) continue;
         app_entry_t *e = &s_apps[s_napps];
         memset(e, 0, sizeof(*e));
         snprintf(e->parent, sizeof(e->parent), "%s", parent);
@@ -195,7 +205,7 @@ static bool scan_app(const char *dir, const char *parent)
                 break;
             }
         } else {
-            snprintf(e->name, sizeof(e->name), "%.*s", (int)(n - 5), fe->d_name);
+            snprintf(e->name, sizeof(e->name), "%.*s", (int)(n - suffix_len), fe->d_name);
         }
         char icon[160];
         struct stat st;
@@ -1527,7 +1537,7 @@ static void name_open(const char *title, const char *text, int mode)
 static void on_sd_click(lv_event_t *ev)
 {
     if (s_files_app[0]) snprintf(s_launch, sizeof(s_launch), "%s", s_files_app);
-    else folder_message("Files is not installed", "Copy the Files app to /sd/apps/files/files.papp.");
+    else folder_message("Files is not installed", "Copy the Files app (.papp or .pax) to /sd/apps/files/.");
 }
 
 static void on_count_click(lv_event_t *ev)
