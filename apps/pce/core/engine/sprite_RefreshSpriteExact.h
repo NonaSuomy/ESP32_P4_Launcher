@@ -82,6 +82,8 @@
                 h = Y2 - y - y_sum;
             if (spbg == 0) {
                 sprite_usespbg = 1;
+                if (!pce_lines_cleared)
+                    pce_clear_lines(Y1, Y2);
                 if (atr & H_FLIP) {
                     for (j = 0; j <= cgx; j++) {
                         PutSpriteHflipMakeMask(osd_gfx_buffer + pos

@@ -322,6 +322,7 @@ render_lines(int min_line, int max_line)
 
     if (!skipNextFrame)
 	if (!UCount) {				//Either we're in frameskip = 0 or we're in the frame to draw
+		pce_lines_cleared = 0;
 		if (SpriteON && SPONSwitch)
 #ifdef MY_INLINE_SPRITE
         {

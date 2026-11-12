@@ -471,4 +471,25 @@ extern int vheight;
 extern char *sbuf[];
 int sprite_usespbg = 0;
 
+/* Set when the lines being rendered were cleared to the backdrop (see pce_clear_lines). */
+int pce_lines_cleared = 0;
+
+/* Lines y1..y2-1 of the visible area become the backdrop colour (Pal[0]) with an
+ * empty sprite mask. Called before the first sprite behind the background is drawn
+ * on them; lines without one are painted by RefreshLine instead (cheaper). Pixels
+ * the background leaves see-through otherwise show the frame drawn two frames ago
+ * (the buffers alternate), and a stale mask hides sprites. */
+void pce_clear_lines(int y1, int y2)
+{
+    int x0 = -8, w = io.screen_w + 16;
+    if (y1 < 0) y1 = 0;
+    if (y2 > 240) y2 = 240;
+    if (x0 + w > XBUF_WIDTH - 32) w = XBUF_WIDTH - 32 - x0;
+    for (int y = y1; y < y2; y++) {
+        memset(osd_gfx_buffer + y * XBUF_WIDTH + x0, Pal[0], w);
+        memset(SPM + y * XBUF_WIDTH + x0, 0, w);
+    }
+    pce_lines_cleared = 1;
+}
+
 
