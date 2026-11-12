@@ -1,0 +1,7 @@
+{
+  "author": "Gil Tal",
+  "description": "3D rocks in space: turn, thrust and drift, break tumbling rocks, dodge saucers, jump to hyperspace, save and continue",
+  "category": "games",
+  "license": "MIT",
+  "source": "https://github.com/giltal/ESP32_P4_3D_Engine/tree/main/game/driftrock"
+}
