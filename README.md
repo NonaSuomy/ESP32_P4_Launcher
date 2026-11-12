@@ -20,7 +20,7 @@ copy the `SDcard` folder to a card and get the apps from the Store, see [Getting
 
 | Launcher version | App ABI | Toolchain | Boards |
 |---|---|---|---|
-| 0.29.3 | 2.0-preview | ESP-IDF v5.5.6 | Guition ESP32-P4 4.3" (480×800; chip v1.x, or v3.x with its own image), Guition JC1060P470C 7" (1024×600), M5Stack Tab5 (720×1280), Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (320×480, contributed), Waveshare ESP32-P4 dev kit + Raspberry Pi DSI display (800×480, contributed) |
+| 0.29.4 | 2.0-preview | ESP-IDF v5.5.6 | Guition ESP32-P4 4.3" (480×800; chip v1.x, or v3.x with its own image), Guition JC1060P470C 7" (1024×600), M5Stack Tab5 (720×1280), Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (320×480, contributed), Waveshare ESP32-P4 dev kit + Raspberry Pi DSI display (800×480, contributed) |
 
 > **Status: active development.** The ABI is a preview and may still change. Everything below describes
 > what exists in the code today; the plan for what comes next is in [docs/WORKPLAN.md](docs/WORKPLAN.md).
@@ -215,7 +215,7 @@ have) and a USB cable for the board's USB-Serial-JTAG port.
 6. Press RESET on the board, or unplug and reconnect it. The home screen appears.
 
 Then [prepare an SD card](#preparing-the-sd-card): copy the `SDcard` folder of this repository to an empty
-FAT32 card, connect to Wi-Fi in Settings and install apps from the Store (step 4 below).
+FAT32 or exFAT card (exFAT: launcher 0.29.4 and later), connect to Wi-Fi in Settings and install apps from the Store (step 4 below).
 
 The same in a terminal, if you have esptool:
 
@@ -322,7 +322,7 @@ A folder can have its own icon: put an `icon.png` (best 88x88) in its directory,
 
 ## Preparing the SD card
 
-The [`SDcard`](SDcard) folder is a ready start: copy its contents to the root of an empty FAT32 card, then on
+The [`SDcard`](SDcard) folder is a ready start: copy its contents to the root of an empty FAT32 or exFAT card, then on
 Wi-Fi open the **Store** and choose **Install all**. It already holds the freely shareable game data: Tyrian 2.1
 (freeware), the Doom and Quake shareware episodes and gngeo's data file. It also has the controller database and
 an empty folder for each system's ROMs. Its [README](SDcard/README.md) explains each folder.

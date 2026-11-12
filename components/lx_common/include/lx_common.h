@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define LX_LAUNCHER_VERSION  "0.29.3"
+#define LX_LAUNCHER_VERSION  "0.29.4"
 #define LX_ABI_STRING        "2.0-preview"
 
 #ifdef __cplusplus

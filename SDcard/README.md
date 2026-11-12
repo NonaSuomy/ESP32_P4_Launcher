@@ -2,7 +2,7 @@
 
 First flash the launcher on the board, from your browser: see "Getting started" in the main README.
 
-Copy the contents of this folder to the root of an empty FAT32 card, put it in the board,
+Copy the contents of this folder to the root of an empty FAT32 or exFAT card (exFAT needs launcher 0.29.4 or later), put it in the board,
 then on Wi-Fi open the **Store** (first tile on the home screen) and choose **Install all** to download the apps.
 
 ```
