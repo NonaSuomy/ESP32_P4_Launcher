@@ -16,4 +16,9 @@ class PaxBoardBuilds(unittest.TestCase):
   for key,value in dict(MOSI=7,MISO=9,CLK=15,CS=14,HANDSHAKE=11,DATA_READY=10,RESET_SLAVE=2).items():
    self.assertEqual(s.get('ESP_HOSTED_SPI_GPIO_'+key),str(value),key)
   self.assertEqual(s.get('ESPTOOLPY_FLASHFREQ_80M'),'y')
+ def test_nano_resolved_pins(self):
+  s=self.config('waveshare_nano_lcd43')
+  self.assertEqual(s.get('ESP_HOSTED_SDIO_HOST_INTERFACE'),'y')
+  for key,value in dict(CLK=18,CMD=19,D0=14,D1=15,D2=16,D3=17).items():
+   self.assertEqual(s.get('ESP_HOSTED_SDIO_PIN_'+key),str(value),key)
 if __name__=='__main__':unittest.main()
