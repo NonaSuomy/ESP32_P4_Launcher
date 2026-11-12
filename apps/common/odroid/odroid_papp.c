@@ -486,8 +486,14 @@ void odroid_audio_init(int rate)
 
 void odroid_audio_terminate(void)
 {
-    if (s_stream) papp_audio_close(s_stream);
+    if (s_stream) {
+        /* Discard any queued tail so audio from the exiting emulator does
+         * not leak into the launcher or the next app. */
+        papp_audio_clear(s_stream);
+        papp_audio_close(s_stream);
+    }
     s_stream = NULL;
+    s_rate = 0;
 }
 
 void odroid_audio_submit(short *stereo, int frames)

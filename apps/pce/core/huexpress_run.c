@@ -108,6 +108,7 @@ static short       *sbuf_mix[2];
 static QueueHandle_t audioQueue         = NULL;
 static TaskHandle_t  audioTaskHandle    = NULL;
 static volatile bool audioTaskIsRunning = false;
+static volatile bool audioStopRequested = false;
 #define TASK_BREAK ((void*)1)
 
 /* ────────────────────────────────────────────────────────────────── */
@@ -564,6 +565,9 @@ static void audioTask(void *arg)
             WriteBuffer(sbuf[i], i, AUDIO_BUFFER_SIZE / 2);
         }
 
+        /* Do not publish another block once shutdown has begun. */
+        if (audioStopRequested || pce_quit_flag) break;
+
         /* Mix all channels with master volume.
            WriteBuffer() produces interleaved stereo bytes: L, R, L, R, ...
            Each byte is a SIGNED value (-127..127) but 'char' is unsigned on
@@ -608,19 +612,29 @@ static void audioTask(void *arg)
 static void start_audio(void)
 {
     if (audioTaskIsRunning) return;
-    xTaskCreatePinnedToCore(audioTask, "pceAudio", 4096, NULL, 5, &audioTaskHandle, 1);
+    audioStopRequested = false;
+    if (xTaskCreatePinnedToCore(audioTask, "pceAudio", 4096, NULL, 5,
+                                &audioTaskHandle, 1) != pdPASS) {
+        audioTaskHandle = NULL;
+        printf("PCE Audio: task creation failed\n");
+        return;
+    }
     while (!audioTaskIsRunning) vTaskDelay(1);
 }
 
 static void stop_audio(void)
 {
-    if (!audioTaskIsRunning) return;
+    audioStopRequested = true;
+    if (!audioTaskIsRunning || !audioQueue) return;
     void *discard;
     while (xQueueReceive(audioQueue, &discard, 0) == pdTRUE) {}
     void *sig = TASK_BREAK;
     xQueueOverwrite(audioQueue, &sig);
-    int timeout = 500;
-    while (audioTaskIsRunning && --timeout > 0) vTaskDelay(1);
+    /* The audio task must finish its current bounded audio write before its
+     * stream or sample buffers are closed/freed. A timeout here lets it race
+     * teardown and play corrupted data after the emulator exits. */
+    while (audioTaskIsRunning) vTaskDelay(1);
+    audioTaskHandle = NULL;
 }
 
 /* ────────────────────────────────────────────────────────────────── */
@@ -1167,6 +1181,10 @@ void huexpress_run(const char *rom_path)
     printf("PCE: RunPCE()\n");
     RunPCE();
 
+    /* Stop and join audio before saving or tearing down emulator state. */
+    stop_audio();
+    odroid_audio_terminate();
+
     /* ── Auto-save on exit ── */
     printf("PCE: Saving state on exit\n");
     PCE_SaveState();
@@ -1179,9 +1197,6 @@ void huexpress_run(const char *rom_path)
     disp_task_handle = NULL;
     if (disp_ready_sem) { vSemaphoreDelete(disp_ready_sem); disp_ready_sem = NULL; }
     if (disp_go_sem)    { vSemaphoreDelete(disp_go_sem);    disp_go_sem    = NULL; }
-    stop_audio();
-    odroid_audio_terminate();
-
     /* Free audio buffers */
     for (int i = 0; i < AUDIO_CHANNELS; i++) {
         if (sbuf[i]) { free(sbuf[i]); sbuf[i] = NULL; }
