@@ -335,6 +335,14 @@ static void pce_gfx_draw(void)
     XBuf = framebuffer[current_framebuffer];
     osd_gfx_buffer = XBuf + 32 + 64 * XBUF_WIDTH;
 
+    /* Transparent tiles leave their destination untouched. Clear the next
+     * frame's visible area and sprite-priority mask after the buffer swap so
+     * pixels from the previous frame cannot smear through. */
+    memset(XBuf + 64 * XBUF_WIDTH, Pal ? Pal[0] : 0,
+           PCE_FB_HEIGHT * XBUF_WIDTH);
+    memset(SPM_raw + 64 * XBUF_WIDTH, 0,
+           PCE_FB_HEIGHT * XBUF_WIDTH);
+
     /* FPS counter + timing report */
     fps_frame_count++;
     if (fps_frame_count >= 60) {
