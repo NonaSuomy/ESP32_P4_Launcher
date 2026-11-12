@@ -1,5 +1,6 @@
 #include "lx_gfx.h"
 
+#include <stdbool.h>
 #include <string.h>
 #include "font8x16.h"
 
@@ -9,8 +10,11 @@ void lx_canvas_init(lx_canvas_t *c, uint16_t *fb, int panel_w, int panel_h, int 
     c->pw = panel_w;
     c->ph = panel_h;
     c->rot = rot;
-    c->w = rot ? panel_h : panel_w;
-    c->h = rot ? panel_w : panel_h;
+    /* A half-turn preserves the logical width and height. Only a quarter-turn
+     * swaps them; treating 180 like 90/270 made the AIO file picker portrait. */
+    bool quarter_turn = rot == 90 || rot == 270;
+    c->w = quarter_turn ? panel_h : panel_w;
+    c->h = quarter_turn ? panel_w : panel_h;
 }
 
 static inline void put(lx_canvas_t *c, int x, int y, uint16_t color)
@@ -19,6 +23,7 @@ static inline void put(lx_canvas_t *c, int x, int y, uint16_t color)
     switch (c->rot) {
     case 90:  px = y;             py = c->w - 1 - x; break;
     case 270: px = c->h - 1 - y;  py = x;            break;
+    case 180: px = c->pw - 1 - x; py = c->ph - 1 - y; break;
     default:  px = x;             py = y;            break;
     }
     c->fb[py * c->pw + px] = color;
@@ -41,9 +46,15 @@ void lx_fill(lx_canvas_t *c, int x, int y, int w, int h, uint16_t color)
     }
     /* Rotated: a logical rect is a panel rect too — fill it row by row in panel space */
     int px0, py0, pw, ph;
-    if (c->rot == 270) { px0 = c->h - y - h; py0 = x; }
-    else               { px0 = y;            py0 = c->w - x - w; }
-    pw = h; ph = w;
+    if (c->rot == 180) {
+        px0 = c->pw - x - w;
+        py0 = c->ph - y - h;
+        pw = w; ph = h;
+    } else {
+        if (c->rot == 270) { px0 = c->h - y - h; py0 = x; }
+        else               { px0 = y;            py0 = c->w - x - w; }
+        pw = h; ph = w;
+    }
     for (int j = 0; j < ph; j++) {
         uint16_t *row = c->fb + (py0 + j) * c->pw + px0;
         for (int i = 0; i < pw; i++) row[i] = color;

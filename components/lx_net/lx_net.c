@@ -566,6 +566,12 @@ static void net_task(void *arg)
 
 esp_err_t lx_net_init(void)
 {
+    esp_netif_init();
+    esp_err_t loop = esp_event_loop_create_default();
+    if (loop != ESP_OK && loop != ESP_ERR_INVALID_STATE) return loop;
+    esp_err_t wired = bsp_ethernet_init();
+    if (wired != ESP_OK && wired != ESP_ERR_NOT_SUPPORTED)
+        ESP_LOGW(TAG, "Ethernet init: %s", esp_err_to_name(wired));
     creds_load();
     if (k_zones[s_tz].posix) {
         setenv("TZ", k_zones[s_tz].posix, 1);
@@ -583,9 +589,9 @@ esp_err_t lx_net_init(void)
     return ESP_OK;
 }
 
-lx_net_state_t lx_net_state(void) { return s_state; }
-const char *lx_net_ssid(void)     { return s_ssid; }
-const char *lx_net_ip(void)       { return s_ip; }
+lx_net_state_t lx_net_state(void) { return bsp_ethernet_ip()[0] ? LX_NET_CONNECTED : s_state; }
+const char *lx_net_ssid(void)     { return bsp_ethernet_ip()[0] ? "Ethernet" : s_ssid; }
+const char *lx_net_ip(void)       { const char *eth = bsp_ethernet_ip(); return eth[0] ? eth : s_ip; }
 
 void lx_net_scan(void)
 {

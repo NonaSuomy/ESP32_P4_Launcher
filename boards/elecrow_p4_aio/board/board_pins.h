@@ -1,0 +1,40 @@
+// SPDX-License-Identifier: MIT
+#pragma once
+#define BOARD_ID "elecrow_p4_aio"
+#define BOARD_NAME "Elecrow ESP32-P4 AIO 7-inch"
+#define BOARD_AIO 1
+#define BOARD_LCD_H_RES 1024
+#define BOARD_LCD_V_RES 600
+#define BOARD_LCD_ROT 180
+#define BOARD_TP_I2C_SDA 18
+#define BOARD_TP_I2C_SCL 19
+#define BOARD_I2C_PORT 1
+#define BOARD_AUDIO_RATE 48000
+#define BOARD_I2S_MCLK -1
+#define BOARD_I2S_BCLK 22
+#define BOARD_I2S_WS 21
+#define BOARD_I2S_DOUT 23
+#define BOARD_AUDIO_PA 6
+#define BOARD_PA_ACTIVE 0
+#define BOARD_SD_SLOT 1
+#define BOARD_SD_POWER -1
+#define BOARD_SD_CLK 43
+#define BOARD_SD_CMD 44
+#define BOARD_SD_D0 39
+#define BOARD_LCD_BL_GPIO 20
+#define BOARD_LCD_RST_GPIO 5
+#define BOARD_DSI_LANES 2
+#define BOARD_DSI_MBPS 1000
+#define BOARD_PCLK 51
+#define BOARD_HPW 70
+#define BOARD_HBP 160
+#define BOARD_HFP 160
+#define BOARD_VPW 10
+#define BOARD_VBP 23
+#define BOARD_VFP 12
+/* IP101 RMII: external 50 MHz input, shared by the AIO and Nano. */
+#define BOARD_ETH_MDC 31
+#define BOARD_ETH_MDIO 52
+#define BOARD_ETH_RESET 51
+#define BOARD_ETH_CLOCK 50
+#define BOARD_ETH_PHY_ADDR 1
