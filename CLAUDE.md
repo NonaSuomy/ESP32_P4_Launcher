@@ -30,6 +30,8 @@ components/lx_loader/     App Manager: loader, relocation, imports, services (SY
                           Guition boards, Tab5 and waveshare_p4_rpi_dsi (CONFIG_BT_* in their sdkconfig.board; on Tab5's esp_hosted 1.4
                           the C6 runs its controller from boot, lx_svc_ble.c stubs the 2.x controller calls; waveshare_p4_rpi_dsi needs
                           the release's C6 firmware), the slot is NULL on the Waveshare 3.5"
+components/fatfs/         copy of IDF 5.5.6's fatfs with exFAT on (FF_FS_EXFAT 1, + FF_USE_LABEL fix): overrides IDF's;
+                          README_LAUNCHER.md = the changes, to redo when moving to another IDF version
 components/lx_devlink/    DevLink: framed protocol over USB-Serial-JTAG (devlink_proto.h)
 components/lx_common/     crc32, launcher version
 components/lx_gfx/        software drawing + 8x16 font for launcher screens (rotation-aware)

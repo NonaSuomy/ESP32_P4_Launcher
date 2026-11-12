@@ -7,6 +7,8 @@ CONFIG_PARTITION_TABLE_OFFSET=0x8000
 
 CONFIG_FREERTOS_HZ=1000
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# Event handlers write files (lx_net saves wifi.txt on joining): 2304 overflowed on exFAT cards
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
 
 # UART0 is the console; USB-Serial-JTAG belongs to DevLink (no plain-text console on it)
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
