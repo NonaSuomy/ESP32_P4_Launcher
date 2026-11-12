@@ -26,11 +26,18 @@ wiring above; an SDIO or half-duplex image will not work.
 Use ESP-IDF v5.5.2:
 
 ```sh
+python tools/enable_exfat.py  # after sourcing ESP-IDF's export.sh; only for IDF 5.5
 cd launcher
 idf.py -B build_elecrow_p4_aio -DLX_BOARD=elecrow_p4_aio build
 cd ..
 python tests/host/test_pax_boards.py
 ```
+
+ESP-IDF 5.5 hard-codes FatFs exFAT support off and exposes no Kconfig switch.
+The helper enables `FF_FS_EXFAT` in the selected `IDF_PATH` checkout; it is
+idempotent and refuses to patch an unfamiliar FatFs configuration. On an IDF
+release that provides `CONFIG_FATFS_FS_EXFAT`, enable that option instead. SD
+mounting uses a conservative 10 MHz clock and retries transient failures.
 
 For an existing build directory, regenerate its ignored
 `sdkconfig.elecrow_p4_aio` if it was configured for a different radio interface;
