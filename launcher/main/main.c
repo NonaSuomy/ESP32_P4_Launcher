@@ -30,6 +30,9 @@ static const char *TAG = "launcher";
 static void on_app_exit(const char *path, int code, bool forced,
                         uint32_t leaked_allocs, uint32_t leaked_files)
 {
+    /* A Quit-to-home overlay keeps the mixer muted while the app's tasks and
+     * streams stop. Restore it only after the App Manager has torn them down. */
+    lx_audio_hold(false);
     lx_devlink_app_exited(path, code, forced, leaked_allocs, leaked_files);
 }
 

@@ -140,8 +140,14 @@ void lx_overlay_poll(void)
     }
     heap_caps_free(game);
     if (pick == 2) s_shot_in = 2;       /* without the menu in it */
-    if (pick == 3) lx_app_stop(2000);
+    bool hold_audio_until_exit = false;
+    if (pick == 3)
+        hold_audio_until_exit = lx_app_stop(2000) == ESP_OK;
+    /* An external HOME/STOP can also dismiss this menu. In either case the
+     * app may still be writing audio while its tasks and streams are torn
+     * down, so leave the mixer held until the app-exit callback runs. */
+    if (lx_svc_exit_flag) hold_audio_until_exit = true;
     wait_release();
-    lx_audio_hold(false);
+    if (!hold_audio_until_exit) lx_audio_hold(false);
     s_ovl_open = false;
 }
