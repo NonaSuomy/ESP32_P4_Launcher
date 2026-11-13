@@ -13,6 +13,7 @@
 #include "lx_net.h"
 #include "nvs.h"
 #include "bsp.h"
+#include "lx_zip.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -250,6 +251,8 @@ static bool ext_ok(const char *name)
     if (!exts || !*exts) return true;
     const char *dot = strrchr(name, '.');
     if (!dot) return false;
+    if (strcasecmp(dot, ".zip") == 0 && !in_list(exts, ".zip"))
+        return true;
     size_t n = strlen(dot);
     for (const char *p = exts; *p;) {
         const char *e = strchr(p, ',');
@@ -825,6 +828,24 @@ void lx_ui_message(const char *title, const char *text, volatile bool *abort)
     lx_input_flush();
 }
 
+void lx_ui_progress(const char *title, uint64_t complete, uint64_t total)
+{
+    if (!frame_begin()) return;
+    lx_fill(&S.cv, 0, 0, S.cv.w, S.cv.h, C_BG);
+    lx_fill(&S.cv, 0, 0, S.cv.w, HDR_H, C_HDR);
+    lx_text(&S.cv, MARGIN, 12, title ? title : "Preparing ROM", C_TEXT, 2);
+    lx_text(&S.cv, MARGIN, HDR_H + 36, "Extracting ROM from ZIP archive...", C_DIM, 2);
+    int x = MARGIN, y = S.cv.h / 2, w = S.cv.w - MARGIN * 2, h = 24;
+    lx_fill(&S.cv, x, y, w, h, C_BOX);
+    uint64_t pct = total ? (complete >= total ? 100 : complete * 100 / total) : 0;
+    int filled = (int)((uint64_t)(w - 4) * pct / 100);
+    if (filled > 0) lx_fill(&S.cv, x + 2, y + 2, filled, h - 4, C_SAVE);
+    char label[48];
+    snprintf(label, sizeof(label), "%llu%%", (unsigned long long)pct);
+    lx_text(&S.cv, x, y + h + 16, label, C_TEXT, 2);
+    frame_end();
+}
+
 int lx_ui_menu(const char *title, const char *const *items, int n, int initial, volatile bool *abort)
 {
     item_t it[LX_UI_MENU_MAX];
@@ -1193,6 +1214,7 @@ int lx_ui_pick_file(const papp_pick_cfg_t *cfg, papp_pick_result_t *out, volatil
 
     int result = PAPP_PICK_CANCEL;
     char rom[PATH_LEN] = "";
+    char resolved[PATH_LEN] = "";
     for (;;) {
         if (frame_begin()) {
             draw_list_body();
@@ -1273,6 +1295,17 @@ int lx_ui_pick_file(const papp_pick_cfg_t *cfg, papp_pick_result_t *out, volatil
             result = act == A_RUN ? (saved ? PAPP_PICK_RESUME : PAPP_PICK_RUN) : rom_menu(e, abort);
             if (result) {
                 full_path(e, rom, sizeof(rom));
+                const char *dot = strrchr(rom, '.');
+                if (S.cfg->extensions && *S.cfg->extensions && dot &&
+                    strcasecmp(dot, ".zip") == 0 && !in_list(S.cfg->extensions, ".zip")) {
+                    if (lx_zip_extract_first(rom, S.cfg->extensions, abort,
+                                             resolved, sizeof(resolved)) != 0) {
+                        rom[0] = 0;
+                        result = 0;
+                        lx_ui_message("ZIP ROM", "No supported ROM could be extracted from this archive.", abort);
+                        break;
+                    }
+                }
                 goto done;
             }
             break;
@@ -1284,7 +1317,7 @@ int lx_ui_pick_file(const papp_pick_cfg_t *cfg, papp_pick_result_t *out, volatil
 done:
     if (result != PAPP_PICK_CANCEL && !(abort && *abort)) {
         out->action = result;
-        snprintf(out->path, sizeof(out->path), "%s", rom);
+        snprintf(out->path, sizeof(out->path), "%s", resolved[0] ? resolved : rom);
         save_path(rom, out->save_path, sizeof(out->save_path));
         guard_in();
         if (!s_real_names) lines_write(&S.recents, RECENT_FILE, rom, rom, MAX_RECENT);

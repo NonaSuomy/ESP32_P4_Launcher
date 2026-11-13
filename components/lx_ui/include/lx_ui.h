@@ -16,6 +16,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 #include "papp_abi.h"
 
 #ifdef __cplusplus
@@ -26,6 +27,7 @@ void lx_ui_set_guard(void (*enter)(void), void (*leave)(void));
 
 int  lx_ui_pick_file(const papp_pick_cfg_t *cfg, papp_pick_result_t *out, volatile bool *abort);
 void lx_ui_message(const char *title, const char *text, volatile bool *abort);
+void lx_ui_progress(const char *title, uint64_t complete, uint64_t total);
 /* A list of choices over the current picture; returns the index picked, or -1
  * (B / tap outside / abort). At most LX_UI_MENU_MAX items. */
 #define LX_UI_MENU_MAX 7
