@@ -623,7 +623,8 @@ static void build_home(void)
     lv_obj_set_size(s_grid, 780 + s_dx, 292 + s_dy);
     lv_obj_set_flex_flow(s_grid, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_style_pad_all(s_grid, 6, 0);
-    lv_obj_set_style_pad_column(s_grid, 8, 0);
+    /* Fit all eight 118px touch tiles on 1024px boards without shrinking them. */
+    lv_obj_set_style_pad_column(s_grid, 4, 0);
     lv_obj_set_style_pad_row(s_grid, 6, 0);
     lv_obj_set_scroll_dir(s_grid, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_grid, LV_SCROLLBAR_MODE_ACTIVE);
