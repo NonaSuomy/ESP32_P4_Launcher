@@ -4,7 +4,7 @@ Launcher firmware for ESP32-P4 boards that loads **relocatable PAPP v2 apps** fr
 PSRAM and runs them with a DLL-style interface layer. Successor to the PAPP concept in
 `C:\ESPIDFprojects\RetroESP32_P4` (reference project: drivers, ports, history).
 
-Design: `docs/ARCHITECTURE.md`. Plan + status: `docs/WORKPLAN.md`.
+Design: `docs/ARCHITECTURE.md`. Plan + status: `docs/WORKPLAN.md`. Which boards qualify (supported / community / retired): `docs/BOARD_SUPPORT.md`.
 
 ## Layout
 
@@ -15,7 +15,7 @@ boards/<id>/board/        BSP implementation (component "board", pins esp_hosted
                           guition_p4_43 (4.3" 480x800, image "launcher"; guition_p4_43_v3 = same sources built for
                           rev v3.x chips, BOARD_CHIP_V3 picks the id), guition_p4_7 (7" 1024x600), m5stack_tab5 (720x1280,
                           power rails on two PI4IOE5V6408 I2C expanders, esp_hosted 1.4 for M5Stack's C6 firmware),
-                          waveshare_p4_rpi_dsi (Waveshare dev kit + RPi Touch Display V1-style 800x480 panel: TC358762, ATTINY88
+                          waveshare_p4_rpi_dsi (RETIRED after 0.30.0, make_release.py RETIRED; example port: Waveshare dev kit + RPi Touch Display V1-style 800x480 panel: TC358762, ATTINY88
                           power/backlight at 0x45, FT5x06 touch; RGB565 shadow buffers converted to the RGB888 scan-out
                           by the PPA, docs/PORT_WAVESHARE_P4.md), elecrow_p4_aio (Elecrow All-in-one Starter Kit SEE00804D:
                           7" 1024x600 EK79007, scan direction on GPIO 32/33 = rotation 0, I2S amp without codec (software

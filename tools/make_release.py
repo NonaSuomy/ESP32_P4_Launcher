@@ -5,7 +5,7 @@ and writes latest.json next to them, then prints the gh command that publishes t
 
     python tools/make_release.py [--out build/release]
 
-Every board under boards/ whose image is built at the current version goes in:
+Every board under boards/ (but the RETIRED ones) whose image is built at the current version goes in:
 guition_p4_43 from launcher/build/launcher.bin, any other <id> from
 launcher/build_<id>/launcher_<id>.bin (idf.py -B build_<id> -DLX_BOARD=<id> build).
 
@@ -29,6 +29,13 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = "giltal/ESP32_P4_Launcher"
 FIRST = "guition_p4_43"
+# Retired boards (docs/BOARD_SUPPORT.md) and their last release; later releases leave them out, and
+# Settings > Update on them says there is no release for the board
+RETIRED = {"waveshare_p4_rpi_dsi": "0.30.0"}
+
+
+def vtuple(v):
+    return tuple(int(x) for x in re.findall(r"\d+", v))
 
 
 def image_of(board):
@@ -49,6 +56,9 @@ def main():
 
     boards, files = {}, []
     for board in sorted(os.listdir(os.path.join(ROOT, "boards"))):
+        if board in RETIRED and vtuple(version) > vtuple(RETIRED[board]):
+            print(f"skip {board}: retired after {RETIRED[board]}")
+            continue
         path, name = image_of(board)
         if not os.path.isfile(path):
             print(f"skip {board}: {os.path.relpath(path, ROOT)} not built")
