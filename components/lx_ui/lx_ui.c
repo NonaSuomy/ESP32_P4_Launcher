@@ -274,8 +274,17 @@ static void save_path(const char *rom, char *out, size_t len)
 {
     out[0] = 0;
     if (!S.cfg->save_dir || !*S.cfg->save_dir) return;
+    char zip_rom[128];
+    const char *save_rom = rom;
+    const char *dot = strrchr(rom, '.');
+    if (dot && strcasecmp(dot, ".zip") == 0) {
+        if (!S.cfg->extensions || !*S.cfg->extensions ||
+            lx_zip_resolve_first(rom, S.cfg->extensions, zip_rom, sizeof(zip_rom)) != 0)
+            return;
+        save_rom = zip_rom;
+    }
     char name[PATH_LEN];
-    snprintf(name, sizeof(name), "%s", base_name(rom));
+    snprintf(name, sizeof(name), "%s", base_name(save_rom));
     if (S.cfg->flags & PAPP_PICK_SAVE_NOEXT_F) {
         char *dot = strrchr(name, '.');
         if (dot && dot != name) *dot = 0;
