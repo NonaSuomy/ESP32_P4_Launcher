@@ -17,14 +17,14 @@
 typedef struct {
     void *decoder_memory;
     tPVMP3DecoderExternal ext;
-} pax_mp3_decoder_t;
+} papp_mp3_decoder_t;
 
 extern "C" {
 
-void *pax_mp3_create(void)
+void *papp_mp3_create(void)
 {
-    pax_mp3_decoder_t *decoder =
-        (pax_mp3_decoder_t *)calloc(1, sizeof(pax_mp3_decoder_t));
+    papp_mp3_decoder_t *decoder =
+        (papp_mp3_decoder_t *)calloc(1, sizeof(papp_mp3_decoder_t));
     if (!decoder)
         return NULL;
 
@@ -42,9 +42,9 @@ void *pax_mp3_create(void)
     return decoder;
 }
 
-void pax_mp3_reset(void *opaque)
+void papp_mp3_reset(void *opaque)
 {
-    pax_mp3_decoder_t *decoder = (pax_mp3_decoder_t *)opaque;
+    papp_mp3_decoder_t *decoder = (papp_mp3_decoder_t *)opaque;
     if (!decoder)
         return;
 
@@ -54,9 +54,9 @@ void pax_mp3_reset(void *opaque)
     pvmp3_InitDecoder(&decoder->ext, decoder->decoder_memory);
 }
 
-void pax_mp3_destroy(void *opaque)
+void papp_mp3_destroy(void *opaque)
 {
-    pax_mp3_decoder_t *decoder = (pax_mp3_decoder_t *)opaque;
+    papp_mp3_decoder_t *decoder = (papp_mp3_decoder_t *)opaque;
     if (!decoder)
         return;
 
@@ -71,12 +71,12 @@ void pax_mp3_destroy(void *opaque)
  * in output (not the per-channel count).  On a successful frame the caller
  * must advance input by consumed bytes and retain any bytes after that point.
  */
-int pax_mp3_decode(void *opaque, const uint8_t *input, int input_length,
+int papp_mp3_decode(void *opaque, const uint8_t *input, int input_length,
                     int16_t *output, int output_capacity_samples,
                     int *consumed, int *samples, int *sample_rate,
                     int *channels)
 {
-    pax_mp3_decoder_t *decoder = (pax_mp3_decoder_t *)opaque;
+    papp_mp3_decoder_t *decoder = (papp_mp3_decoder_t *)opaque;
     if (!decoder || !input || input_length <= 0 || !output ||
         output_capacity_samples <= 0)
         return -1;

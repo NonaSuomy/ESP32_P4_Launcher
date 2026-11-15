@@ -26,7 +26,7 @@ cpp_flags = {
     for source in srcs if source.endswith(".cpp")
 }
 v1build.build('quake', srcs, includes=[os.path.join(HERE, i) for i in ['compat', 'quake/winquake', 'quake/esp32quake', 'quake']],
-              defines=['-DESP32_QUAKE=1', '-DESP_PLATFORM=1', '-DCONFIG_IDF_TARGET_ESP32P4=1', '-DCONFIG_IDF_TARGET_ARCH_RISCV=1', '-fcommon'] + [FAST, "-O3"],
+              defines=['-std=gnu11', '-DESP32_QUAKE=1', '-DESP_PLATFORM=1', '-DCONFIG_IDF_TARGET_ESP32P4=1', '-DCONFIG_IDF_TARGET_ARCH_RISCV=1', '-fcommon'] + [FAST, "-O3"],
               extra_cflags=["-I" + MP3_DIR, "-I" + os.path.join(MP3_DIR, "oscl")],
               per_file_cflags=cpp_flags, menu_button='0', volume_button='0',
               rename_main=False, extra_ldflags=['-Wl,--allow-multiple-definition'], icon_dir=HERE, title='Quake')
