@@ -23,12 +23,14 @@ cd launcher; idf.py -B build_elecrow_p4_aio -DLX_BOARD=elecrow_p4_aio -p COMx bu
 | Audio | I2S0 BCLK 22, WS 21, DOUT 23 straight into an amplifier, no codec: volume is scaled in software. Amplifier enable GPIO 6, on when low (off from `bsp_init` until silent DMA runs) |
 | SD | SDMMC slot 0, 1-bit, CLK 43, CMD 44, D0 39, card supply LDO4 3.3 V; 40 MHz, retries at 20 MHz (Elecrow's speed) |
 | Buttons | resistor ladder on GPIO 16 (ADC1 channel 0): left, right, down ("middle" in Elecrow's code), up; diagonals below 1.6 V |
-| Wi-Fi / BLE | ESP32-C6 on SDIO slot 1, 4-bit: CLK 14, CMD 15, D0 7, D1 9, D2 10, D3 11, reset GPIO 2 active high (Elecrow's AI firmware) |
+| Wi-Fi / BLE | ESP32-C6 over SPI full duplex: MOSI 7, MISO 9, CLK 15, CS 14, data ready 10, handshake 11, reset GPIO 2 active high |
 | Flash / PSRAM | 16 MB QIO 80 MHz, 32 MB hex PSRAM at 200 MHz, chip rev v1.x (`ESP32P4_SELECTS_REV_LESS_V3`) |
 | RTC, battery | none |
 
-PR #2 drives the C6 over SPI full duplex on the same pins (MOSI 7, MISO 9, CLK 15, CS 14, data ready 10, handshake 11):
-that needs a C6 firmware built for SPI. This port uses SDIO, the transport of the C6 firmware Elecrow ships.
+The C6 runs esp_hosted over SPI full duplex, as on PR #2's kit (launcher 0.30.0 tried SDIO, the transport of
+Elecrow's own AI demo, and found no C6). The release's C6 firmware is built for SDIO, so Settings → Update offers
+none for this board: keep the C6's SPI firmware, or build one for SPI full duplex with these pins and flash it over
+the C6's own port.
 PR #2's Ethernet (IP101) is not part of this port.
 
 ## To check on the kit
@@ -39,6 +41,6 @@ PR #2's Ethernet (IP101) is not part of this port.
 3. SD card: speed in the boot log (40 MHz or the 20 MHz retry); copy a large file with `papp_dev.py put`.
 4. Sound: a game or the volume setting, no pop at boot or exit.
 5. Buttons: `papp_dev.py input state --watch 10` while pressing each one; the thresholds are in `board_buttons.c`.
-6. Wi-Fi: Settings → Wi-Fi, `papp_dev.py net`. Then BLE (`ble_test`); BLE needs the release's C6 firmware
-   (Settings → Update), the factory one may not carry BLE over VHCI.
+6. Wi-Fi: Settings → Wi-Fi, `papp_dev.py net`. Then BLE (`ble_test`); BLE needs a C6 firmware that carries
+   BLE over VHCI.
 7. Chip revision: `esptool chip_id`. A v3.x chip needs a v3 build (`ESP32P4_SELECTS_REV_LESS_V3` off).

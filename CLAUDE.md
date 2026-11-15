@@ -19,7 +19,7 @@ boards/<id>/board/        BSP implementation (component "board", pins esp_hosted
                           power/backlight at 0x45, FT5x06 touch; RGB565 shadow buffers converted to the RGB888 scan-out
                           by the PPA, docs/PORT_WAVESHARE_P4.md), elecrow_p4_aio (Elecrow All-in-one Starter Kit SEE00804D:
                           7" 1024x600 EK79007, scan direction on GPIO 32/33 = rotation 0, I2S amp without codec (software
-                          volume), 1-bit SD, ADC button ladder, C6 on SDIO slot 1 with the kit's pins; untested,
+                          volume), 1-bit SD, ADC button ladder, C6 over SPI full duplex (no release C6 image: that one is SDIO); untested,
                           docs/PORT_ELECROW_AIO.md)
 components/bsp/           BSP contract (bsp.h) — the core only talks to hardware through it
 components/papp_abi/      papp_abi.h — .papp v2 format + interfaces (shared with apps; no IDF includes)

@@ -1,5 +1,5 @@
 /* Elecrow All-in-one Starter Kit for ESP32-P4 (SKU SEE00804D): 7" 1024x600 EK79007 MIPI-DSI, GT911,
- * I2S amplifier without codec, 1-bit SD, ADC button ladder, ESP32-C6 on SDIO.
+ * I2S amplifier without codec, 1-bit SD, ADC button ladder, ESP32-C6 over SPI.
  * Pins from Elecrow's ESP-IDF lessons (github.com/Elecrow-RD/All-in-one-Starter-Kit-for-ESP32-P4-with-
  * Common-Board-design, example/V1.0/idf-code: Kconfig defaults and sdkconfig) and NonaSuomy's port (#2).
  * NOT TESTED on the hardware yet. */

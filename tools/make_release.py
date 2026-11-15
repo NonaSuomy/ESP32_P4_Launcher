@@ -84,7 +84,12 @@ def main():
         hosted = re.search(r'espressif/esp_hosted:\s*"?([0-9.]+)',
                            open(os.path.join(ROOT, "boards", board, "board", "idf_component.yml")).read())
         c6 = os.path.join(ROOT, "build", "c6_fw", f"c6_{hosted.group(1)}.bin") if hosted else ""
-        if c6 and os.path.isfile(c6):
+        # build_c6_fw.py builds the SDIO image; a board wired over SPI would lose its Wi-Fi chip to it
+        spi = "CONFIG_ESP_HOSTED_SPI_HOST_INTERFACE=y" in open(
+            os.path.join(ROOT, "boards", board, "sdkconfig.board")).read()
+        if spi:
+            print(f"note: {board}: C6 over SPI, no C6 firmware in the release for it")
+        elif c6 and os.path.isfile(c6):
             c6_name = os.path.basename(c6)
             if c6_name not in files:
                 shutil.copyfile(c6, os.path.join(args.out, c6_name))

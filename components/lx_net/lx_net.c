@@ -274,16 +274,27 @@ static void on_sta_start_stop(void *arg, esp_event_base_t base, int32_t id, void
     s_sta_up = true;
 }
 
+static void join(void);
+
 static bool radio_start(void)
 {
     if (s_started) return true;
     esp_netif_init();
     esp_event_loop_create_default();
-    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_START, on_sta_start_stop, NULL);
-    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_STOP, on_sta_start_stop, NULL);
-    s_sta = esp_netif_create_default_wifi_sta();
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    esp_err_t e = esp_wifi_init(&cfg);
+    /* A failed start (no answer from the C6) is retried by the next scan or join: the interface and
+     * the driver are made only once, esp_netif_create_default_wifi_sta asserts on a second STA. */
+    static bool s_wifi_inited;
+    esp_err_t e = ESP_OK;
+    if (!s_sta) {
+        esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_START, on_sta_start_stop, NULL);
+        esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_STOP, on_sta_start_stop, NULL);
+        s_sta = esp_netif_create_default_wifi_sta();
+    }
+    if (!s_wifi_inited) {
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        e = esp_wifi_init(&cfg);
+        s_wifi_inited = e == ESP_OK;
+    }
     if (e == ESP_OK) {
         esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_event, NULL);
         esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_event, NULL);
@@ -297,7 +308,14 @@ static bool radio_start(void)
         return false;
     }
     s_started = true;
-    if (s_state == LX_NET_OFF) s_state = LX_NET_IDLE;
+    if (s_state == LX_NET_NO_RADIO && s_want && s_ssid[0]) {
+        /* a start that worked on a later try: the join the first one couldn't make */
+        s_retries = 0;
+        s_state = LX_NET_CONNECTING;
+        join();
+    } else if (s_state == LX_NET_OFF || s_state == LX_NET_NO_RADIO) {
+        s_state = LX_NET_IDLE;
+    }
     lx_c6_query();
     return true;
 }

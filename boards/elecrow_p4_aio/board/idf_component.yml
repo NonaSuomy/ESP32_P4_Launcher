@@ -1,7 +1,7 @@
 dependencies:
   idf: ">=5.5"
   espressif/esp_lcd_ek79007: "2.0.2"
-  # Wi-Fi companion: the ESP32-C6 on SDIO (Elecrow's own firmware uses esp_hosted 2.x over SDIO)
+  # Wi-Fi companion: the ESP32-C6 over SPI full duplex (sdkconfig.board)
   espressif/esp_wifi_remote: "1.6.5"
   espressif/esp_hosted: "2.12.13"
   # Pulled in by the packages above, pinned too so every build is the same
