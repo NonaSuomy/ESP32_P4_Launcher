@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Prepares the online app catalogue for the launcher's Store: copies every built app that
-is not a developer app (PAPP_MF_HIDDEN) or an education app (edu.*: those ship on the starter
-card, SDcard/apps/Education, built by apps/education/build.py into build/education), its icon and the folder icons, and writes
+is not a developer app (PAPP_MF_HIDDEN), from build/apps and build/education (the education apps,
+edu.*, built by apps/education/build.py; they go to the Education folder), its icon and the folder icons, and writes
 apps.json next to them. --publish uploads them to the "apps" release on GitHub.
 
     python apps/build_all.py                       # build the apps first
@@ -54,9 +54,9 @@ ICONS = os.path.join(ROOT, "apps", "common", "icons")
 GAMEPADS = os.path.join(ROOT, "SDcard", "config", "gamepads.txt")
 STORE = os.path.join(ROOT, "apps", "store.json")
 CATEGORIES = ("emulators", "games", "tools", "productivity", "education")
-FOLDERS = {"emu.": "Emulators", "game.": "Games"}          # by app id prefix; others: main page
+FOLDERS = {"emu.": "Emulators", "game.": "Games", "edu.": "Education"}   # by app id prefix; others: main page
 FOLDER_ICONS = {"Emulators": "folder_emulators.png", "Games": "folder_games.png",
-                "Community": "folder_community.png"}
+                "Community": "folder_community.png", "Education": "folder_education.png"}
 COMMUNITY_FOLDER = "Community"
 PAPP_MAGIC = 0x32504150          # "PAP2"
 MANIFEST_MAGIC = 0x464E414D      # "MANF"
@@ -162,8 +162,9 @@ def main():
             entry["category"], entry["description"] = info["category"], info["description"]
             apps.append(entry)
             print(f"{entry['name']:16s} {entry['version']:8s} {entry['folder'] or '(main page)'} (as published)")
-    built = os.path.join(ROOT, "build", "apps")
-    for name in ([] if args.keep_apps else sorted(os.listdir(built))):
+    # build/apps (apps/build_all.py) and build/education (apps/education/build.py, which build_all runs too)
+    builds = [] if args.keep_apps else [os.path.join(ROOT, "build", d) for d in ("apps", "education")]
+    for built, name in [(b, n) for b in builds if os.path.isdir(b) for n in sorted(os.listdir(b))]:
         papp = os.path.join(built, name, name + ".papp")
         if not os.path.isfile(papp):
             continue
@@ -172,9 +173,6 @@ def main():
             print(f"skip {name}: no manifest")
             continue
         if m["flags"] & MF_HIDDEN:
-            continue
-        if m["id"].startswith("edu."):              # education apps ship on the card (SDcard/apps/Education)
-            print(f"skip {name}: education app")
             continue
         folder = next((f for p, f in FOLDERS.items() if m["id"].startswith(p)), "")
         entry = dict(id=m["id"], name=m["name"], version=m["version"], folder=folder, dir=name,

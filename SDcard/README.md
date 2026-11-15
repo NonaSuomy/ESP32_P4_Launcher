@@ -7,7 +7,7 @@ then on Wi-Fi open the **Store** (first tile on the home screen) and choose **In
 
 ```
 apps/                    the apps (the Store puts them here)
-apps/Education/          apps for students, in the Education folder of the home screen (only here, not in the Store)
+apps/Education/          apps for students, in the Education folder of the home screen (also in the Store, under Education)
 config/gamepads.txt      controller button mappings shared by everyone (see below)
 roms/<system>/           your ROMs, one folder per emulator
 roms/doom/doom1.wad      Doom shareware episode
@@ -66,7 +66,7 @@ the file to yourself (git ignores it here).
 
 `apps/Education/` holds apps for teaching, each in its own folder (`<app>/<app>.papp` + `icon.png`). Copy the
 folder to the card as it is (or the whole starter card) and they appear in the **Education** folder on the home
-screen. They are not in the Store. Their sources are in `apps/education/` of the project, and
+screen. The Store has them too (category Education): pick the ones you want there. Their sources are in `apps/education/` of the project, and
 `python apps/education/build.py` rebuilds them into this folder.
 
 - **BLE Remote**: the board as a Bluetooth LE peripheral named `gution-p4`. A phone (any BLE app, e.g. nRF Connect)

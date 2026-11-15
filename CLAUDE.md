@@ -74,8 +74,8 @@ apps/                     Test/demo apps (hello, libc_test, gfx_demo: DISP test,
                           PAPP_MF_HIDDEN: shown on the home screen only with Settings → Show developer apps)
 apps/education/<app>/     Education apps for students (ids edu.*): `python apps/education/build.py` (build_all runs it too)
                           builds them into build/education and copies .papp + icon to SDcard/apps/Education/<app>/ (committed;
-                          the "Education" home screen folder, icon from apps/common/icons/folder_education.png). Never in the Store
-                          catalogue (make_apps_release reads build/apps only and skips edu.*). common/edu_ui.c (linked into each):
+                          the "Education" home screen folder, icon from apps/common/icons/folder_education.png). Also in the Store
+                          (category education, folder Education; make_apps_release reads build/education too). common/edu_ui.c (linked into each):
                           touch UI on an 800x480 surface, log panel, the remotes' shared state + Control screen.
                           ble_remote = BLE Remote, the Gution BLE demo ("gution-p4": control service mode/level/led/msg + Nordic
                           UART console, same protocol as ESP32P4_Gution4_7project's GutionTerminal); wifi_remote = Wi-Fi Remote,
