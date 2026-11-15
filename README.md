@@ -423,8 +423,6 @@ port then runs at full speed, which pads and keyboards use anyway. What to know:
 
 - Full-speed pads (tested: DualShock 4) and low-speed devices (tested: a keyboard and a cheap USB pad) work
   through a hub, several at once.
-- With some hubs, a pad that is already plugged in when the board is switched on isn't found until it is
-  plugged in again; another hub may not do this.
 - Plugging a hub in while the board runs can restart the board on a weak USB supply; a powered hub avoids it.
 
 ### Wi-Fi network
