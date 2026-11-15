@@ -6,3 +6,5 @@ idf_component_register(
 )
 # USB host BNA workaround (lx_input_usb.c): IDF asserts on a channel error without a halt
 target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=usb_dwc_hal_chan_decode_intr")
+# USB hubs (lx_input_usb.c): the board's port is limited to full speed each time IDF powers it
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=hcd_port_command")

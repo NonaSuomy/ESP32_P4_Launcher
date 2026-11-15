@@ -18,6 +18,7 @@
 #include "usb/hid_host.h"
 #include "hal/usb_dwc_hal.h"
 #include "hal/usb_dwc_ll.h"
+#include "soc/usb_utmi_struct.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -41,6 +42,42 @@ static uint32_t s_chan_err[16];             /* deferred error bits per channel *
 static volatile uint32_t s_bna_count;       /* channel errors without a halt (logged by lx_hid) */
 
 usb_dwc_hal_chan_event_t __real_usb_dwc_hal_chan_decode_intr(usb_dwc_hal_chan_t *chan);
+
+/* Hubs: IDF has no transaction translator, so a low/full-speed pad behind a high-speed hub is
+ * refused. With the board's port limited to full speed the hub runs at full speed too and just
+ * repeats the pads' traffic (pads and keyboards are full/low speed anyway). The bit goes in every
+ * time IDF powers the port: its recovery after a disconnect soft-resets the controller, which
+ * clears it. hcd_port_command and its POWER_ON (0) are IDF's private hcd.h. */
+#if CONFIG_USB_HOST_HUBS_SUPPORTED
+/* Full speed on the HS core's UTMI PHY: 30 MHz PHY clock (select 0, 30000 clocks a frame) and the
+ * PHY's FS end-of-packet detect + low-speed preamble handling, without which a low-speed pad behind
+ * the hub never answers its first request (found by NonaSuomy, PR #23). */
+static void usb_fs_only(void)
+{
+    usb_dwc_dev_t *hw = &USB_DWC_HS;
+    usb_dwc_ll_hcfg_set_fsls_supp_only(hw);
+    hw->hcfg_reg.fslspclksel = 0;
+    usb_dwc_hfir_reg_t hfir = { .val = hw->hfir_reg.val };
+    hfir.hfirrldctrl = 0;
+    hfir.frint = 29999;
+    hw->hfir_reg.val = hfir.val;
+    USB_UTMI.fc_06.det_fseop_en = 1;
+    USB_UTMI.fc_06.pre_hphy_lsie = 1;
+}
+#endif
+
+esp_err_t __real_hcd_port_command(void *port, int command);
+esp_err_t __wrap_hcd_port_command(void *port, int command)
+{
+#if CONFIG_USB_HOST_HUBS_SUPPORTED
+    if (command == 0) usb_fs_only();                /* POWER_ON */
+    esp_err_t e = __real_hcd_port_command(port, command);
+    if (command == 2) usb_fs_only();                /* RESET: the enable may pick other values */
+    return e;
+#else
+    return __real_hcd_port_command(port, command);
+#endif
+}
 
 /* The channel has stopped with error bits `e`: report it as IDF's error path would */
 static IRAM_ATTR usb_dwc_hal_chan_event_t chan_stopped_with_error(usb_dwc_hal_chan_t *chan, uint32_t e)
