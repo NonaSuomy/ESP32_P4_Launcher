@@ -10,6 +10,7 @@
 #include <time.h>
 #include <sys/stat.h>
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
@@ -17,6 +18,7 @@
 #include "esp_sntp.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "esp_wifi_default.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -260,6 +262,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
  * defaults, so it runs first: a repeated start stops the netif, and the default handler starts it cleanly. */
 static esp_netif_t *s_sta;
 static bool s_sta_up;
+static bool s_sta_handlers, s_sta_defaults, s_wifi_initialized, s_net_handlers;
 
 static void on_sta_start_stop(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
@@ -277,20 +280,80 @@ static void on_sta_start_stop(void *arg, esp_event_base_t base, int32_t id, void
 static bool radio_start(void)
 {
     if (s_started) return true;
-    esp_netif_init();
-    esp_event_loop_create_default();
-    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_START, on_sta_start_stop, NULL);
-    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_STOP, on_sta_start_stop, NULL);
-    s_sta = esp_netif_create_default_wifi_sta();
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    esp_err_t e = esp_wifi_init(&cfg);
-    if (e == ESP_OK) {
-        esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_event, NULL);
-        esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_event, NULL);
-        esp_wifi_set_storage(WIFI_STORAGE_RAM);
-        esp_wifi_set_mode(WIFI_MODE_STA);
-        e = esp_wifi_start();
+    esp_err_t e = esp_netif_init();
+    if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "netif init failed: %s", esp_err_to_name(e));
+        s_state = LX_NET_NO_RADIO;
+        return false;
     }
+    e = esp_event_loop_create_default();
+    if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "event loop init failed: %s", esp_err_to_name(e));
+        s_state = LX_NET_NO_RADIO;
+        return false;
+    }
+
+    /* The default STA helper asserts if allocation fails. Keep an explicit,
+     * reusable netif so a failed hosted-radio start cannot leak one on every retry. */
+    if (!s_sta) {
+        esp_netif_config_t netif_cfg = ESP_NETIF_DEFAULT_WIFI_STA();
+        s_sta = esp_netif_new(&netif_cfg);
+        if (!s_sta) {
+            ESP_LOGE(TAG, "STA netif allocation failed (internal heap: %u bytes free)",
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+            s_state = LX_NET_NO_RADIO;
+            return false;
+        }
+        e = esp_netif_attach_wifi_station(s_sta);
+        if (e != ESP_OK) {
+            ESP_LOGE(TAG, "STA netif attach failed: %s", esp_err_to_name(e));
+            esp_netif_destroy(s_sta);
+            s_sta = NULL;
+            s_state = LX_NET_NO_RADIO;
+            return false;
+        }
+    }
+
+    if (!s_sta_handlers) {
+        e = esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_START, on_sta_start_stop, NULL);
+        if (e == ESP_OK) {
+            e = esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_STOP, on_sta_start_stop, NULL);
+            if (e != ESP_OK) esp_event_handler_unregister(WIFI_EVENT, WIFI_EVENT_STA_START, on_sta_start_stop);
+        }
+        if (e != ESP_OK) {
+            ESP_LOGE(TAG, "STA lifecycle handler registration failed: %s", esp_err_to_name(e));
+            s_state = LX_NET_NO_RADIO;
+            return false;
+        }
+        s_sta_handlers = true;
+    }
+    if (!s_sta_defaults) {
+        e = esp_wifi_set_default_wifi_sta_handlers();
+        if (e != ESP_OK) {
+            ESP_LOGE(TAG, "STA default handler registration failed: %s", esp_err_to_name(e));
+            s_state = LX_NET_NO_RADIO;
+            return false;
+        }
+        s_sta_defaults = true;
+    }
+
+    if (!s_wifi_initialized) {
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        e = esp_wifi_init(&cfg);
+        if (e == ESP_OK) s_wifi_initialized = true;
+    }
+    if (e == ESP_OK && !s_net_handlers) {
+        e = esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_event, NULL);
+        if (e == ESP_OK) {
+            e = esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_event, NULL);
+            if (e != ESP_OK) esp_event_handler_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, on_event);
+        }
+        if (e == ESP_OK) s_net_handlers = true;
+        else ESP_LOGE(TAG, "network event handler registration failed: %s", esp_err_to_name(e));
+    }
+    if (e == ESP_OK) e = esp_wifi_set_storage(WIFI_STORAGE_RAM);
+    if (e == ESP_OK) e = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (e == ESP_OK) e = esp_wifi_start();
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "radio start failed: %s", esp_err_to_name(e));
         s_state = LX_NET_NO_RADIO;
@@ -353,8 +416,24 @@ static void do_scan(void)
 static esp_err_t ap_start(void)
 {
     if (!radio_start()) return ESP_ERR_INVALID_STATE;
-    if (!s_ap_netif) s_ap_netif = esp_netif_create_default_wifi_ap();
-    if (!s_ap_netif) return ESP_ERR_NO_MEM;
+    if (!s_ap_netif) {
+        esp_netif_config_t netif_cfg = ESP_NETIF_DEFAULT_WIFI_AP();
+        s_ap_netif = esp_netif_new(&netif_cfg);
+        if (!s_ap_netif) {
+            ESP_LOGE(TAG, "AP netif allocation failed (internal heap: %u bytes free)",
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+            return ESP_ERR_NO_MEM;
+        }
+        esp_err_t attach_err = esp_netif_attach_wifi_ap(s_ap_netif);
+        if (attach_err == ESP_OK) attach_err = esp_wifi_set_default_wifi_ap_handlers();
+        if (attach_err != ESP_OK) {
+            ESP_LOGE(TAG, "AP netif attach failed: %s", esp_err_to_name(attach_err));
+            esp_wifi_clear_default_wifi_driver_and_handlers(s_ap_netif);
+            esp_netif_destroy(s_ap_netif);
+            s_ap_netif = NULL;
+            return attach_err;
+        }
+    }
     wifi_config_t c = { 0 };
     size_t n = strnlen(s_ap_req.ssid, sizeof(c.ap.ssid));
     memcpy(c.ap.ssid, s_ap_req.ssid, n);

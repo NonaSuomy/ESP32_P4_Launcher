@@ -1,5 +1,5 @@
 idf_component_register(SRCS "lx_net.c" "lx_c6.c" INCLUDE_DIRS "include"
-                       PRIV_REQUIRES bsp esp_wifi esp_netif esp_event nvs_flash lwip esp_timer espressif__esp_hosted)
+                       PRIV_REQUIRES bsp esp_wifi esp_netif esp_event heap nvs_flash lwip esp_timer espressif__esp_hosted)
 
 # The esp_hosted version this board's launcher speaks (each board pins its own): a C6 image must match it
 idf_component_get_property(hosted_dir espressif__esp_hosted COMPONENT_DIR)
