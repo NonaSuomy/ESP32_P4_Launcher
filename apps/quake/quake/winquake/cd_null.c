@@ -19,23 +19,33 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 #include "quakedef.h"
 
+/* The PAPP sound shim implements CD tracks using MP3 files in id1/music/. */
+extern void papp_music_play(int track, int looping);
+extern void papp_music_stop(void);
+extern void papp_music_pause(void);
+extern void papp_music_resume(void);
+
 void CDAudio_Play(byte track, qboolean looping)
 {
+	papp_music_play((int)track, looping != 0);
 }
 
 
 void CDAudio_Stop(void)
 {
+	papp_music_stop();
 }
 
 
 void CDAudio_Pause(void)
 {
+	papp_music_pause();
 }
 
 
 void CDAudio_Resume(void)
 {
+	papp_music_resume();
 }
 
 

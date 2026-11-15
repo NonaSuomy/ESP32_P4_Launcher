@@ -30,7 +30,8 @@ QUIET = ["-Wno-format", "-Wno-unused-variable", "-Wno-unused-function", "-Wno-un
 
 
 def build(name, game_srcs, includes, defines=(), menu_button="PAPP_BTN_X", volume_button="0",
-          rename_main=False, extra_cflags=(), extra_ldflags=(), icon_dir=None, title=None, stack=32768):
+          rename_main=False, extra_cflags=(), extra_ldflags=(), per_file_cflags=None,
+          icon_dir=None, title=None, stack=32768):
     """game_srcs: engine + glue .c files. includes: the game's compat dir first."""
     defs = ["-DPAPP_APP_SIDE=1", "-Dpapp_exit_requested=v1_exit_requested"] + list(defines)
     if rename_main:
@@ -42,5 +43,6 @@ def build(name, game_srcs, includes, defines=(), menu_button="PAPP_BTN_X", volum
                   "-Upapp_exit_requested", "-Umain"]
     return papp_build.build(
         name, [host] + list(game_srcs), includes=list(includes) + [HERE], libc=True, libc_glue=False,
-        app_cflags=QUIET + defs + list(extra_cflags), per_file_cflags={host: host_flags},
+        app_cflags=QUIET + defs + list(extra_cflags),
+        per_file_cflags={host: host_flags, **(per_file_cflags or {})},
         extra_ldflags=list(extra_ldflags), icon_dir=icon_dir)
