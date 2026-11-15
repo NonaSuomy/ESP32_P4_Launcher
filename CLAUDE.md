@@ -49,6 +49,8 @@ components/lx_audio/      audio engine: per-stream rings → resample → mix �
 components/lx_ui/         launcher-drawn screens for apps: content browser (pick_file) + message box; UI v4 wifi() = Wi-Fi picker
                           (scan list, password keyboard, joins with lx_net_connect = saved to wifi.txt; lx_net_restore on fail/cancel)
 components/lx_input/      input manager: USB HID gamepads/keyboards, XInput (Xbox 360) pads (lx_input_xinput) + board buttons (merged into P1) → players + event queue; HOME chord;
+                          USB hubs (CONFIG_USB_HOST_HUBS_SUPPORTED, every board): no TT in IDF, so lx_input_usb.c wraps hcd_port_command
+                          to keep the root port full speed (FSLS only, 30 MHz clock, frint 29999, UTMI fc_06 FS EOP + LS preamble bits);
                           lx_hid_parse = HID descriptor parser; lx_padmap = per-pad button mapping as text on the card:
                           /sd/config/gamepads_mine.txt (Map controller) wins over /sd/config/gamepads.txt (shared database,
                           SDcard/config/gamepads.txt, downloaded by the Store); NVS "padmap" = pre-0.23, read-only fallback
