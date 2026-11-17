@@ -20,7 +20,7 @@ copy the `SDcard` folder to a card and get the apps from the Store, see [Getting
 
 | Launcher version | App ABI | Toolchain | Boards |
 |---|---|---|---|
-| 0.31.0 | 2.0-preview | ESP-IDF v5.5.6 | Guition ESP32-P4 4.3" (480×800; chip v1.x, or v3.x with its own image), Guition JC1060P470C 7" (1024×600), M5Stack Tab5 (720×1280), Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (320×480, contributed), Elecrow All-in-one Starter Kit for ESP32-P4 (1024×600, not tested yet: [docs/PORT_ELECROW_AIO.md](docs/PORT_ELECROW_AIO.md)). Which boards qualify: [docs/BOARD_SUPPORT.md](docs/BOARD_SUPPORT.md) |
+| 0.32.0 | 2.0-preview | ESP-IDF v5.5.6 | Guition ESP32-P4 4.3" (480×800; chip v1.x, or v3.x with its own image), Guition JC1060P470C 7" (1024×600), M5Stack Tab5 (720×1280), Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (320×480, contributed), Elecrow All-in-one Starter Kit for ESP32-P4 (1024×600, not tested yet: [docs/PORT_ELECROW_AIO.md](docs/PORT_ELECROW_AIO.md)). Which boards qualify: [docs/BOARD_SUPPORT.md](docs/BOARD_SUPPORT.md) |
 
 > **Status: active development.** The ABI is a preview and may still change. Everything below describes
 > what exists in the code today; the plan for what comes next is in [docs/WORKPLAN.md](docs/WORKPLAN.md).
@@ -120,6 +120,8 @@ Two rules keep this portable: apps only see the ABI, and the launcher core only 
 
 - LVGL home screen with app icons, folders (with their own icons), clock, SD status and settings, laid out
   for the board's screen size
+- App search: finds an app in any folder by a part of its name, from the home screen's search field or by
+  typing on a USB keyboard; a red dot on the Settings gear when a launcher update is waiting
 - More than one board from one source tree: each board is a package under `boards/`, and apps never change
 - Compositor: an app draws a surface of any size, and the launcher scales and rotates it with the PPA, tear-free
 - Audio engine: up to 8 streams at any rate from 4 to 192 kHz, resampled and mixed
