@@ -9,7 +9,8 @@ Design: `docs/ARCHITECTURE.md`. Plan + status: `docs/WORKPLAN.md`. Which boards 
 ## Layout
 
 ```
-launcher/                 ESP-IDF project (factory app; main.c + home.c = LVGL home screen + app folders; store.c = the Store,
+launcher/                 ESP-IDF project (factory app; main.c + home.c = LVGL home screen + app folders + app search
+                          (any folder, USB keyboard letter opens it) + red dot on the gear when an online update waits (quiet check, 12 h); store.c = the Store,
                           first home tile: categories, app pages, install/update/remove; home_ui.h = what it uses from home.c). Board: -DLX_BOARD=<id> (default guition_p4_43)
 boards/<id>/board/        BSP implementation (component "board", pins esp_hosted for its C6); boards/<id>/sdkconfig.board.
                           guition_p4_43 (4.3" 480x800, image "launcher"; guition_p4_43_v3 = same sources built for

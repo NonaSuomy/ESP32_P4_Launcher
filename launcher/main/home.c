@@ -435,6 +435,51 @@ static void badge_update(void)
     else lv_obj_add_flag(s_store_badge, LV_OBJ_FLAG_HIDDEN);
 }
 
+/* A small red dot at the top-right corner of o (hidden until shown) */
+static lv_obj_t *red_dot(lv_obj_t *o, int size)
+{
+    lv_obj_t *d = lv_obj_create(o);
+    lv_obj_remove_style_all(d);
+    lv_obj_remove_flag(d, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(d, LV_OBJ_FLAG_IGNORE_LAYOUT | LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_size(d, size, size);
+    lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(d, C_RED, 0);
+    lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(d, 2, 0);
+    lv_obj_set_style_border_color(d, C_BG_TOP, 0);
+    /* aligned to the content area: undo the padding to reach the corner */
+    lv_obj_align(d, LV_ALIGN_TOP_RIGHT, lv_obj_get_style_pad_right(o, 0) - 3,
+                 3 - lv_obj_get_style_pad_top(o, 0));
+    return d;
+}
+
+/* An app's tile: icon + name; a click starts it (or opens the folder / Store) */
+static lv_obj_t *app_tile(lv_obj_t *parent, app_entry_t *e, bool menu)
+{
+    lv_obj_t *t = lv_obj_create(parent);
+    lv_obj_remove_style_all(t);
+    lv_obj_set_size(t, 118, 128);
+    lv_obj_remove_flag(t, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(t, LV_OBJ_FLAG_CLICKABLE);
+    focus_style(t, 18);
+    lv_obj_set_style_bg_opa(t, LV_OPA_COVER, LV_STATE_FOCUSED);
+    lv_obj_set_style_bg_color(t, C_FOCUS, LV_STATE_FOCUSED);
+    lv_obj_set_style_bg_opa(t, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(t, C_FOCUS, LV_STATE_PRESSED);
+    lv_obj_t *ic = make_icon(t, e, ICON);
+    lv_obj_align(ic, LV_ALIGN_TOP_MID, 0, 6);
+    lv_obj_t *l = label(t, &lv_font_montserrat_16, C_TEXT, e->name);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(l, 112);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(l, LV_ALIGN_BOTTOM_MID, 0, -6);
+    lv_obj_set_user_data(t, e);
+    lv_obj_add_event_cb(t, on_tile_click, LV_EVENT_CLICKED, e);
+    if (menu) lv_obj_add_event_cb(t, on_tile_long, LV_EVENT_LONG_PRESSED, e);
+    return t;
+}
+
 static void build_grid(void)
 {
     lv_obj_clean(s_grid);
@@ -444,26 +489,7 @@ static void build_grid(void)
         app_entry_t *e = i < 0 ? &s_store_tile : &s_apps[i];
         if (i < 0 ? s_folder[0] != 0 : strcmp(e->parent, s_folder) != 0) continue;
         shown += i >= 0;
-        lv_obj_t *t = lv_obj_create(s_grid);
-        lv_obj_remove_style_all(t);
-        lv_obj_set_size(t, 118, 128);
-        lv_obj_remove_flag(t, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(t, LV_OBJ_FLAG_CLICKABLE);
-        focus_style(t, 18);
-        lv_obj_set_style_bg_opa(t, LV_OPA_COVER, LV_STATE_FOCUSED);
-        lv_obj_set_style_bg_color(t, C_FOCUS, LV_STATE_FOCUSED);
-        lv_obj_set_style_bg_opa(t, LV_OPA_COVER, LV_STATE_PRESSED);
-        lv_obj_set_style_bg_color(t, C_FOCUS, LV_STATE_PRESSED);
-        lv_obj_t *ic = make_icon(t, e, ICON);
-        lv_obj_align(ic, LV_ALIGN_TOP_MID, 0, 6);
-        lv_obj_t *l = label(t, &lv_font_montserrat_16, C_TEXT, e->name);
-        lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
-        lv_obj_set_width(l, 112);
-        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(l, LV_ALIGN_BOTTOM_MID, 0, -6);
-        lv_obj_set_user_data(t, e);
-        lv_obj_add_event_cb(t, on_tile_click, LV_EVENT_CLICKED, e);
-        lv_obj_add_event_cb(t, on_tile_long, LV_EVENT_LONG_PRESSED, e);
+        lv_obj_t *t = app_tile(s_grid, e, true);
         if (i < 0) {
             s_store_badge = label(t, &lv_font_montserrat_16, C_TEXT, "");
             lv_obj_set_style_bg_opa(s_store_badge, LV_OPA_COVER, 0);
@@ -496,7 +522,8 @@ static void build_grid(void)
     }
 }
 
-static lv_obj_t *s_gear, *s_sd;
+static lv_obj_t *s_gear, *s_sd, *s_find_btn;
+static lv_obj_t *s_gear_dot, *s_upd_dot;      /* a launcher update is waiting */
 
 static void home_focus_list(void)
 {
@@ -505,6 +532,7 @@ static void home_focus_list(void)
     lv_obj_remove_state(s_gear, LV_STATE_FOCUSED);      /* s_focused may have been reset */
     lv_obj_remove_state(s_count, LV_STATE_FOCUSED);
     lv_obj_remove_state(s_sd, LV_STATE_FOCUSED);
+    lv_obj_remove_state(s_find_btn, LV_STATE_FOCUSED);
     if (s_clk_area) lv_obj_remove_state(s_clk_area, LV_STATE_FOCUSED);
     for (uint32_t i = 0; i < lv_obj_get_child_count(s_grid); i++) {
         lv_obj_t *c = lv_obj_get_child(s_grid, i);
@@ -513,6 +541,7 @@ static void home_focus_list(void)
     focus_add(s_gear);
     focus_add(s_sd);
     focus_add(s_count);
+    focus_add(s_find_btn);
     if (s_clk_area) focus_add(s_clk_area);
     bool still_there = false;
     for (int i = 0; i < s_nfocus; i++) still_there |= s_focusable[i] == keep;
@@ -546,6 +575,7 @@ static void home_view(const char *focus)
 }
 
 static void on_count_click(lv_event_t *ev);
+static void on_find_click(lv_event_t *ev);
 static void on_sd_click(lv_event_t *ev);
 
 static void build_home(void)
@@ -607,10 +637,45 @@ static void build_home(void)
     lv_obj_t *gi = label(s_gear, &lv_font_montserrat_28, C_TEXT, LV_SYMBOL_SETTINGS);
     lv_obj_center(gi);
     lv_obj_add_event_cb(s_gear, on_gear_click, LV_EVENT_CLICKED, NULL);
+    s_gear_dot = red_dot(s_gear, 16);
 
     /* Applications */
     s_title = label(s_home, &lv_font_montserrat_20, C_TEXT, "Applications");
     lv_obj_set_pos(s_title, 20, 100);
+    lv_label_set_long_mode(s_title, LV_LABEL_LONG_DOT);    /* a long folder name stops before Search */
+    lv_obj_set_width(s_title, 270 + s_dx / 2);
+
+    s_find_btn = lv_obj_create(s_home);                    /* Search: a field-like pill */
+    lv_obj_remove_style_all(s_find_btn);
+    lv_obj_remove_flag(s_find_btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_pos(s_find_btn, 300 + s_dx / 2, 95);
+    lv_obj_set_size(s_find_btn, 200, 30);
+    lv_obj_add_flag(s_find_btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(s_find_btn, 4);
+    lv_obj_set_style_bg_opa(s_find_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_find_btn, lv_color_hex(0x16243D), 0);
+    lv_obj_set_style_bg_color(s_find_btn, C_FOCUS, LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(s_find_btn, 1, 0);
+    lv_obj_set_style_border_color(s_find_btn, C_BORDER, 0);
+    focus_style(s_find_btn, LV_RADIUS_CIRCLE);
+    lv_obj_t *lens = lv_obj_create(s_find_btn);            /* magnifier: a ring and a handle */
+    lv_obj_remove_style_all(lens);
+    lv_obj_remove_flag(lens, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_pos(lens, 13, 6);
+    lv_obj_set_size(lens, 13, 13);
+    lv_obj_set_style_radius(lens, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(lens, 2, 0);
+    lv_obj_set_style_border_color(lens, C_DIM, 0);
+    static const lv_point_precise_t handle[] = { { 0, 0 }, { 5, 5 } };
+    lv_obj_t *hl = lv_line_create(s_find_btn);
+    lv_line_set_points(hl, handle, 2);
+    lv_obj_set_pos(hl, 23, 17);
+    lv_obj_set_style_line_width(hl, 3, 0);
+    lv_obj_set_style_line_rounded(hl, true, 0);
+    lv_obj_set_style_line_color(hl, C_DIM, 0);
+    lv_obj_t *ft = label(s_find_btn, &lv_font_montserrat_16, C_DIM, "Search apps");
+    lv_obj_set_pos(ft, 40, 5);
+    lv_obj_add_event_cb(s_find_btn, on_find_click, LV_EVENT_CLICKED, NULL);
     s_count = label(s_home, &lv_font_montserrat_16, lv_color_hex(0x6F8FC0), "");
     lv_obj_align(s_count, LV_ALIGN_TOP_RIGHT, -22, 103);
     lv_obj_add_flag(s_count, LV_OBJ_FLAG_CLICKABLE);
@@ -1377,6 +1442,7 @@ static void build_settings(void)
     lv_obj_set_style_outline_pad(s_update_btn, 3, LV_STATE_FOCUSED);
     lv_obj_center(label(s_update_btn, &lv_font_montserrat_20, C_TEXT, LV_SYMBOL_DOWNLOAD " Update"));
     lv_obj_add_event_cb(s_update_btn, on_upd_check, LV_EVENT_CLICKED, NULL);
+    s_upd_dot = red_dot(s_update_btn, 16);
 
     lv_obj_t *info = panel(s_settings, 24, 336, 752 + s_dx, 136 + s_dy, 14);
     s_info = label(info, &lv_font_montserrat_14, C_DIM, "");
@@ -1519,6 +1585,121 @@ static void folder_leave(void)
     s_folder[0] = 0;
     home_show(path);
 }
+
+/* ── Search: every app on the card, in any folder, by a part of its name ──
+ * Opened from the pill in the Applications row, or by typing a letter on a USB
+ * keyboard on the home screen. The list follows the text; Enter starts the
+ * focused (or first) result. */
+
+static lv_obj_t *s_find_scr, *s_find_text, *s_find_grid, *s_find_note, *s_find_back;
+
+static bool name_has(const char *name, const char *q)
+{
+    size_t n = strlen(q);
+    if (!n) return true;
+    for (const char *p = name; *p; p++)
+        if (!strncasecmp(p, q, n)) return true;
+    return false;
+}
+
+static void find_update(void)
+{
+    if (!s_find_scr) return;
+    const char *q = lv_textarea_get_text(s_find_text);
+    if (s_focused) lv_obj_remove_state(s_focused, LV_STATE_FOCUSED);
+    focus_clear_list();
+    lv_obj_clean(s_find_grid);
+    int n = 0;
+    for (int i = -1; i < s_napps; i++) {
+        app_entry_t *e = i < 0 ? &s_store_tile : &s_apps[i];
+        if (e->is_folder || !name_has(e->name, q)) continue;
+        focus_add(app_tile(s_find_grid, e, false));
+        n++;
+    }
+    if (!q[0]) lv_label_set_text_fmt(s_find_note, "%d apps", n);
+    else if (n) lv_label_set_text_fmt(s_find_note, "%d found", n);
+    else lv_label_set_text(s_find_note, "No app matches");
+    focus_add(s_find_back);
+    lv_obj_scroll_to_y(s_find_grid, 0, LV_ANIM_OFF);
+    focus_set(n ? s_focusable[0] : NULL);           /* Enter starts the first one */
+}
+
+static void find_close(void)
+{
+    if (s_focused) lv_obj_remove_state(s_focused, LV_STATE_FOCUSED);
+    lv_screen_load(s_home);
+    s_focused = s_find_btn;                         /* home_focus_list keeps it */
+    home_focus_list();
+}
+
+/* Enter / the keyboard's OK: the focused result, else the first */
+static void find_go(void)
+{
+    lv_obj_t *t = s_focused && lv_obj_get_parent(s_focused) == s_find_grid ? s_focused
+                : lv_obj_get_child_count(s_find_grid) ? lv_obj_get_child(s_find_grid, 0) : NULL;
+    if (t) lv_obj_send_event(t, LV_EVENT_CLICKED, NULL);
+}
+
+static void on_find_changed(lv_event_t *ev) { find_update(); }
+static void on_find_back(lv_event_t *ev)    { find_close(); }
+
+static void on_find_key(lv_event_t *ev)
+{
+    if (lv_event_get_code(ev) == LV_EVENT_READY) find_go();
+    else find_close();
+}
+
+static void build_find(void)
+{
+    int h = 480 + s_dy;
+    int rows = 1 + (s_dy + 40) / 134;               /* result rows: more on a taller screen */
+    int grid_h = rows * 134 + 8;
+    s_find_scr = lv_obj_create(NULL);
+    lv_obj_remove_flag(s_find_scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(s_find_scr, C_BG_TOP, 0);
+    lv_obj_set_style_bg_grad_color(s_find_scr, C_BG_BOTTOM, 0);
+    lv_obj_set_style_bg_grad_dir(s_find_scr, LV_GRAD_DIR_VER, 0);
+    s_find_back = wifi_button(s_find_scr, 16, 12, 56, LV_SYMBOL_LEFT, on_find_back);
+    s_find_text = lv_textarea_create(s_find_scr);
+    lv_obj_set_pos(s_find_text, 88, 8);
+    lv_obj_set_size(s_find_text, 540 + s_dx, 52);
+    lv_textarea_set_one_line(s_find_text, true);
+    lv_textarea_set_max_length(s_find_text, 31);
+    lv_textarea_set_placeholder_text(s_find_text, "Search apps");
+    lv_obj_set_style_text_font(s_find_text, &lv_font_montserrat_24, 0);
+    lv_obj_add_event_cb(s_find_text, on_find_changed, LV_EVENT_VALUE_CHANGED, NULL);
+    s_find_note = label(s_find_scr, &lv_font_montserrat_16, C_DIM, "");
+    lv_obj_set_pos(s_find_note, 644 + s_dx, 24);
+    s_find_grid = lv_obj_create(s_find_scr);
+    lv_obj_remove_style_all(s_find_grid);
+    lv_obj_set_pos(s_find_grid, 10, 66);
+    lv_obj_set_size(s_find_grid, 780 + s_dx, grid_h);
+    lv_obj_set_flex_flow(s_find_grid, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_style_pad_all(s_find_grid, 6, 0);
+    lv_obj_set_style_pad_column(s_find_grid, 4, 0);
+    lv_obj_set_style_pad_row(s_find_grid, 6, 0);
+    lv_obj_set_scroll_dir(s_find_grid, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_find_grid, LV_SCROLLBAR_MODE_ACTIVE);
+    lv_obj_t *kb = lv_keyboard_create(s_find_scr);
+    lv_obj_set_size(kb, 800 + s_dx, h - 66 - grid_h);
+    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_text_font(kb, &lv_font_montserrat_28, LV_PART_ITEMS);
+    lv_keyboard_set_textarea(kb, s_find_text);
+    lv_obj_add_event_cb(kb, on_find_key, LV_EVENT_READY, NULL);
+    lv_obj_add_event_cb(kb, on_find_key, LV_EVENT_CANCEL, NULL);
+}
+
+static void find_open(const char *text)
+{
+    if (!s_find_scr) build_find();
+    if (s_focused) lv_obj_remove_state(s_focused, LV_STATE_FOCUSED);
+    s_focused = NULL;
+    lv_textarea_set_text(s_find_text, text);
+    lv_screen_load(s_find_scr);
+    find_update();
+}
+
+static void on_find_click(lv_event_t *ev)   { find_open(""); }
 
 static void name_open(const char *title, const char *text, int mode)
 {
@@ -1952,6 +2133,48 @@ static void on_c6_download(lv_event_t *ev)
     lx_update_online_download_c6();
 }
 
+/* A launcher update waiting online: a red dot on the Settings gear and on its
+ * Update button. Checked quietly once Wi-Fi is up (after the Store's catalogue
+ * fetch), then every 12 hours; never while an app runs. */
+static bool s_bg_check;         /* the online check running is the quiet one */
+
+static void upd_dot_set(bool on)
+{
+    lv_obj_t *d[2] = { s_gear_dot, s_upd_dot };
+    for (int i = 0; i < 2; i++) {
+        if (!d[i]) continue;
+        if (on) lv_obj_remove_flag(d[i], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(d[i], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void upd_bg_tick(void)
+{
+    static int64_t up_since, next;
+    if (s_bg_check) {
+        lx_online_state_t st = lx_update_online_state();
+        if (st == LX_ONLINE_BUSY) return;
+        s_bg_check = false;
+        if (st == LX_ONLINE_AVAILABLE) upd_dot_set(true);
+        else if (st == LX_ONLINE_LATEST) upd_dot_set(false);
+        if (st == LX_ONLINE_FAILED) ESP_LOGW(TAG, "update check: %s", lx_update_online_error());
+        else ESP_LOGI(TAG, "update check: %s", st == LX_ONLINE_AVAILABLE ? lx_update_online_version() : "latest");
+        lx_update_online_reset();
+        return;
+    }
+    int64_t now = esp_timer_get_time();
+    if (lx_net_state() != LX_NET_CONNECTED) {
+        up_since = 0;
+        return;
+    }
+    if (!up_since) up_since = now;
+    if (now - up_since < 5000000 || now < next || s_upd_online || s_upd_box || s_c6_updating ||
+        lx_update_online_state() != LX_ONLINE_IDLE || lx_appstore_state() != LX_APPSTORE_IDLE) return;
+    next = now + 12LL * 3600 * 1000000;
+    s_bg_check = true;
+    lx_update_online_check();
+}
+
 static void on_upd_check(lv_event_t *ev)
 {
     if (c6_offer()) return;
@@ -1961,7 +2184,8 @@ static void on_upd_check(lv_event_t *ev)
     }
     s_upd_online = true;
     upd_box("Checking for updates...", false);
-    lx_update_online_check();
+    if (s_bg_check) s_bg_check = false;     /* the quiet check is running: follow it instead */
+    else lx_update_online_check();
 }
 
 static void upd_online_tick(void)
@@ -1975,6 +2199,7 @@ static void upd_online_tick(void)
         }
         break;
     case LX_ONLINE_AVAILABLE:
+        upd_dot_set(true);
         upd_close();
         snprintf(buf, sizeof(buf), "Install launcher %s?\nThis version: %s",
                  lx_update_online_version(), LX_LAUNCHER_VERSION);
@@ -1982,6 +2207,7 @@ static void upd_online_tick(void)
         lx_update_online_reset();
         break;
     case LX_ONLINE_LATEST:
+        upd_dot_set(false);
         s_upd_online = false;
         upd_close();
         lx_update_online_reset();
@@ -2174,6 +2400,20 @@ static void poll_keys(void)
                 }
                 continue;
             }
+            bool arrow = ev.code >= 0x4F && ev.code <= 0x52;
+            if (s_find_scr && lv_screen_active() == s_find_scr && !arrow) {   /* typing the search */
+                if (ev.code == 0x28 || ev.code == 0x58) find_go();
+                else if (ev.code == 0x2A) lv_textarea_delete_char(s_find_text);
+                else if (ev.code == 0x29) find_close();
+                else if (ev.text >= 32 && ev.text < 127) lv_textarea_add_char(s_find_text, ev.text);
+                continue;
+            }
+            if (lv_screen_active() == s_home && !s_menu && !s_crash_box && isalnum(ev.text) &&
+                lv_obj_get_child_count(lv_layer_top()) == 0) {
+                char first[2] = { (char)ev.text, 0 };      /* a letter on the home screen starts a search */
+                find_open(first);
+                continue;
+            }
             switch (ev.code) {
             case 0x52: dy = -1; break;
             case 0x51: dy = 1; break;
@@ -2219,6 +2459,8 @@ static void poll_keys(void)
             menu_close();
         } else if (back && lv_screen_active() == s_home && s_folder[0]) {
             folder_leave();
+        } else if (back && s_find_scr && lv_screen_active() == s_find_scr) {
+            find_close();
         } else if (back && lv_screen_active() == s_settings) {
             show_home();
         } else if (back && s_clk_scr && lv_screen_active() == s_clk_scr) {
@@ -2321,6 +2563,7 @@ static void home_task(void *arg)
         }
         uint32_t wait = lv_timer_handler();
         if (s_upd_online) upd_online_tick();
+        else upd_bg_tick();
         if (s_c6_updating) c6_tick();
         if (s_upd_go) upd_install();
         if (s_launch[0]) {
