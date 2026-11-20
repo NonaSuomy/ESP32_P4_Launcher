@@ -367,6 +367,9 @@ typedef struct {
 
 /* Analog inputs that are not part of a gamepad (INPT v2 analog()) */
 #define PAPP_ANALOG_PADDLE 0      /* Atari paddle pot: 0..65535 */
+#define PAPP_ANALOG_ACCEL_X 16    /* accelerometer, on boards that have one: 32768 = 0 g, 4096 per g, */
+#define PAPP_ANALOG_ACCEL_Y 17    /* the board's own axes. -1 on a board without, or a launcher before  */
+#define PAPP_ANALOG_ACCEL_Z 18    /* these were added. The first read may take a moment (it wakes the chip) */
 
 typedef struct {
     uint8_t  connected;

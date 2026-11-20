@@ -473,6 +473,7 @@ static void board_start(void)
 
 int lx_input_analog(int ch)
 {
+    if (ch >= PAPP_ANALOG_ACCEL_X && ch <= PAPP_ANALOG_ACCEL_Z) return bsp_analog_read(ch);   /* read when asked, not polled */
     return ch == PAPP_ANALOG_PADDLE ? s_paddle : -1;
 }
 
