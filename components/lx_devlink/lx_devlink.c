@@ -7,6 +7,7 @@
  * listening nothing is written, so the device never stalls on a full USB FIFO.
  */
 #include "lx_devlink.h"
+#include "hal/usb_serial_jtag_ll.h"
 #include "devlink_proto.h"
 #include "lx_app.h"
 #include "lx_common.h"
@@ -43,6 +44,7 @@ static const char *TAG = "devlink";
 static SemaphoreHandle_t s_tx_lock;
 static vprintf_like_t    s_orig_vprintf;
 static volatile int64_t  s_last_host_us = -HOST_ALIVE_US;
+static volatile bool     s_paused;    /* an app has USB-C (lx_usbd): nothing goes to the serial/JTAG unit */
 static uint8_t          *s_rx;        /* request payload  */
 static char             *s_tx;        /* response scratch */
 
@@ -55,7 +57,7 @@ static uint32_t s_put_size, s_put_crc, s_put_done, s_put_crc_run;
 
 static bool host_alive(void)
 {
-    return usb_serial_jtag_is_connected() &&
+    return !s_paused && usb_serial_jtag_is_connected() &&
            esp_timer_get_time() - s_last_host_us < HOST_ALIVE_US;
 }
 
@@ -81,7 +83,7 @@ static bool dl_send(uint8_t type, uint8_t flags, uint16_t seq,
     uint32_t crc = lx_crc32(0, hdr + 2, DL_HDR_SIZE - 2);
     crc = lx_crc32(crc, payload, len);
 
-    if (xSemaphoreTake(s_tx_lock, lock_to) != pdTRUE) return false;
+    if (s_paused || xSemaphoreTake(s_tx_lock, lock_to) != pdTRUE) return false;
     TickType_t to = pdMS_TO_TICKS(1000);
     bool ok = write_all(hdr, sizeof(hdr), to) &&
               (!len || write_all(payload, len, to)) &&
@@ -688,6 +690,30 @@ void lx_devlink_app_exited(const char *path, int code, bool forced,
     jcat(&j, ",\"code\":%d,\"forced\":%s,\"leaked_allocs\":%lu,\"leaked_files\":%lu}", code,
          forced ? "true" : "false", (unsigned long)leaked_allocs, (unsigned long)leaked_files);
     dl_send(DL_EVENT, 0, 0, j.buf, j.len, pdMS_TO_TICKS(200));
+}
+
+/* ── Pause ──────────────────────────────────────────────────────────────────
+ * While an app has USB-C as a device of its own (lx_usbd) the serial/JTAG unit is off the pins: anything
+ * queued for it can never leave, and its "TX FIFO empty" interrupt then fires without end (an interrupt
+ * storm, then the interrupt watchdog). So DevLink stops sending and the unit's interrupts are masked until
+ * the port comes back. */
+void lx_devlink_pause(bool pause)
+{
+    if (pause == s_paused) return;
+    if (pause) {
+        s_paused = true;
+        if (s_tx_lock && xSemaphoreTake(s_tx_lock, pdMS_TO_TICKS(1000)) == pdTRUE) {   /* no send mid-frame */
+            usb_serial_jtag_wait_tx_done(pdMS_TO_TICKS(50));
+            xSemaphoreGive(s_tx_lock);
+        }
+        usb_serial_jtag_ll_disable_intr_mask(USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY | USB_SERIAL_JTAG_INTR_SERIAL_OUT_RECV_PKT);
+        usb_serial_jtag_ll_clr_intsts_mask(USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY | USB_SERIAL_JTAG_INTR_SERIAL_OUT_RECV_PKT);
+    } else {
+        usb_serial_jtag_ll_clr_intsts_mask(USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY | USB_SERIAL_JTAG_INTR_SERIAL_OUT_RECV_PKT);
+        usb_serial_jtag_ll_ena_intr_mask(USB_SERIAL_JTAG_INTR_SERIAL_OUT_RECV_PKT | USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY);
+        s_last_host_us = -HOST_ALIVE_US;   /* the host says hello again before anything is sent */
+        s_paused = false;
+    }
 }
 
 /* ── Start ──────────────────────────────────────────────────────────────── */
