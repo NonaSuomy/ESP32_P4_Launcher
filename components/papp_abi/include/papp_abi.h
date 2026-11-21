@@ -832,6 +832,59 @@ typedef struct {
     int   (*set_name)(const char *name);                             /* GAP device name   */
 } papp_if_ble_t;
 
+/* ── USB host interface ─────────────────────────────────────────────────── */
+/* Raw access to devices on the board's USB host port, for devices the launcher's own input
+ * drivers do not take (programmers, microcontrollers in their bootloaders, serial adapters):
+ * open one, claim an interface, then control, bulk and interrupt transfers. The launcher's HID
+ * and XInput drivers keep their interfaces; an app claims only interfaces nobody else has.
+ * Everything blocks; transfers return the bytes moved or a PAPP_E_* code of NET (PAPP_E_IO: the
+ * device stalled or the transfer failed; PAPP_E_RESET: the device was unplugged; PAPP_E_EXIT
+ * as soon as the app is asked to exit). One transfer at a time per endpoint (a second caller on it
+ * waits); different endpoints run side by side, so a thread can wait on an IN endpoint while others
+ * write and send control requests. close() ends transfers still waiting (PAPP_E_RESET). Devices
+ * the app leaves open are closed when it exits. The port runs at full speed (12 Mbit/s). */
+
+#define PAPP_IF_USBH      PAPP_FOURCC('U', 'S', 'B', 'H')
+#define PAPP_IF_USBH_VER  1
+
+#define PAPP_USBH_MAX_DEVS 4             /* open at once                                */
+
+typedef struct papp_usb_dev papp_usb_dev_t;
+
+typedef struct {
+    uint8_t  addr;                       /* bus address: what open() takes              */
+    uint8_t  speed;                      /* 0 low, 1 full, 2 high                       */
+    uint16_t vid, pid, bcd_device;
+    uint8_t  dev_class, dev_subclass, dev_protocol;
+    uint8_t  num_interfaces;             /* in the active configuration                 */
+    char     manufacturer[32], product[48], serial[48];    /* ASCII, "" if none   */
+} papp_usb_info_t;
+
+typedef struct {
+    papp_iface_hdr_t hdr;
+    /* The devices on the bus now (up to max): the count, or PAPP_E_UNSUPPORTED (no USB host). */
+    int   (*list)(papp_usb_info_t *out, int max);
+    /* Bumps whenever a device arrives or leaves: poll it to notice either without listing. */
+    uint32_t (*generation)(void);
+    papp_usb_dev_t *(*open)(uint8_t addr, int *err);
+    void  (*close)(papp_usb_dev_t *d);                     /* releases what it claimed       */
+    int   (*info)(papp_usb_dev_t *d, papp_usb_info_t *out);
+    /* The active configuration descriptor, whole (copied up to len): its total length. */
+    int   (*config_descriptor)(papp_usb_dev_t *d, void *buf, size_t len);
+    int   (*claim)(papp_usb_dev_t *d, uint8_t interface, uint8_t alt);
+    int   (*release)(papp_usb_dev_t *d, uint8_t interface);
+    /* A control transfer on endpoint 0: data is read when bit 7 of type is set, else written. */
+    int   (*control)(papp_usb_dev_t *d, uint8_t type, uint8_t request, uint16_t value, uint16_t index,
+                     void *data, uint16_t len, uint32_t timeout_ms);
+    /* A bulk or interrupt transfer on a claimed interface's endpoint (bit 7: IN). An IN reads up
+     * to len bytes (a short packet ends it); timeout 0 waits for ever. */
+    int   (*transfer)(papp_usb_dev_t *d, uint8_t ep, void *data, size_t len, uint32_t timeout_ms);
+    /* After a stall or a timeout: the host's side of the endpoint flushed and its halt cleared.
+     * The device's halt is the app's to clear (CLEAR_FEATURE through control). */
+    int   (*clear_halt)(papp_usb_dev_t *d, uint8_t ep);
+    bool  (*gone)(papp_usb_dev_t *d);                      /* unplugged since it was opened  */
+} papp_if_usbh_t;
+
 /* ── Entry point ────────────────────────────────────────────────────────── */
 
 /* Provided by the SDK runtime (crt0), located at entry_off. */

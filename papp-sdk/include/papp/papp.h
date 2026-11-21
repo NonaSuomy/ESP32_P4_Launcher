@@ -218,6 +218,10 @@ const papp_if_net_t *papp_net(void);
  *   ble->adv_start(&a);    then wait_event() for CONNECTED / WRITE / SUBSCRIBE, notify() values */
 const papp_if_ble_t *papp_ble(void);
 
+/* The USB host interface (papp_abi.h has the calls): NULL on launchers without it; on boards
+ * without a USB host port its list() answers PAPP_E_UNSUPPORTED. */
+const papp_if_usbh_t *papp_usbh(void);
+
 #define PAPP_BLE_UUID16(v) { 2, { (uint8_t)((v) & 0xFF), (uint8_t)((v) >> 8) } }
 
 /* Advertising data: appends one AD structure to buf (31 bytes at most); false if it doesn't fit */
