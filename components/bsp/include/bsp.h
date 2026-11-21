@@ -26,6 +26,7 @@ extern "C" {
 #define BSP_CAP_USB_HOST  (1u << 6)
 #define BSP_CAP_BATTERY   (1u << 7)
 #define BSP_CAP_RTC       (1u << 8)
+#define BSP_CAP_KEYBOARD  (1u << 9)   /* a keyboard of the board's own may come and go: poll bsp_keyboard_read */
 
 typedef struct {
     const char *id;            /* "guition_p4_43"                       */
@@ -121,6 +122,12 @@ void      bsp_audio_volume(int percent);          /* 0 = mute                   
 esp_err_t bsp_buttons_init(void);
 uint32_t  bsp_buttons_read(void);                 /* BSP_BTN_* currently down     */
 int       bsp_analog_read(int ch);                /* 0..65535 (calibrated), -1 if absent */
+
+/* A keyboard of the board's own (BSP_CAP_KEYBOARD): keyboard reports as a USB boot
+ * keyboard sends them (the modifier byte, up to six HID usages held), oldest first. Returns 1 with the next
+ * report, 0 when none is waiting; *present says whether the keyboard is there. Polled from the input task every
+ * few ms, which is also when the board looks for it and reads its keys. Boards without one need not define it. */
+int       bsp_keyboard_read(bool *present, uint8_t *mods, uint8_t keys[6]);
 
 /* ── Real-time clock ───────────────────────────────────────────────────────
  * Keeps UTC (seconds since 1970) across power-off. bsp_rtc_init sets BSP_CAP_RTC

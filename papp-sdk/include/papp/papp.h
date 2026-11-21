@@ -133,6 +133,9 @@ void     papp_input_flush(void);
  *   int z = papp_input_analog(PAPP_ANALOG_ACCEL_Z);
  *   if (z >= 0) { float g = (z - 32768) / 4096.0f; ... }                    */
 int      papp_input_analog(int ch);
+/* Whether a keyboard is attached now (a USB keyboard, or one the board has of its own): an app can lay out
+ * on-screen keys only when there is none. False on a launcher too old to say. */
+bool     papp_input_keyboard(void);
 
 /* ── Threads ────────────────────────────────────────────────────────────────
  * NULL / false when the launcher has no THRD. cfg may be NULL (8 KB internal
