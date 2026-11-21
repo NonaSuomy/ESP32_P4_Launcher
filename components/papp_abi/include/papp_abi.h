@@ -721,11 +721,14 @@ typedef struct {
  * C6). The host starts on the first call and is shut down at teardown, with
  * advertising, scans, connections and the GATT table. Results use the
  * PAPP_E_* codes of NET (>= 0 success). Blocking calls take a timeout in ms
- * and return PAPP_E_EXIT as soon as the app is asked to exit. No pairing in
- * v1: characteristics are open. */
+ * and return PAPP_E_EXIT as soon as the app is asked to exit. v1 has no
+ * pairing: characteristics are open. v2 (launcher patch 11) adds pairing and
+ * bonds kept across runs, characteristics that need an encrypted link,
+ * descriptors, the GAP appearance and a static random address: enough for a
+ * HID over GATT keyboard. */
 
 #define PAPP_IF_BLE       PAPP_FOURCC('B', 'L', 'E', ' ')
-#define PAPP_IF_BLE_VER   1
+#define PAPP_IF_BLE_VER   2      /* v2: security, bonds, gatt_register2, appearance, random address */
 
 #define PAPP_BLE_MAX_CONN     3
 #define PAPP_BLE_MAX_SVCS     8
@@ -757,6 +760,7 @@ typedef struct {
 enum {
     PAPP_BLE_READ = 1, PAPP_BLE_WRITE = 2, PAPP_BLE_WRITE_NR = 4,     /* write without response */
     PAPP_BLE_NOTIFY = 8, PAPP_BLE_INDICATE = 16,
+    PAPP_BLE_READ_ENC = 32, PAPP_BLE_WRITE_ENC = 64,    /* v2: only on an encrypted link (a host pairs first) */
 };
 typedef struct {
     papp_ble_uuid_t uuid;
@@ -769,6 +773,39 @@ typedef struct {
     const papp_ble_chr_t *chrs;
     uint8_t               chr_count;
 } papp_ble_svc_t;
+
+/* v2: a characteristic with descriptors of fixed value (a HID Report Reference, 0x2908, say). */
+typedef struct {
+    papp_ble_uuid_t uuid;
+    uint8_t         value[8];
+    uint8_t         len;
+    uint8_t         flags;               /* PAPP_BLE_READ, optionally PAPP_BLE_READ_ENC */
+} papp_ble_dsc_t;
+typedef struct {
+    papp_ble_uuid_t       uuid;
+    uint16_t              flags;         /* PAPP_BLE_*                                  */
+    uint16_t              max_len;       /* value size, 1..512                          */
+    uint16_t             *handle;        /* filled in by gatt_register2 (value handle)  */
+    const papp_ble_dsc_t *dscs;
+    uint8_t               dsc_count;     /* up to 4                                     */
+} papp_ble_chr2_t;
+typedef struct {
+    papp_ble_uuid_t        uuid;
+    const papp_ble_chr2_t *chrs;
+    uint8_t                chr_count;
+} papp_ble_svc2_t;
+
+/* v2: pairing. Set before advertising; bonds are kept in the launcher's flash for later runs. */
+enum { PAPP_BLE_IO_DISPLAY_ONLY = 0, PAPP_BLE_IO_DISPLAY_YESNO, PAPP_BLE_IO_KEYBOARD_ONLY,
+       PAPP_BLE_IO_NONE, PAPP_BLE_IO_KEYBOARD_DISPLAY };
+typedef struct {
+    uint8_t io_cap;                      /* PAPP_BLE_IO_* (NONE: "Just Works")          */
+    uint8_t bond;                        /* keep the keys for the next connection      */
+    uint8_t mitm;
+    uint8_t sc;                          /* LE Secure Connections (else legacy pairing) */
+    uint8_t initiate;                    /* ask a central for encryption as soon as it
+                                          * connects (macOS waits to be asked)          */
+} papp_ble_sec_cfg_t;
 
 /* GATT client discovery */
 typedef struct {
@@ -791,6 +828,7 @@ enum {
     PAPP_BLE_EV_SUBSCRIBE,               /* server: conn, handle; code 0 off, 1 notify, 2 indicate */
     PAPP_BLE_EV_MTU,                     /* conn, code = new MTU                        */
     PAPP_BLE_EV_ADV_DONE,                /* advertising stopped (a central connected)  */
+    PAPP_BLE_EV_ENCRYPTED,               /* v2: conn; code 0 = encrypted, else the pairing failed (NimBLE status) */
 };
 typedef struct {
     uint8_t         type;
@@ -830,6 +868,16 @@ typedef struct {
     int   (*adv_start)(const papp_ble_adv_cfg_t *cfg);
     void  (*adv_stop)(void);
     int   (*set_name)(const char *name);                             /* GAP device name   */
+
+    /* v2 */
+    int   (*gatt_register2)(const papp_ble_svc2_t *svcs, int count);  /* as gatt_register, with descriptors */
+    int   (*security)(const papp_ble_sec_cfg_t *cfg);
+    int   (*set_appearance)(uint16_t appearance);                     /* GAP appearance (0x03C1 keyboard) */
+    /* Advertise and connect from this static random address (6 bytes, least significant first; the two top
+     * bits of a[5] set), or NULL for the board's public one. Before advertising. */
+    int   (*set_random_addr)(const uint8_t a[6]);
+    int   (*forget_bonds)(void);                                      /* every host forgotten */
+    int   (*bond_count)(void);
 } papp_if_ble_t;
 
 /* ── Entry point ────────────────────────────────────────────────────────── */

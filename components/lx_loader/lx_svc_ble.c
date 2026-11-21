@@ -20,6 +20,8 @@
 #include "lx_net.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_cpu.h"
+#include "esp_memory_utils.h"
 #include "esp_timer.h"
 #if LX_HOSTED_MAJOR >= 2
 #include "esp_hosted_misc.h"
@@ -43,6 +45,10 @@ void ble_transport_ll_deinit(void) {}
 #include "host/util/util.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+#include "host/ble_store.h"
+
+/* NimBLE's key store (ble_store_config.c); kept in NVS when CONFIG_BT_NIMBLE_NVS_PERSIST is on (patch 11) */
+void ble_store_config_init(void);
 
 static const char *TAG = "lx_svc_ble";
 
@@ -83,6 +89,15 @@ static conn_t            s_conns[PAPP_BLE_MAX_CONN];
 static struct ble_gatt_svc_def *s_svc_defs;
 static struct ble_gatt_chr_def *s_chr_defs;
 static ble_uuid_any_t          *s_uuids;
+#define MAX_DSC_PER_CHR 4
+static struct ble_gatt_dsc_def *s_dsc_defs;     /* v2: (MAX_DSC_PER_CHR + 1) per characteristic */
+static papp_ble_dsc_t          *s_dsc_vals;     /* their values (MAX_DSC_PER_CHR per characteristic) */
+
+/* v2: pairing, appearance, own address (the app's choices for this run) */
+static papp_ble_sec_cfg_t s_sec;                /* zero: no pairing, as v1 */
+static uint16_t           s_appearance;
+static bool               s_rand_set;
+static uint8_t            s_rand[6];
 static chr_t                    s_chrs[PAPP_BLE_MAX_CHRS];
 static int                      s_chr_count;
 
@@ -216,6 +231,7 @@ static void on_sync(void)
 {
     ble_hs_util_ensure_addr(0);
     ble_hs_id_infer_auto(0, &s_own_type);
+    if (s_rand_set && ble_hs_id_set_rnd(s_rand) == 0) s_own_type = BLE_OWN_ADDR_RANDOM;
     s_synced = true;
     xSemaphoreGive(s_sync_sem);
 }
@@ -240,6 +256,21 @@ static void table_free(void)
     heap_caps_free(s_svc_defs); s_svc_defs = NULL;
     heap_caps_free(s_chr_defs); s_chr_defs = NULL;
     heap_caps_free(s_uuids);    s_uuids = NULL;
+    heap_caps_free(s_dsc_defs); s_dsc_defs = NULL;
+    heap_caps_free(s_dsc_vals); s_dsc_vals = NULL;
+}
+
+/* The app's pairing choices into NimBLE's host configuration. */
+static void apply_security(void)
+{
+    ble_hs_cfg.sm_io_cap = s_sec.io_cap;
+    ble_hs_cfg.sm_bonding = s_sec.bond ? 1 : 0;
+    ble_hs_cfg.sm_mitm = s_sec.mitm ? 1 : 0;
+    ble_hs_cfg.sm_sc = s_sec.sc ? 1 : 0;
+    /* Which keys are exchanged when bonding: hosts drop a bond that leaves them out */
+    const uint8_t keys = s_sec.bond ? (BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID) : 0;
+    ble_hs_cfg.sm_our_key_dist = keys;
+    ble_hs_cfg.sm_their_key_dist = keys;
 }
 
 static void stop(void)
@@ -292,10 +323,11 @@ static bool start(void)
     }
     ble_hs_cfg.sync_cb = on_sync;
     ble_hs_cfg.reset_cb = on_reset;
-    ble_hs_cfg.sm_bonding = 0;
-    ble_hs_cfg.sm_mitm = 0;
-    ble_hs_cfg.sm_sc = 0;
+    apply_security();
+    ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+    ble_store_config_init();
     ble_svc_gap_init();
+    if (s_appearance) ble_svc_gap_device_appearance_set(s_appearance);
     ble_svc_gatt_init();
     if (s_svc_defs) {
         int rc = ble_gatts_count_cfg(s_svc_defs);
@@ -324,11 +356,46 @@ static bool start(void)
     return true;
 }
 
+/* NimBLE's key store lives in NVS (patch 11), and a flash write turns the cache off: a task whose stack is in
+ * PSRAM (every app thread's) must not be the one doing it. Starting the host loads the store, forgetting hosts
+ * erases it, so those run on a short-lived task with its stack in internal RAM. */
+typedef struct {
+    int (*fn)(void *);
+    void *arg;
+    int ret;
+    SemaphoreHandle_t done;
+} job_t;
+
+static void job_task(void *a)
+{
+    job_t *j = a;
+    j->ret = j->fn(j->arg);
+    xSemaphoreGive(j->done);
+    vTaskDelete(NULL);
+}
+
+static int on_internal_stack(int (*fn)(void *), void *arg)
+{
+    if (esp_ptr_in_dram((const void *)esp_cpu_get_sp())) return fn(arg);
+    job_t j = { .fn = fn, .arg = arg, .ret = 0, .done = xSemaphoreCreateBinary() };
+    if (!j.done) return fn(arg);
+    if (xTaskCreatePinnedToCore(job_task, "lx_ble_job", 8192, &j, 5, NULL, tskNO_AFFINITY) != pdPASS) {
+        vSemaphoreDelete(j.done);
+        return -1;
+    }
+    xSemaphoreTake(j.done, portMAX_DELAY);
+    vSemaphoreDelete(j.done);
+    return j.ret;
+}
+
+static int start_job(void *arg) { (void)arg; return start() ? 1 : 0; }
+static int restart_job(void *arg) { (void)arg; stop(); return start() ? 1 : 0; }
+
 static bool ensure(void)
 {
     if (s_running && s_synced) return true;
     xSemaphoreTake(s_life, portMAX_DELAY);
-    bool ok = start();
+    bool ok = on_internal_stack(start_job, NULL) == 1;
     xSemaphoreGive(s_life);
     return ok;
 }
@@ -386,6 +453,10 @@ static int gap_cb(struct ble_gap_event *ev, void *arg)
             e.code = (uint16_t)ev->connect.status;
             e.conn = PAPP_BLE_CONN_NONE;
         }
+        if (ev->connect.status == 0 && s_sec.initiate) {        /* v2: start pairing (or encryption, if bonded) */
+            int rc = ble_gap_security_initiate(h);
+            if (rc) ESP_LOGW(TAG, "security_initiate %d", rc);
+        }
         if (arg && (uint32_t)(uintptr_t)arg == s_conn_seq) {    /* our connect() */
             s_conn_status = ev->connect.status;
             s_conn_handle = h;
@@ -437,6 +508,16 @@ static int gap_cb(struct ble_gap_event *ev, void *arg)
     case BLE_GAP_EVENT_MTU:
         post_simple(PAPP_BLE_EV_MTU, ev->mtu.conn_handle, 0, ev->mtu.value);
         return 0;
+    case BLE_GAP_EVENT_ENC_CHANGE:
+        if (ev->enc_change.status) ESP_LOGW(TAG, "pairing failed on %u: status %d", ev->enc_change.conn_handle, ev->enc_change.status);
+        post_simple(PAPP_BLE_EV_ENCRYPTED, ev->enc_change.conn_handle, 0, (uint16_t)ev->enc_change.status);
+        return 0;
+    case BLE_GAP_EVENT_REPEAT_PAIRING: {
+        /* A host we have keys for pairs again (it lost its own): forget ours and let it */
+        struct ble_gap_conn_desc d;
+        if (ble_gap_conn_find(ev->repeat_pairing.conn_handle, &d) == 0) ble_store_util_delete_peer(&d.peer_id_addr);
+        return BLE_GAP_REPEAT_PAIRING_RETRY;
+    }
     default:
         return 0;
     }
@@ -479,15 +560,62 @@ static int chr_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt 
     }
 }
 
+static int dsc_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    (void)conn; (void)attr;
+    const papp_ble_dsc_t *d = (const papp_ble_dsc_t *)arg;
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_DSC || !d) return BLE_ATT_ERR_UNLIKELY;
+    return os_mbuf_append(ctxt->om, d->value, d->len) ? BLE_ATT_ERR_INSUFFICIENT_RES : 0;
+}
+
+static uint16_t chr_flags(uint16_t f)
+{
+    return (f & PAPP_BLE_READ ? BLE_GATT_CHR_F_READ : 0) |
+           (f & PAPP_BLE_WRITE ? BLE_GATT_CHR_F_WRITE : 0) |
+           (f & PAPP_BLE_WRITE_NR ? BLE_GATT_CHR_F_WRITE_NO_RSP : 0) |
+           (f & PAPP_BLE_NOTIFY ? BLE_GATT_CHR_F_NOTIFY : 0) |
+           (f & PAPP_BLE_INDICATE ? BLE_GATT_CHR_F_INDICATE : 0) |
+           (f & PAPP_BLE_READ_ENC ? BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC : 0) |
+           (f & PAPP_BLE_WRITE_ENC ? BLE_GATT_CHR_F_WRITE_ENC : 0);
+}
+
+static int register_table(const papp_ble_svc2_t *svcs, int count);
+
+/* v1: the same table without descriptors */
 static int ble_gatt_register(const papp_ble_svc_t *svcs, int count)
+{
+    if (!svcs || count <= 0 || count > PAPP_BLE_MAX_SVCS) return PAPP_E_ARG;
+    papp_ble_svc2_t s2[PAPP_BLE_MAX_SVCS];
+    static papp_ble_chr2_t c2[PAPP_BLE_MAX_CHRS];
+    int n = 0;
+    for (int s = 0; s < count; s++) {
+        if (!svcs[s].chrs || n + svcs[s].chr_count > PAPP_BLE_MAX_CHRS) return svcs[s].chrs ? PAPP_E_LIMIT : PAPP_E_ARG;
+        s2[s].uuid = svcs[s].uuid;
+        s2[s].chrs = &c2[n];
+        s2[s].chr_count = svcs[s].chr_count;
+        for (int k = 0; k < svcs[s].chr_count; k++, n++) {
+            const papp_ble_chr_t *c = &svcs[s].chrs[k];
+            c2[n] = (papp_ble_chr2_t){ .uuid = c->uuid, .flags = (uint16_t)(c->flags & 31), .max_len = c->max_len,
+                                       .handle = c->handle };
+        }
+    }
+    return register_table(s2, count);
+}
+
+static int ble_gatt_register2(const papp_ble_svc2_t *svcs, int count) { return register_table(svcs, count); }
+
+static int register_table(const papp_ble_svc2_t *svcs, int count)
 {
     if (!svcs || count <= 0 || count > PAPP_BLE_MAX_SVCS) return PAPP_E_ARG;
     int nchr = 0;
     for (int s = 0; s < count; s++) {
         if (!uuid_ok(&svcs[s].uuid) || !svcs[s].chrs || !svcs[s].chr_count) return PAPP_E_ARG;
         for (int k = 0; k < svcs[s].chr_count; k++) {
-            const papp_ble_chr_t *c = &svcs[s].chrs[k];
-            if (!uuid_ok(&c->uuid) || !c->flags || !c->max_len || c->max_len > 512) return PAPP_E_ARG;
+            const papp_ble_chr2_t *c = &svcs[s].chrs[k];
+            if (!uuid_ok(&c->uuid) || !c->flags || !c->max_len || c->max_len > 512 ||
+                c->dsc_count > MAX_DSC_PER_CHR || (c->dsc_count && !c->dscs)) return PAPP_E_ARG;
+            for (int j = 0; j < c->dsc_count; j++)
+                if (!uuid_ok(&c->dscs[j].uuid) || c->dscs[j].len > sizeof(c->dscs[j].value)) return PAPP_E_ARG;
         }
         nchr += svcs[s].chr_count;
     }
@@ -504,8 +632,10 @@ static int ble_gatt_register(const papp_ble_svc_t *svcs, int count)
     }
     s_svc_defs = heap_caps_calloc(count + 1, sizeof(*s_svc_defs), MALLOC_CAP_SPIRAM);
     s_chr_defs = heap_caps_calloc(nchr + count, sizeof(*s_chr_defs), MALLOC_CAP_SPIRAM);
-    s_uuids = heap_caps_calloc(nchr + count, sizeof(*s_uuids), MALLOC_CAP_SPIRAM);
-    if (!s_svc_defs || !s_chr_defs || !s_uuids) { table_free(); r = PAPP_E_NOMEM; goto out; }
+    s_uuids = heap_caps_calloc(nchr * (1 + MAX_DSC_PER_CHR) + count, sizeof(*s_uuids), MALLOC_CAP_SPIRAM);
+    s_dsc_defs = heap_caps_calloc(nchr * (MAX_DSC_PER_CHR + 1), sizeof(*s_dsc_defs), MALLOC_CAP_SPIRAM);
+    s_dsc_vals = heap_caps_calloc(nchr * MAX_DSC_PER_CHR, sizeof(*s_dsc_vals), MALLOC_CAP_SPIRAM);
+    if (!s_svc_defs || !s_chr_defs || !s_uuids || !s_dsc_defs || !s_dsc_vals) { table_free(); r = PAPP_E_NOMEM; goto out; }
     int ci = 0, di = 0, ui = 0;
     for (int s = 0; s < count; s++) {
         uuid_to_nimble(&svcs[s].uuid, &s_uuids[ui]);
@@ -513,7 +643,7 @@ static int ble_gatt_register(const papp_ble_svc_t *svcs, int count)
         s_svc_defs[s].uuid = &s_uuids[ui++].u;
         s_svc_defs[s].characteristics = &s_chr_defs[di];
         for (int k = 0; k < svcs[s].chr_count; k++, ci++, di++) {
-            const papp_ble_chr_t *c = &svcs[s].chrs[k];
+            const papp_ble_chr2_t *c = &svcs[s].chrs[k];
             chr_t *m = &s_chrs[ci];
             m->flags = c->flags;
             m->max_len = c->max_len;
@@ -525,17 +655,25 @@ static int ble_gatt_register(const papp_ble_svc_t *svcs, int count)
             d->access_cb = chr_access;
             d->arg = (void *)(intptr_t)ci;
             d->val_handle = &m->val_handle;
-            d->flags = (c->flags & PAPP_BLE_READ ? BLE_GATT_CHR_F_READ : 0) |
-                       (c->flags & PAPP_BLE_WRITE ? BLE_GATT_CHR_F_WRITE : 0) |
-                       (c->flags & PAPP_BLE_WRITE_NR ? BLE_GATT_CHR_F_WRITE_NO_RSP : 0) |
-                       (c->flags & PAPP_BLE_NOTIFY ? BLE_GATT_CHR_F_NOTIFY : 0) |
-                       (c->flags & PAPP_BLE_INDICATE ? BLE_GATT_CHR_F_INDICATE : 0);
+            d->flags = chr_flags(c->flags);
+            if (c->dsc_count) {
+                struct ble_gatt_dsc_def *dd = &s_dsc_defs[ci * (MAX_DSC_PER_CHR + 1)];
+                for (int j = 0; j < c->dsc_count; j++) {
+                    papp_ble_dsc_t *v = &s_dsc_vals[ci * MAX_DSC_PER_CHR + j];
+                    *v = c->dscs[j];
+                    uuid_to_nimble(&v->uuid, &s_uuids[ui]);
+                    dd[j].uuid = &s_uuids[ui++].u;
+                    dd[j].att_flags = BLE_ATT_F_READ | (v->flags & PAPP_BLE_READ_ENC ? BLE_ATT_F_READ_ENC : 0);
+                    dd[j].access_cb = dsc_access;
+                    dd[j].arg = v;
+                }
+                d->descriptors = dd;                                /* zeroed after the last: the terminator */
+            }
         }
         di++;                                                       /* zeroed terminator */
     }
     s_chr_count = nchr;
-    stop();                                                         /* the table goes in at start */
-    if (!start()) {
+    if (on_internal_stack(restart_job, NULL) != 1) {                /* the table goes in at start */
         table_free();
         r = lx_svc_exit_flag ? PAPP_E_EXIT : PAPP_E_UNSUPPORTED;
         goto out;
@@ -992,6 +1130,68 @@ static int ble_subscribe(papp_ble_conn_t c, uint16_t cccd, int mode, uint32_t ti
 
 /* ── Interface ──────────────────────────────────────────────────────────── */
 
+/* ── v2: pairing, appearance, own address ─────────────────────────────── */
+
+static int ble_security(const papp_ble_sec_cfg_t *cfg)
+{
+    if (!cfg || cfg->io_cap > PAPP_BLE_IO_KEYBOARD_DISPLAY) return PAPP_E_ARG;
+    SVC_ENTER();
+    s_sec = *cfg;
+    if (s_running) apply_security();               /* read by the host when a pairing starts */
+    SVC_LEAVE();
+    return PAPP_E_OK;
+}
+
+static int ble_set_appearance(uint16_t appearance)
+{
+    SVC_ENTER();
+    s_appearance = appearance;
+    if (s_running) ble_svc_gap_device_appearance_set(appearance);
+    SVC_LEAVE();
+    return PAPP_E_OK;
+}
+
+static int ble_set_random_addr(const uint8_t a[6])
+{
+    if (a && (a[5] & 0xC0) != 0xC0) return PAPP_E_ARG;   /* a static random address has its top two bits set */
+    SVC_ENTER();
+    int r = PAPP_E_OK;
+    s_rand_set = a != NULL;
+    if (a) memcpy(s_rand, a, 6);
+    if (s_running && s_synced) {
+        if (ble_gap_adv_active()) r = PAPP_E_LIMIT;
+        else if (a) r = ble_hs_id_set_rnd(s_rand) == 0 ? (s_own_type = BLE_OWN_ADDR_RANDOM, PAPP_E_OK) : PAPP_E_IO;
+        else ble_hs_id_infer_auto(0, &s_own_type);
+    }
+    SVC_LEAVE();
+    return r;
+}
+
+static int forget_job(void *arg) { (void)arg; return ble_store_clear() == 0 ? PAPP_E_OK : PAPP_E_IO; }
+
+static int count_job(void *arg)
+{
+    (void)arg;
+    int n = 0;
+    return ble_store_util_count(BLE_STORE_OBJ_TYPE_OUR_SEC, &n) == 0 ? n : PAPP_E_IO;
+}
+
+static int ble_forget_bonds(void)
+{
+    SVC_ENTER();
+    int r = ensure() ? on_internal_stack(forget_job, NULL) : PAPP_E_UNSUPPORTED;
+    SVC_LEAVE();
+    return r;
+}
+
+static int ble_bond_count(void)
+{
+    SVC_ENTER();
+    int r = ensure() ? on_internal_stack(count_job, NULL) : PAPP_E_UNSUPPORTED;
+    SVC_LEAVE();
+    return r;
+}
+
 const papp_if_ble_t lx_if_ble = {
     .hdr = { PAPP_IF_BLE, PAPP_IF_BLE_VER, sizeof(papp_if_ble_t) },
     .available = ble_available,
@@ -1013,6 +1213,12 @@ const papp_if_ble_t lx_if_ble = {
     .adv_start = ble_adv_start,
     .adv_stop = ble_adv_stop,
     .set_name = ble_set_name,
+    .gatt_register2 = ble_gatt_register2,
+    .security = ble_security,
+    .set_appearance = ble_set_appearance,
+    .set_random_addr = ble_set_random_addr,
+    .forget_bonds = ble_forget_bonds,
+    .bond_count = ble_bond_count,
 };
 
 void lx_svc_ble_init(void)
@@ -1036,6 +1242,9 @@ int lx_svc_ble_end_run(void)
     table_free();
     s_failed = false;                       /* the next app may try again */
     snprintf(s_name, sizeof(s_name), "%s", DEF_NAME);
+    memset(&s_sec, 0, sizeof(s_sec));               /* the next app starts from v1's defaults */
+    s_appearance = 0;
+    s_rand_set = false;
     xSemaphoreGive(s_life);
     if (s_evq) xQueueReset(s_evq);
     return was ? 1 : 0;
