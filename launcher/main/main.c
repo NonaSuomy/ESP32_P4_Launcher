@@ -85,6 +85,7 @@ static void sd_retry_task(void *arg)
 void app_main(void)
 {
     lx_devlink_early_init();
+    lx_lpram_claim();           /* before anything can land in the slow low-power RAM (#38) */
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         nvs_flash_erase();

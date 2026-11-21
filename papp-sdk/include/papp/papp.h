@@ -55,6 +55,8 @@ bool        papp_utc_time(int64_t *seconds);        /* Unix time (UTC); false: n
 
 /* ── Memory ─────────────────────────────────────────────────────────────── */
 void  *papp_alloc(size_t size, uint32_t caps, size_t align);   /* PAPP_MEM_* caps */
+/* PAPP_MEM_LPRAM: the P4's low-power RAM (about 30 KB, ~50x slower than SRAM), never handed out
+ * for any other request; NULL on launchers before 0.33. papp_mem_free_size(PAPP_MEM_LPRAM) = free. */
 void  *papp_realloc(void *ptr, size_t size);
 void   papp_free(void *ptr);
 size_t papp_mem_free_size(uint32_t caps);

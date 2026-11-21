@@ -169,13 +169,16 @@ typedef struct {
 /* ── MEM interface ──────────────────────────────────────────────────────── */
 
 #define PAPP_IF_MEM       PAPP_FOURCC('M', 'E', 'M', ' ')
-#define PAPP_IF_MEM_VER   2           /* v2: code_alloc / code_free / code_sync */
+#define PAPP_IF_MEM_VER   3           /* v2: code_alloc / code_free / code_sync; v3: PAPP_MEM_LPRAM */
 
 /* Abstract capabilities — mapped by the launcher, never ESP-IDF values. */
 #define PAPP_MEM_ANY      0u
 #define PAPP_MEM_FAST     (1u << 0)   /* internal SRAM                       */
 #define PAPP_MEM_DMA      (1u << 1)   /* usable by DMA / PPA (64 B aligned)  */
 #define PAPP_MEM_LARGE    (1u << 2)   /* PSRAM                               */
+#define PAPP_MEM_LPRAM    (1u << 3)   /* v3: the P4's low-power RAM, ~30 KB, about 50x slower than
+                                       * SRAM (uncached): only for data that is rarely touched. Never
+                                       * given out otherwise. Other caps are ignored; not DMA-capable. */
 
 typedef struct {
     papp_iface_hdr_t hdr;

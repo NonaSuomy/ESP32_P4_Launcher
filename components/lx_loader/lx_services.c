@@ -231,6 +231,12 @@ static uint32_t mem_idf_caps(uint32_t caps, size_t size)
 static void *mem_alloc(size_t size, uint32_t caps, size_t align)
 {
     SVC_ENTER();
+    if (caps & PAPP_MEM_LPRAM) {                /* only on request: slow, rarely-touched data */
+        void *lp = (caps & PAPP_MEM_DMA) ? NULL : lx_lpram_alloc(size, align);
+        track_add(lp);
+        SVC_LEAVE();
+        return lp;
+    }
     uint32_t c = mem_idf_caps(caps, size);
     if (caps & PAPP_MEM_DMA) {
         if (align < 64) align = 64;
@@ -252,9 +258,14 @@ static void *mem_realloc(void *ptr, size_t size)
     if (ptr && !track_remove(ptr)) {
         ESP_LOGW(TAG, "realloc of unknown pointer %p", ptr);
     }
-    uint32_t c = MALLOC_CAP_8BIT | (size >= 1024 ? MALLOC_CAP_SPIRAM : 0);
-    void *p = heap_caps_realloc(ptr, size, c);
-    if (!p && size >= 1024) p = heap_caps_realloc(ptr, size, MALLOC_CAP_8BIT);
+    void *p;
+    if (lx_lpram_owns(ptr)) {                   /* stays in low-power RAM */
+        p = lx_lpram_realloc(ptr, size);
+    } else {
+        uint32_t c = MALLOC_CAP_8BIT | (size >= 1024 ? MALLOC_CAP_SPIRAM : 0);
+        p = heap_caps_realloc(ptr, size, c);
+        if (!p && size >= 1024) p = heap_caps_realloc(ptr, size, MALLOC_CAP_8BIT);
+    }
     if (p) track_add(p);
     else if (ptr && size) track_add(ptr);    /* realloc failed: old block still owned */
     SVC_LEAVE();
@@ -265,13 +276,15 @@ static void mem_free(void *ptr)
 {
     if (!ptr) return;
     SVC_ENTER();
-    if (track_remove(ptr)) heap_caps_free(ptr);
-    else ESP_LOGW(TAG, "free of unknown pointer %p ignored", ptr);
+    if (!track_remove(ptr)) ESP_LOGW(TAG, "free of unknown pointer %p ignored", ptr);
+    else if (lx_lpram_owns(ptr)) lx_lpram_free(ptr);
+    else heap_caps_free(ptr);
     SVC_LEAVE();
 }
 
 static size_t mem_free_size(uint32_t caps)
 {
+    if (caps & PAPP_MEM_LPRAM) return lx_lpram_free_size();
     return heap_caps_get_free_size(mem_idf_caps(caps, (caps & PAPP_MEM_FAST) ? 0 : 1024));
 }
 
@@ -704,8 +717,14 @@ void lx_svc_end_run(uint32_t *leaked_allocs, uint32_t *leaked_bytes, uint32_t *l
     uint32_t na = 0, nb = 0, nf = 0;
     for (uint32_t i = 0; i < s_ptr_cap; i++) {
         if (s_ptrs[i] > PTR_TOMB) {
-            nb += heap_caps_get_allocated_size((void *)s_ptrs[i]);
-            heap_caps_free((void *)s_ptrs[i]);
+            void *p = (void *)s_ptrs[i];
+            if (lx_lpram_owns(p)) {
+                nb += lx_lpram_size(p);
+                lx_lpram_free(p);
+            } else {
+                nb += heap_caps_get_allocated_size(p);
+                heap_caps_free(p);
+            }
             na++;
         }
     }

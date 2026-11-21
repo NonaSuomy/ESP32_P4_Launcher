@@ -9,6 +9,15 @@
 
 void lx_svc_init(lx_app_log_sink_t log_sink);
 
+/* Low-power RAM, kept out of the heap (lx_lpram.c): PAPP_MEM_LPRAM */
+void   lx_lpram_sweep(void);               /* before each app: pieces IDF gave back since */
+bool   lx_lpram_owns(const void *p);
+void  *lx_lpram_alloc(size_t size, size_t align);
+void  *lx_lpram_realloc(void *p, size_t size);
+void   lx_lpram_free(void *p);
+size_t lx_lpram_size(const void *p);
+size_t lx_lpram_free_size(void);
+
 /* Interface registry lookup: NULL if the id is unknown or too old. */
 const papp_iface_hdr_t *lx_svc_find(uint32_t id, uint16_t min_version);
 

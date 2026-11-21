@@ -28,6 +28,9 @@ components/papp_abi/      papp_abi.h — .papp v2 format + interfaces (shared wi
 components/lx_loader/     App Manager: loader, relocation, imports, services (SYS/MEM/FS/DISP/AUDI/INPT/THRD/UI/NET/BLE), teardown;
                           MEM v2 code_alloc/code_free/code_sync = executable PSRAM for JITs (64 KB blocks mapped a second time
                           with EXEC; esp_mmu_map runs on an internal-stack helper task, it disables the caches);
+                          lx_lpram.c = the P4's LP SRAM (0x5010xxxx, ~50x slower, IDF puts it in the heap as internal RAM): taken
+                          out of the heap at boot and before each app (IDF's start-up holds some: on the Guition boards the main
+                          task's stack), kept as private heaps for MEM v3 PAPP_MEM_LPRAM only (#38); never FAST memory or a stack;
                           NET (lx_svc_net.c) = Wi-Fi, sockets, TLS, HTTP(S) for apps: the first call holds the radio
                           for the run (lx_net_app_hold), every wait gives up on exit, teardown closes sockets and rejoins the saved network;
                           BLE (lx_svc_ble.c) = NimBLE on the P4, controller on the C6 over esp_hosted (VHCI): the host

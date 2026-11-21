@@ -56,10 +56,18 @@ bool        papp_utc_time(int64_t *seconds)
     return SYS->hdr.version >= 3 && SYS->utc_time(seconds);
 }
 
-void  *papp_alloc(size_t size, uint32_t caps, size_t align) { return MEM->alloc(size, caps, align); }
+void  *papp_alloc(size_t size, uint32_t caps, size_t align)
+{
+    if ((caps & PAPP_MEM_LPRAM) && MEM->hdr.version < 3) return NULL;     /* an older launcher would give other memory */
+    return MEM->alloc(size, caps, align);
+}
 void  *papp_realloc(void *ptr, size_t size)                 { return MEM->realloc(ptr, size); }
 void   papp_free(void *ptr)                                 { MEM->free(ptr); }
-size_t papp_mem_free_size(uint32_t caps)                    { return MEM->free_size(caps); }
+size_t papp_mem_free_size(uint32_t caps)
+{
+    if ((caps & PAPP_MEM_LPRAM) && MEM->hdr.version < 3) return 0;
+    return MEM->free_size(caps);
+}
 void  *papp_code_alloc(size_t size)        { return MEM->hdr.version >= 2 ? MEM->code_alloc(size) : NULL; }
 void   papp_code_free(void *code)          { if (MEM->hdr.version >= 2) MEM->code_free(code); }
 int    papp_code_sync(void *code, size_t size)

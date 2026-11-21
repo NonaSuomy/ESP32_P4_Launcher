@@ -383,6 +383,7 @@ esp_err_t lx_app_launch(const char *path, int argc, const char *const *argv,
     if (s_state != LX_APP_IDLE)
         return fail(err, err_len, ESP_ERR_INVALID_STATE, "an app is already running");
 
+    lx_lpram_sweep();           /* low-power RAM IDF gave back (main task stack): never for the app's own memory */
     app_t *a = calloc(1, sizeof(*a));
     if (!a) return fail(err, err_len, ESP_ERR_NO_MEM, "out of memory");
     strlcpy(a->path, path, sizeof(a->path));
