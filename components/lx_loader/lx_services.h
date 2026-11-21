@@ -43,6 +43,8 @@ extern const papp_if_thrd_t lx_if_thrd;
 extern const papp_if_ui_t lx_if_ui;
 extern const papp_if_net_t lx_if_net;
 extern const papp_if_ble_t lx_if_ble;     /* only on boards with BLE (lx_svc_ble_present) */
+extern const papp_if_pwr_t lx_if_pwr;
+void lx_svc_pwr_end_run(void);              /* lx_svc_pwr.c: charging back on */
 
 /* NET bookkeeping (lx_svc_net.c) */
 void lx_svc_net_init(void);

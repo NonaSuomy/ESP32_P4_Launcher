@@ -26,6 +26,7 @@ extern "C" {
 #define BSP_CAP_USB_HOST  (1u << 6)
 #define BSP_CAP_BATTERY   (1u << 7)
 #define BSP_CAP_RTC       (1u << 8)
+#define BSP_CAP_CHARGE    (1u << 10)  /* the board can turn its battery's charging on and off: bsp_set_charge */
 
 typedef struct {
     const char *id;            /* "guition_p4_43"                       */
@@ -133,6 +134,18 @@ esp_err_t bsp_rtc_set(int64_t utc);
 /* Battery voltage in mV at its divider, -1 if the board can't measure it. Without a
  * cell fitted the value is meaningless: callers check it is in the range of a Li-ion. */
 int       bsp_battery_mv(void);
+
+/* ── Battery and charging (boards with BSP_CAP_BATTERY / BSP_CAP_CHARGE) ──────
+ * A reading of the battery: the whole pack, a cell, the current (positive = charging), and what the charger
+ * says. bsp_set_charge allows or stops charging. Boards without them need not define either (the launcher
+ * has weak versions that answer ESP_ERR_NOT_SUPPORTED). */
+typedef struct {
+    int  pack_mv, cell_mv, ma;
+    bool charging;            /* the charger says it is charging                 */
+    bool charge_enabled;      /* charging is allowed (bsp_set_charge)            */
+} bsp_power_t;
+esp_err_t bsp_power_read(bsp_power_t *out);
+esp_err_t bsp_set_charge(bool on);
 
 #ifdef __cplusplus
 }
