@@ -112,6 +112,11 @@ void      bsp_audio_volume(int percent);          /* 0 = mute                   
 #define BSP_BTN_RIGHT    (1u << 19)
 
 #define BSP_ANALOG_PADDLE 0
+/* An accelerometer, where the board has one: 32768 is 0 g, 4096 to the g, the board's own axes. Unlike the
+ * paddle these are read when asked for (bsp_analog_read may take a bus transaction), not polled. */
+#define BSP_ANALOG_ACCEL_X 16
+#define BSP_ANALOG_ACCEL_Y 17
+#define BSP_ANALOG_ACCEL_Z 18
 
 esp_err_t bsp_buttons_init(void);
 uint32_t  bsp_buttons_read(void);                 /* BSP_BTN_* currently down     */

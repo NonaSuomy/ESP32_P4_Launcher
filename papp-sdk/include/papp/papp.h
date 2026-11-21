@@ -124,8 +124,12 @@ bool     papp_input_key_down(uint16_t usage);                   /* HID usage id 
 uint16_t papp_input_modifiers(void);                            /* PAPP_MOD_*   */
 bool     papp_input_poll_event(papp_input_event_t *ev);         /* false: none  */
 void     papp_input_flush(void);
-/* Board analog inputs (PAPP_ANALOG_PADDLE): 0..65535, -1 if absent or the
- * launcher predates INPT v2. */
+/* Board analog inputs: 0..65535, -1 if absent or the launcher predates INPT v2.
+ * PAPP_ANALOG_PADDLE is a paddle's pot. PAPP_ANALOG_ACCEL_X/Y/Z are an accelerometer,
+ * on boards that have one (the M5Stack Tab5): 32768 is 0 g, 4096 to the g, the board's
+ * own axes. -1 on other boards and on launchers before these were added.
+ *   int z = papp_input_analog(PAPP_ANALOG_ACCEL_Z);
+ *   if (z >= 0) { float g = (z - 32768) / 4096.0f; ... }                    */
 int      papp_input_analog(int ch);
 
 /* ── Threads ────────────────────────────────────────────────────────────────
