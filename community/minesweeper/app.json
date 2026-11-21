@@ -3,5 +3,5 @@
   "description": "Minesweeper by touch: hold to flag, a safe first dig, three levels, best times. Made for the Tab5's 1280x720 screen",
   "category": "games",
   "license": "GPL-3.0-or-later",
-  "source": "https://github.com/djb-rh/tabulous5/tree/launcher-apps-1.0.0/launcher"
+  "source": "https://github.com/djb-rh/tabulous5/tree/launcher-apps-1.0.1/launcher"
 }
