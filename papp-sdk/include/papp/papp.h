@@ -52,6 +52,9 @@ const char *papp_board_id(void);
 uint32_t    papp_launcher_abi(void);
 bool        papp_local_time(papp_datetime_t *out);  /* false: clock not set, or older launcher */
 bool        papp_utc_time(int64_t *seconds);        /* Unix time (UTC); false: not set, or launcher < 0.27 */
+/* Bytes from the hardware random number generator (keys, nonces). False on a launcher without it (SYS v4):
+ * buf is then left as it was, and the app must not use it for anything secret. */
+bool        papp_random(void *buf, size_t len);
 
 /* ── Memory ─────────────────────────────────────────────────────────────── */
 void  *papp_alloc(size_t size, uint32_t caps, size_t align);   /* PAPP_MEM_* caps */

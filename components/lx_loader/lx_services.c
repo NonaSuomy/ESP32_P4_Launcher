@@ -14,6 +14,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include "esp_random.h"
 #include <strings.h>
 
 #include "esp_heap_caps.h"
@@ -202,6 +203,11 @@ static bool sys_utc_time(int64_t *seconds)
     return true;
 }
 
+static void sys_random(void *buf, size_t len)
+{
+    if (buf && len) esp_fill_random(buf, len);
+}
+
 static const papp_if_sys_t s_if_sys = {
     .hdr = { PAPP_IF_SYS, PAPP_IF_SYS_VER, sizeof(papp_if_sys_t) },
     .abi_version    = LX_ABI_VERSION,
@@ -213,6 +219,7 @@ static const papp_if_sys_t s_if_sys = {
     .board_id       = sys_board_id,
     .local_time     = sys_local_time,
     .utc_time       = sys_utc_time,
+    .random         = sys_random,
 };
 
 /* â”€â”€ MEM â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */

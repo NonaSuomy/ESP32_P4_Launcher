@@ -145,7 +145,7 @@ typedef struct {
 /* ── SYS interface ──────────────────────────────────────────────────────── */
 
 #define PAPP_IF_SYS       PAPP_FOURCC('S', 'Y', 'S', ' ')
-#define PAPP_IF_SYS_VER   3      /* v2: local_time; v3: utc_time */
+#define PAPP_IF_SYS_VER   4      /* v2: local_time; v3: utc_time; v4: random */
 
 typedef struct {
     int16_t year;
@@ -164,6 +164,10 @@ typedef struct {
     const char *(*board_id)(void);
     bool     (*local_time)(papp_datetime_t *out);   /* v2: false if the clock isn't set */
     bool     (*utc_time)(int64_t *seconds);          /* v3: Unix time (UTC); false if the clock isn't set */
+    /* v4: bytes from the chip's hardware random number generator (esp_fill_random): true random while
+     * a noise source feeds it, which ESP-IDF keeps on for chips without a radio of their own, such as the
+     * ESP32-P4 (its SAR ADC's noise). Good for keys and nonces. */
+    void     (*random)(void *buf, size_t len);
 } papp_if_sys_t;
 
 /* ── MEM interface ──────────────────────────────────────────────────────── */
