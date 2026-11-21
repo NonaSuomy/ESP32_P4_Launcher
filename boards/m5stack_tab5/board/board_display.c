@@ -72,10 +72,10 @@ board_panel_t board_panel(void)
     s_panel_type = BOARD_PANEL_ILI9881C;
     i2c_master_bus_handle_t bus = board_i2c_bus();
     if (!bus) return s_panel_type;
-    /* TRIAL FIX (p4-launcher-test): on a Tab5 with the ST7121 panel the touch chip at 0x55 did not answer a
-     * single probe on every other restart (it is still coming out of the reset the last boot left it in), and
-     * the board was then driven as an ILI9881C: black screen, no touch. So ask for up to 800 ms before
-     * deciding there is nothing at 0x55. A GT911 answers at once, so the original panel loses no time. */
+    /* On a Tab5 with the ST7121 panel the touch chip at 0x55 can miss a single probe straight after a restart
+     * (it is still coming out of the reset the last boot left it in), and the board would then be driven as an
+     * ILI9881C: black screen, no touch. So ask for up to 800 ms before deciding there is nothing at 0x55.
+     * A GT911 answers at once, so the original panel loses no time (#36). */
     bool st = false;
     for (int i = 0; i < 16 && !st; i++) {
         if (i2c_master_probe(bus, 0x5D, 50) == ESP_OK || i2c_master_probe(bus, 0x14, 50) == ESP_OK)

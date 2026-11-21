@@ -15,7 +15,8 @@ launcher/                 ESP-IDF project (factory app; main.c + home.c = LVGL h
 boards/<id>/board/        BSP implementation (component "board", pins esp_hosted for its C6); boards/<id>/sdkconfig.board.
                           guition_p4_43 (4.3" 480x800, image "launcher"; guition_p4_43_v3 = same sources built for
                           rev v3.x chips, BOARD_CHIP_V3 picks the id), guition_p4_7 (7" 1024x600), m5stack_tab5 (720x1280,
-                          power rails on two PI4IOE5V6408 I2C expanders, esp_hosted 1.4 for M5Stack's C6 firmware),
+                          power rails on two PI4IOE5V6408 I2C expanders, esp_hosted 1.4 for M5Stack's C6 firmware;
+                          BMI270 accelerometer = PAPP_ANALOG_ACCEL_X/Y/Z 16..18 via bsp_analog_read, started on an app's first read, board_imu.c),
                           waveshare_p4_rpi_dsi (RETIRED after 0.30.0, make_release.py RETIRED; example port: Waveshare dev kit + RPi Touch Display V1-style 800x480 panel: TC358762, ATTINY88
                           power/backlight at 0x45, FT5x06 touch; RGB565 shadow buffers converted to the RGB888 scan-out
                           by the PPA, docs/PORT_WAVESHARE_P4.md), elecrow_p4_aio (Elecrow All-in-one Starter Kit SEE00804D:
