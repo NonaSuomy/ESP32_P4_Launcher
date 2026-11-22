@@ -64,7 +64,7 @@ static const char *TAG = "home";
 #pragma GCC diagnostic ignored "-Wformat-truncation"
 
 #define LAST_APP_FILE "/sd/launcher/last_app.txt"
-#define MAX_APPS      64           /* apps + folders */
+#define APPS_STEP     64           /* the table grows by this many entries (apps + folders) */
 #define MAX_NAME      24           /* folder name */
 #define ICON          88
 
@@ -81,8 +81,9 @@ typedef struct {
     bool is_folder;
 } app_entry_t;
 
-static app_entry_t *s_apps;     /* MAX_APPS, in PSRAM: internal RAM is short at boot (7" board) */
+static app_entry_t *s_apps;     /* in PSRAM: internal RAM is short at boot (7" board) */
 static int s_napps;             /* entries in s_apps */
+static int s_apps_cap;          /* entries allocated; grows by APPS_STEP */
 static int s_ninstalled;        /* of them, apps */
 static char s_folder[MAX_NAME + 8];     /* folder on screen, "" = main page */
 static char s_files_app[160];   /* the Files app: opened by the SD card panel, not a tile */
@@ -173,6 +174,20 @@ static int app_cmp(const void *a, const void *b)
     return strcasecmp(x->name, y->name);
 }
 
+/* Makes room for one more entry; false when PSRAM is out (logged once) */
+static bool apps_room(void)
+{
+    if (s_napps < s_apps_cap) return true;
+    app_entry_t *n = heap_caps_realloc(s_apps, (s_apps_cap + APPS_STEP) * sizeof(app_entry_t), MALLOC_CAP_SPIRAM);
+    if (!n) {
+        ESP_LOGW(TAG, "no memory for more than %d apps and folders", s_apps_cap);
+        return false;
+    }
+    s_apps = n;
+    s_apps_cap += APPS_STEP;
+    return true;
+}
+
 /* Adds the app in dir; false if there is no .papp in it */
 static bool scan_app(const char *dir, const char *parent)
 {
@@ -180,7 +195,7 @@ static bool scan_app(const char *dir, const char *parent)
     DIR *sd = opendir(dir);
     if (!sd) return true;
     struct dirent *fe;
-    while (s_napps < MAX_APPS && (fe = readdir(sd))) {
+    while (apps_room() && (fe = readdir(sd))) {
         size_t n = strlen(fe->d_name);
         if (n < 6 || strcasecmp(fe->d_name + n - 5, ".papp") != 0) continue;
         app_entry_t *e = &s_apps[s_napps];
@@ -221,11 +236,11 @@ static void scan_dir(const char *base, const char *parent)
     DIR *d = opendir(base);
     if (!d) return;
     struct dirent *de;
-    while (s_napps < MAX_APPS && (de = readdir(d))) {
+    while (apps_room() && (de = readdir(d))) {
         if (de->d_name[0] == '.' || de->d_type != DT_DIR) continue;
         char dir[128];
         snprintf(dir, sizeof(dir), "%s/%s", base, de->d_name);
-        if (scan_app(dir, parent) || parent[0] || s_napps >= MAX_APPS) continue;
+        if (scan_app(dir, parent) || parent[0] || !apps_room()) continue;
         app_entry_t *e = &s_apps[s_napps++];        /* no app in it: a folder */
         memset(e, 0, sizeof(*e));
         e->is_folder = true;
@@ -280,8 +295,7 @@ static void scan_apps(void)
     community_folder();
     s_napps = s_ninstalled = 0;
     s_files_app[0] = 0;
-    if (!s_apps) s_apps = heap_caps_calloc(MAX_APPS, sizeof(app_entry_t), MALLOC_CAP_SPIRAM);
-    if (!s_apps) return;
+    if (!apps_room()) return;
     scan_dir(APPS_DIR, "");
     bool here = false;
     for (int i = 0; i < s_napps; i++) here |= s_apps[i].is_folder && strcmp(s_apps[i].name, s_folder) == 0;
