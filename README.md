@@ -327,8 +327,10 @@ Wi-Fi library (esp_hosted). The Wi-Fi screen shows both. When they differ, Setti
 **Update the Wi-Fi chip** after the launcher is up to date: it downloads the release's `c6_<version>.bin`
 (or takes `/sd/update/c6.bin` from the card), sends it to the chip in about 15 seconds and restarts the
 board. It only installs esp_hosted firmware for an ESP32-C6 at the launcher's version, and if anything
-fails the chip keeps its old firmware. The Guition boards support it; the Tab5 and the Waveshare
-(esp_hosted 1.4, their makers' firmware) don't. To build the image: `python tools/build_c6_fw.py`.
+fails the chip keeps its old firmware. The Guition boards and the Tab5 support it (a Tab5 from 0.34 on
+works with M5Stack's original C6 firmware too, but needs the update for BLE if an Arduino updater moved its C6
+to 2.x); the Waveshare 3.5" (esp_hosted 1.4, its maker's firmware) doesn't. To build the image:
+`python tools/build_c6_fw.py`.
 
 ## Folders
 
