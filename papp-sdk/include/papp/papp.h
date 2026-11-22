@@ -231,6 +231,8 @@ const papp_if_usbh_t *papp_usbh(void);
 
 /* The battery and charging (papp_abi.h has the calls): NULL on launchers without it. */
 const papp_if_pwr_t *papp_pwr(void);
+/* The USB HID device (papp_abi.h has the calls): NULL on launchers and boards without it. */
+const papp_if_hidd_t *papp_hidd(void);
 
 #define PAPP_BLE_UUID16(v) { 2, { (uint8_t)((v) & 0xFF), (uint8_t)((v) >> 8) } }
 

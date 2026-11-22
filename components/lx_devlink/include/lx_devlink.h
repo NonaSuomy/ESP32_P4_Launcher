@@ -18,6 +18,8 @@ extern "C" {
 /* First thing in app_main: keep the boot log for DL_BOOTLOG */
 void lx_devlink_early_init(void);
 esp_err_t lx_devlink_start(void);
+/* Stops (true) and restarts (false) DevLink while an app has USB-C as a device of its own (lx_usbd). */
+void lx_devlink_pause(bool pause);
 
 /* Counts changes to /sd/apps made over DevLink (put, rm, mkdir, rename): the home screen rescans */
 uint32_t lx_devlink_app_changes(void);

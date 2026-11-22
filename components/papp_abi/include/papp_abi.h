@@ -988,6 +988,46 @@ typedef struct {
     int   (*set_charge)(bool on);        /* PAPP_E_OK, or PAPP_E_UNSUPPORTED                    */
 } papp_if_pwr_t;
 
+/* ── HIDD interface ─────────────────────────────────────────────────────── */
+/* The board's USB device port (the Tab5's USB-C) as a USB HID device of the app's making: a keyboard, a
+ * mouse, media keys, under one HID interface with the app's report descriptor. start() takes the port from
+ * the launcher's own USB link (DevLink, the USB serial/JTAG unit), which is gone from the computer until
+ * stop() or the app's end, when the launcher takes the port back. Reports are queued and go out one per USB
+ * frame in order, so a press and its release are never merged. */
+
+#define PAPP_IF_HIDD      PAPP_FOURCC('H', 'I', 'D', 'D')
+#define PAPP_IF_HIDD_VER  1
+
+typedef struct {
+    const char    *manufacturer;         /* NULL: "P4 Launcher"                            */
+    const char    *product;              /* NULL: the app's name                           */
+    uint16_t       vid, pid;             /* 0: Espressif's 0x303A and a development PID   */
+    const uint8_t *report_desc;          /* copied; up to 512 bytes                        */
+    uint16_t       report_desc_len;
+    uint8_t        boot_keyboard_id;     /* the report ID that is a boot keyboard (BIOS,
+                                          * KVMs): the interface says so, and in boot
+                                          * protocol that report goes without its ID; 0 none */
+} papp_hidd_cfg_t;
+
+enum {                                   /* state()                                      */
+    PAPP_HIDD_RUNNING = 1,               /* the port is the app's                          */
+    PAPP_HIDD_MOUNTED = 2,               /* a host has set it up                           */
+    PAPP_HIDD_SUSPENDED = 4,             /* the host sleeps (or the cable has no data)     */
+    PAPP_HIDD_BOOT = 8,                  /* the host asked for boot protocol               */
+};
+
+typedef struct {
+    papp_iface_hdr_t hdr;
+    int     (*start)(const papp_hidd_cfg_t *cfg);   /* PAPP_E_OK, ARG, UNSUPPORTED, NOMEM   */
+    void    (*stop)(void);
+    /* Queues a report (len <= 16). wait_ms: it goes no sooner than that long after the one
+     * before it (macOS ignores a Caps Lock tap shorter than about 0.1 s). PAPP_E_LIMIT: the
+     * queue is full (the host is not reading); nothing is queued while no host has set it up. */
+    int     (*report)(uint8_t id, const void *data, uint8_t len, uint16_t wait_ms);
+    uint8_t (*leds)(void);                           /* the host's keyboard LEDs (Caps = 2)  */
+    int     (*state)(void);                          /* PAPP_HIDD_* bits                     */
+} papp_if_hidd_t;
+
 /* ── Entry point ────────────────────────────────────────────────────────── */
 
 /* Provided by the SDK runtime (crt0), located at entry_off. */

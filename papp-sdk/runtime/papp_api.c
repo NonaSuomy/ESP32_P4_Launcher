@@ -18,6 +18,7 @@ papp_import_t __papp_imports[] = {
     { PAPP_IF_BLE, 1, PAPP_IMPORT_OPTIONAL, 0 },             /* launcher 0.29+, boards with BLE */
     { PAPP_IF_USBH, 1, PAPP_IMPORT_OPTIONAL, 0 },            /* boards with a USB host port */
     { PAPP_IF_PWR, 1, PAPP_IMPORT_OPTIONAL, 0 },             /* battery and charging */
+    { PAPP_IF_HIDD, 1, PAPP_IMPORT_OPTIONAL, 0 },            /* USB HID device on the device port */
 };
 
 #define SYS ((const papp_if_sys_t *)__papp_imports[0].iface)
@@ -32,6 +33,7 @@ papp_import_t __papp_imports[] = {
 #define BLE  ((const papp_if_ble_t *)__papp_imports[9].iface)
 #define USBH ((const papp_if_usbh_t *)__papp_imports[10].iface)
 #define PWR  ((const papp_if_pwr_t *)__papp_imports[11].iface)
+#define HIDD ((const papp_if_hidd_t *)__papp_imports[12].iface)
 
 const papp_if_sys_t *papp_if_sys(void) { return SYS; }
 const papp_if_mem_t *papp_if_mem(void) { return MEM; }
@@ -270,3 +272,4 @@ const papp_if_net_t *papp_net(void) { return NET; }
 const papp_if_ble_t *papp_ble(void) { return BLE; }
 const papp_if_usbh_t *papp_usbh(void) { return USBH; }
 const papp_if_pwr_t *papp_pwr(void) { return PWR; }
+const papp_if_hidd_t *papp_hidd(void) { return HIDD; }
