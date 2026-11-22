@@ -2367,9 +2367,24 @@ static void dim_tick(void)
     bsp_display_backlight(idle && s_brightness > DIM_PERCENT ? DIM_PERCENT : s_brightness);
 }
 
+/* Back from an app, the home screen takes about a second to list the card and draw its tiles again, with the
+ * app's last picture (often its menu, "Exit" lit) still on the glass. A second tap or press made then, or a finger
+ * not yet lifted, must not start the tile that turns up under it: nothing counts until the grid has been drawn
+ * and a third of a second more, nor a touch that is already down then, until it lifts. */
+#define BACK_QUIET_US 300000
+static int64_t s_touch_quiet_until;
+static bool s_touch_wait_lift;
+static int s_back_draws;            /* lv_timer_handler calls still to go before the grid counts as drawn */
+
 static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
 {
     bsp_touch_point_t p[1];
+    if (s_touch_wait_lift) {
+        bool down = (bsp_info()->caps & BSP_CAP_TOUCH) && bsp_touch_read(p, 1) > 0;
+        if (!down && esp_timer_get_time() >= s_touch_quiet_until) s_touch_wait_lift = false;
+        data->state = LV_INDEV_STATE_RELEASED;
+        return;
+    }
     if ((bsp_info()->caps & BSP_CAP_TOUCH) && bsp_touch_read(p, 1) > 0) {
         data->point.x = p[0].x;
         data->point.y = p[0].y;
@@ -2550,9 +2565,16 @@ static void home_task(void *arg)
             lv_slider_set_value(s_vol_slider, s_volume, LV_ANIM_OFF);
             apply_settings();
             if (lv_screen_active() != s_home) lv_screen_load(s_home);
+            /* The home screen as it was, at once: listing the card again takes most of a second, and until
+             * something is drawn the app's last picture stays up, looking as if leaving it had not worked. */
+            lv_obj_invalidate(lv_screen_active());
+            lv_refr_now(NULL);
             s_focused = NULL;
             refresh_home();
             lv_obj_invalidate(lv_screen_active());
+            s_touch_quiet_until = INT64_MAX;    /* set once the grid is drawn, below */
+            s_touch_wait_lift = true;
+            s_back_draws = 3;
         }
         if (confirmed && !offered && !s_crash_box) {
             offered = true;
@@ -2560,7 +2582,8 @@ static void home_task(void *arg)
         }
         dim_tick();
         screenshot_tick();
-        if (s_map_step >= 0) map_tick();
+        if (s_touch_wait_lift && esp_timer_get_time() < s_touch_quiet_until) lx_input_flush();
+        else if (s_map_step >= 0) map_tick();
         else poll_keys();
         wifi_tick();
         store_tick();
@@ -2574,6 +2597,7 @@ static void home_task(void *arg)
             home_view(keep[0] ? keep : NULL);
         }
         uint32_t wait = lv_timer_handler();
+        if (s_back_draws && --s_back_draws == 0) s_touch_quiet_until = esp_timer_get_time() + BACK_QUIET_US;
         if (s_upd_online) upd_online_tick();
         else upd_bg_tick();
         if (s_c6_updating) c6_tick();
