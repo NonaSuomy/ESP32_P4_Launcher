@@ -126,6 +126,12 @@ Two rules keep this portable: apps only see the ABI, and the launcher core only 
   contact on D1-D3) moves to 1-bit and keeps working, shown in orange
 - Apps can ask for the chip revision (`papp_chip_rev`), so SIMD code picks the right encoding: v1.x and v3.x
   chips encode the P4's PIE instructions differently. The e3d 3D games use it: one .papp, SIMD on both
+- Apps can list folders, rename and delete them (FS v2), get hardware random bytes, talk to USB devices on the
+  host port (USBH), act as a USB keyboard or mouse on the board's USB-C (HIDD), and pair over BLE with bonds
+  kept on the SD card
+- M5Stack Tab5: the battery charges and shows in the status bar, the clip-on Tab5 Keyboard works as a launcher
+  keyboard, and Settings → Update offers the Wi-Fi chip's 2.12.13 firmware (needed for BLE on a C6 that an
+  Arduino updater moved to 2.x)
 - More than one board from one source tree: each board is a package under `boards/`, and apps never change
 - Compositor: an app draws a surface of any size, and the launcher scales and rotates it with the PPA, tear-free
 - Audio engine: up to 8 streams at any rate from 4 to 192 kHz, resampled and mixed
@@ -626,14 +632,19 @@ Include only `papp/papp.h`. The full API, with examples, is in
 
 | Interface | Version | What it gives you | Example calls |
 |---|---|---|---|
-| `SYS` | 4 | Logging, time, local time, UTC time, exit, board id, chip revision (v4: picks SIMD code, PIE on v1.x chips, xespv on v3.x) | `papp_log`, `papp_time_us`, `papp_local_time`, `papp_utc_time`, `papp_exit`, `papp_chip_rev` |
-| `MEM` | 1 | Tracked allocation from PSRAM, internal or DMA memory | `papp_alloc`, `papp_free` |
-| `FS` | 1 | Files, also reachable through stdio with `--libc` | `papp_fs()` |
-| `DISP` | 3 | Surfaces, scaling, tear-free present, zero-copy present, touch | `papp_disp_surface_create`, `papp_disp_present`, `papp_disp_present_ext` |
+| `SYS` | 5 | Logging, time, local time, UTC time, exit, board id, chip revision (v4: picks SIMD code, PIE on v1.x chips, xespv on v3.x), hardware random bytes (v5, also `getentropy`) | `papp_log`, `papp_time_us`, `papp_utc_time`, `papp_exit`, `papp_chip_rev`, `papp_random` |
+| `MEM` | 3 | Tracked allocation from PSRAM, internal or DMA memory; executable code memory for JITs (v2); the slow LP SRAM (v3) | `papp_alloc`, `papp_free`, `papp_code_alloc` |
+| `FS` | 2 | Files, also reachable through stdio with `--libc`; `stat`, `rename`, `rmdir` and folder listing (v2: `opendir`/`readdir`) | `papp_fs()`, `stat`, `opendir` |
+| `DISP` | 4 | Surfaces, scaling, tear-free present, zero-copy present, touch, PPA blits and fills (v4) | `papp_disp_surface_create`, `papp_disp_present`, `papp_disp_blit` |
 | `AUDI` | 1 | Push audio streams at any rate, mixed by the launcher | `papp_audio_open`, `papp_audio_write` |
-| `INPT` | 2 | Gamepads, keyboard, events, analog inputs | `papp_input_gamepad`, `papp_input_poll_event` |
+| `INPT` | 3 | Gamepads, keyboard, events, analog inputs, whether a keyboard is attached (v3) | `papp_input_gamepad`, `papp_input_poll_event`, `papp_input_keyboard` |
 | `THRD` | 1 | Up to 16 threads, plus mutexes, semaphores and queues | `papp_thread_create`, `papp_queue_send` |
-| `UI` | 3 | Content browser, message box, menu, volume overlay | `papp_ui_pick_file`, `papp_ui_menu`, `papp_ui_volume` |
+| `UI` | 4 | Content browser, message box, menu, volume overlay, Wi-Fi picker | `papp_ui_pick_file`, `papp_ui_menu`, `papp_ui_wifi` |
+| `NET` | 1 | Wi-Fi, sockets, TLS, HTTP(S) | `papp_net()` |
+| `BLE` | 2 | Bluetooth LE central and peripheral; pairing with bonds kept on the SD card, encrypted characteristics, descriptors (v2) | `papp_ble()` |
+| `USBH` | 1 | Raw USB host access: control, bulk and interrupt transfers to devices the launcher's pad drivers don't hold | `papp_usbh()` |
+| `PWR` | 1 | Battery voltage, current and charge; pause charging (Tab5) | `papp_pwr()` |
+| `HIDD` | 1 | The board's USB-C as the app's own USB HID device (keyboard, mouse); DevLink is away meanwhile | `papp_hidd()` |
 
 Interfaces are versioned independently. New functions are only ever appended and the version bumped, and a
 breaking change gets a new id, so older apps keep working. Interfaces can be required or optional: when an

@@ -16,7 +16,9 @@ boards/<id>/board/        BSP implementation (component "board", pins esp_hosted
                           guition_p4_43 (4.3" 480x800, image "launcher"; guition_p4_43_v3 = same sources built for
                           rev v3.x chips, BOARD_CHIP_V3 picks the id), guition_p4_7 (7" 1024x600; guition_p4_7_v3 = v3.x chip, which comes with
                           the 2026 "New Panel": BOARD_PANEL_NEW = other JD9165 table/timing, reset GPIO 0, C6 SDIO 10 MHz), m5stack_tab5 (720x1280,
-                          power rails on two PI4IOE5V6408 I2C expanders, esp_hosted 1.4 for M5Stack's C6 firmware;
+                          power rails on two PI4IOE5V6408 I2C expanders, esp_hosted 2.12.13 (Tab5 preset, C6 reset active high;
+                          runs M5Stack's 1.4.1 C6 firmware too, Settings > Update offers 2.12.13, #48); INA226 battery + charging (board_power.c,
+                          PWR interface); clip-on Tab5 Keyboard at 0x6D on I2C port 0, G0/G1 (board_keyboard.c, BSP_CAP_KEYBOARD);
                           BMI270 accelerometer = PAPP_ANALOG_ACCEL_X/Y/Z 16..18 via bsp_analog_read, started on an app's first read, board_imu.c),
                           waveshare_p4_rpi_dsi (RETIRED after 0.30.0, make_release.py RETIRED; example port: Waveshare dev kit + RPi Touch Display V1-style 800x480 panel: TC358762, ATTINY88
                           power/backlight at 0x45, FT5x06 touch; RGB565 shadow buffers converted to the RGB888 scan-out
@@ -36,9 +38,14 @@ components/lx_loader/     App Manager: loader, relocation, imports, services (SY
                           for the run (lx_net_app_hold), every wait gives up on exit, teardown closes sockets and rejoins the saved network;
                           BLE (lx_svc_ble.c) = NimBLE on the P4, controller on the C6 over esp_hosted (VHCI): the host
                           starts on the first call (gatt_register restarts it with the app's table) and stops at teardown;
-                          Guition boards, Tab5 and waveshare_p4_rpi_dsi (CONFIG_BT_* in their sdkconfig.board; on Tab5's esp_hosted 1.4
-                          the C6 runs its controller from boot, lx_svc_ble.c stubs the 2.x controller calls; waveshare_p4_rpi_dsi needs
-                          the release's C6 firmware), the slot is NULL on the Waveshare 3.5"
+                          Guition boards, Tab5 and waveshare_p4_rpi_dsi (CONFIG_BT_* in their sdkconfig.board; a C6 on 1.x firmware
+                          (stock Tab5) runs its controller from boot: lx_svc_ble.c skips the 2.x controller calls for it; waveshare_p4_rpi_dsi needs
+                          the release's C6 firmware), the slot is NULL on the Waveshare 3.5"; BLE v2 = pairing: bonds in RAM
+                          (NVS persist off everywhere), kept in /sd/config/ble_bonds.bin (loaded after the host syncs, saved after changes);
+                          FS v2 = stat/rename/rmdir/opendir (closed at teardown); SYS v5 = random; USBH (lx_svc_usbh.c) = raw USB host
+                          client; PWR (lx_svc_pwr.c) = battery, charging back on at teardown; HIDD (components/lx_usbd, TinyUSB pinned) =
+                          USB-C as the app's HID device: DevLink paused, the FS OTG takes PHY 0; a boot after a crash with it taken
+                          resets the USB units (RTC mark)
 components/fatfs/         copy of IDF 5.5.6's fatfs with exFAT on (FF_FS_EXFAT 1, + FF_USE_LABEL fix): overrides IDF's;
                           diskio_sdmmc.c: a 4-bit SD transfer that times out moves the card to 1-bit (CMD12 + ACMD6, no
                           re-init or controller reset: the C6 shares it) until reboot (v3.2 7" with bad D1-D3);
@@ -66,7 +73,7 @@ components/lx_input/      input manager: USB HID gamepads/keyboards, XInput (Xbo
                           SDcard/config/gamepads.txt, downloaded by the Store); NVS "padmap" = pre-0.23, read-only fallback
 components/lx_update/     self-update from /sd/update/launcher.bin + rollback confirm; online update (latest.json);
                           lx_appstore = app catalogue for the Store (apps.json on the "apps" release; icons cached in /sd/launcher/store)
-components/lx_net/        Wi-Fi station, NTP, time zone via the ESP32-C6 (esp_hosted 2.12.13 on the Guition boards and waveshare_p4_rpi_dsi, 1.4 on Tab5 and the Waveshare 3.5");
+components/lx_net/        Wi-Fi station, NTP, time zone via the ESP32-C6 (esp_hosted 2.12.13 on the Guition boards, Tab5 and waveshare_p4_rpi_dsi, 1.4 on the Waveshare 3.5");
                           lx_c6 = the C6's firmware: version (DevLink info c6_fw) and update from /sd/update/c6.bin or the release;
                           saved network = /sd/config/wifi.txt (ssid=/password= lines; NVS "net" = pre-0.24, moved to the card at boot)
                           join = all-channel scan, strongest AP of the SSID (mesh/repeaters share one); no address 20 s after joining = rejoin

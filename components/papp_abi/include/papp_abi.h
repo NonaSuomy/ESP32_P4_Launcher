@@ -828,7 +828,7 @@ typedef struct {
     uint8_t                chr_count;
 } papp_ble_svc2_t;
 
-/* v2: pairing. Set before advertising; bonds are kept in the launcher's flash for later runs. */
+/* v2: pairing. Set before advertising; bonds are kept on the SD card (/sd/config/ble_bonds.bin) for later runs. */
 enum { PAPP_BLE_IO_DISPLAY_ONLY = 0, PAPP_BLE_IO_DISPLAY_YESNO, PAPP_BLE_IO_KEYBOARD_ONLY,
        PAPP_BLE_IO_NONE, PAPP_BLE_IO_KEYBOARD_DISPLAY };
 typedef struct {
