@@ -201,9 +201,25 @@ typedef struct {
 /* ── FS interface ───────────────────────────────────────────────────────── */
 
 #define PAPP_IF_FS        PAPP_FOURCC('F', 'S', ' ', ' ')
-#define PAPP_IF_FS_VER    1
+#define PAPP_IF_FS_VER    2      /* v2: stat, rename, rmdir, directories */
 
 typedef struct papp_file papp_file_t;
+typedef struct papp_dir  papp_dir_t;
+
+typedef struct {
+    int64_t  size;                       /* bytes (0 for a directory)                */
+    int64_t  mtime;                      /* seconds since 1970, 0 if unknown        */
+    uint8_t  is_dir;
+    uint8_t  reserved[7];
+} papp_stat_t;
+
+typedef struct {
+    char     name[256];                  /* the entry's name, not its path          */
+    uint8_t  is_dir;
+    uint8_t  reserved[3];
+} papp_dirent_t;
+
+#define PAPP_FS_MAX_DIRS 8               /* open at once; closed with the app       */
 
 typedef struct {
     papp_iface_hdr_t hdr;
@@ -216,6 +232,13 @@ typedef struct {
     long    (*size)(const char *path);            /* -1 if missing */
     int     (*remove)(const char *path);
     int     (*mkdir)(const char *path);
+    /* v2. 0 on success, -1 on failure. */
+    int     (*stat)(const char *path, papp_stat_t *out);
+    int     (*rename)(const char *from, const char *to);
+    int     (*rmdir)(const char *path);                  /* empty directories only  */
+    papp_dir_t *(*opendir)(const char *path);            /* NULL: missing / no slot */
+    int     (*readdir)(papp_dir_t *d, papp_dirent_t *out);   /* 1 an entry, 0 the end ("." and ".." left out) */
+    void    (*closedir)(papp_dir_t *d);
 } papp_if_fs_t;
 
 /* ── DISP interface ─────────────────────────────────────────────────────── */

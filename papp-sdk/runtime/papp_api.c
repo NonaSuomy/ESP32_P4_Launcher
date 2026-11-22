@@ -8,7 +8,7 @@ __attribute__((section(".papp_imports"), used))
 papp_import_t __papp_imports[] = {
     { PAPP_IF_SYS, 1, PAPP_IMPORT_REQUIRED, 0 },     /* v2 papp_local_time, v3 papp_utc_time, v4 papp_chip_rev */
     { PAPP_IF_MEM, 1, PAPP_IMPORT_REQUIRED, 0 },          /* v2 code memory checked at call */
-    { PAPP_IF_FS,  PAPP_IF_FS_VER,  PAPP_IMPORT_OPTIONAL, 0 },
+    { PAPP_IF_FS,  1,  PAPP_IMPORT_OPTIONAL, 0 },             /* v2 (stat, rename, directories) checked at call */
     { PAPP_IF_DISP, 3, PAPP_IMPORT_OPTIONAL, 0 },             /* v3 present_ext; v4 blit checked at call */
     { PAPP_IF_AUDI, PAPP_IF_AUDI_VER, PAPP_IMPORT_OPTIONAL, 0 },
     { PAPP_IF_INPT, 1, PAPP_IMPORT_OPTIONAL, 0 },          /* v2 functions checked at call */

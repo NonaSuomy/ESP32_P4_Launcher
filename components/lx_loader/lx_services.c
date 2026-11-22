@@ -14,6 +14,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <unistd.h>
 #include <strings.h>
 
 #include "esp_heap_caps.h"
@@ -663,6 +664,88 @@ static int fs_mkdir(const char *path)
     return r;
 }
 
+/* FS v2: stat, rename, rmdir and directories (patch 7). Directories are tracked like files and
+ * closed at the end of the run. */
+static DIR *s_dirs[PAPP_FS_MAX_DIRS];
+
+static int fs_stat(const char *path, papp_stat_t *out)
+{
+    struct stat st;
+    SVC_ENTER();
+    int r = stat(path, &st);
+    if (r == 0 && out) {
+        memset(out, 0, sizeof(*out));
+        out->is_dir = S_ISDIR(st.st_mode);
+        out->size = out->is_dir ? 0 : (int64_t)st.st_size;
+        out->mtime = (int64_t)st.st_mtime;
+    }
+    SVC_LEAVE();
+    return r == 0 ? 0 : -1;
+}
+
+static int fs_rename(const char *from, const char *to)
+{
+    SVC_ENTER();
+    int r = rename(from, to);
+    SVC_LEAVE();
+    return r == 0 ? 0 : -1;
+}
+
+static int fs_rmdir(const char *path)
+{
+    SVC_ENTER();
+    int r = rmdir(path);
+    SVC_LEAVE();
+    return r == 0 ? 0 : -1;
+}
+
+static papp_dir_t *fs_opendir(const char *path)
+{
+    SVC_ENTER();
+    DIR *d = NULL;
+    int slot = -1;
+    for (int i = 0; i < PAPP_FS_MAX_DIRS && slot < 0; i++)
+        if (!s_dirs[i]) slot = i;
+    if (slot >= 0 && (d = opendir(path)) != NULL) s_dirs[slot] = d;
+    SVC_LEAVE();
+    return (papp_dir_t *)d;
+}
+
+static int dir_slot(papp_dir_t *d)
+{
+    for (int i = 0; d && i < PAPP_FS_MAX_DIRS; i++)
+        if (s_dirs[i] == (DIR *)d) return i;
+    return -1;
+}
+
+static int fs_readdir(papp_dir_t *d, papp_dirent_t *out)
+{
+    if (dir_slot(d) < 0 || !out) return -1;
+    SVC_ENTER();
+    int r = 0;
+    struct dirent *e;
+    while ((e = readdir((DIR *)d)) != NULL) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        memset(out, 0, sizeof(*out));
+        strlcpy(out->name, e->d_name, sizeof(out->name));
+        out->is_dir = e->d_type == DT_DIR;
+        r = 1;
+        break;
+    }
+    SVC_LEAVE();
+    return r;
+}
+
+static void fs_closedir(papp_dir_t *d)
+{
+    int i = dir_slot(d);
+    if (i < 0) return;
+    SVC_ENTER();
+    closedir(s_dirs[i]);
+    s_dirs[i] = NULL;
+    SVC_LEAVE();
+}
+
 static const papp_if_fs_t s_if_fs = {
     .hdr = { PAPP_IF_FS, PAPP_IF_FS_VER, sizeof(papp_if_fs_t) },
     .open   = fs_open,
@@ -674,6 +757,12 @@ static const papp_if_fs_t s_if_fs = {
     .size   = fs_size,
     .remove = fs_remove,
     .mkdir  = fs_mkdir,
+    .stat     = fs_stat,
+    .rename   = fs_rename,
+    .rmdir    = fs_rmdir,
+    .opendir  = fs_opendir,
+    .readdir  = fs_readdir,
+    .closedir = fs_closedir,
 };
 
 /* â”€â”€ Registry & run bookkeeping â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
@@ -746,6 +835,8 @@ void lx_svc_end_run(uint32_t *leaked_allocs, uint32_t *leaked_bytes, uint32_t *l
             na++;
         }
 
+    for (int i = 0; i < PAPP_FS_MAX_DIRS; i++)
+        if (s_dirs[i]) { closedir(s_dirs[i]); s_dirs[i] = NULL; nf++; }
     for (int i = 0; i < MAX_FILES; i++) {
         if (s_files[i]) {
             fclose(s_files[i]);
