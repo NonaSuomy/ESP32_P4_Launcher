@@ -145,7 +145,7 @@ typedef struct {
 /* ── SYS interface ──────────────────────────────────────────────────────── */
 
 #define PAPP_IF_SYS       PAPP_FOURCC('S', 'Y', 'S', ' ')
-#define PAPP_IF_SYS_VER   4      /* v2: local_time; v3: utc_time; v4: chip_rev */
+#define PAPP_IF_SYS_VER   5      /* v2: local_time; v3: utc_time; v4: chip_rev; v5: random */
 
 typedef struct {
     int16_t year;
@@ -168,6 +168,10 @@ typedef struct {
      * extension depends on it: v1.x chips have PIE (-march ..._xesppie), v3.x the re-encoded _xespv;
      * the same instructions with other encodings, so each faults on the other generation. */
     int      (*chip_rev)(void);
+    /* v5: bytes from the chip's hardware random number generator (esp_fill_random): true random while
+     * a noise source feeds it, which ESP-IDF keeps on for chips without a radio of their own, such as the
+     * ESP32-P4 (its SAR ADC's noise). Good for keys and nonces. */
+    void     (*random)(void *buf, size_t len);
 } papp_if_sys_t;
 
 /* ── MEM interface ──────────────────────────────────────────────────────── */

@@ -56,6 +56,9 @@ bool        papp_utc_time(int64_t *seconds);        /* Unix time (UTC); false: n
  * tell. SIMD code must match it: PIE (-march ..._xesppie) below 300, _xespv from 300 (other encodings
  * of the same instructions; either faults on the other generation). Unknown = use plain C. */
 int         papp_chip_rev(void);
+/* Bytes from the hardware random number generator (keys, nonces). False on a launcher without it (SYS v5, launcher < 0.34):
+ * buf is then left as it was, and the app must not use it for anything secret. */
+bool        papp_random(void *buf, size_t len);
 
 /* ── Memory ─────────────────────────────────────────────────────────────── */
 void  *papp_alloc(size_t size, uint32_t caps, size_t align);   /* PAPP_MEM_* caps */

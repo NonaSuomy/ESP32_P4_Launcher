@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <unistd.h>
+#include "esp_random.h"
 #include <strings.h>
 
 #include "esp_heap_caps.h"
@@ -211,6 +212,11 @@ static int sys_chip_rev(void)
     return ci.revision;              /* major * 100 + minor */
 }
 
+static void sys_random(void *buf, size_t len)
+{
+    if (buf && len) esp_fill_random(buf, len);
+}
+
 static const papp_if_sys_t s_if_sys = {
     .hdr = { PAPP_IF_SYS, PAPP_IF_SYS_VER, sizeof(papp_if_sys_t) },
     .abi_version    = LX_ABI_VERSION,
@@ -223,6 +229,9 @@ static const papp_if_sys_t s_if_sys = {
     .local_time     = sys_local_time,
     .utc_time       = sys_utc_time,
     .chip_rev       = sys_chip_rev,
+}
+
+    .random         = sys_random,
 };
 
 /* â”€â”€ MEM â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */

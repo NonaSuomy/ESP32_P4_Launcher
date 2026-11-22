@@ -290,6 +290,13 @@ int _fcntl(int fd, int cmd, int arg)  { return 0; }
 int fsync(int fd)                     { return 0; }                         /* writes go straight to the FS */
 int _kill(int pid, int sig)           { errno = EINVAL; return -1; }
 int _getpid(void)                     { return 1; }
+/* getentropy(): the hardware random number generator (SYS v5), for libraries that ask the C library. */
+int getentropy(void *buf, size_t len)
+{
+    if (len > 256) { errno = EIO; return -1; }
+    return papp_random(buf, len) ? 0 : (errno = ENOSYS, -1);
+}
+
 int mkdir(const char *path, mode_t m) { return papp_fs() && papp_fs()->mkdir(path) == 0 ? 0 : -1; }
 
 int _gettimeofday(struct timeval *tv, void *tz)

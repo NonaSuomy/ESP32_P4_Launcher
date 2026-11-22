@@ -51,6 +51,13 @@ bool        papp_local_time(papp_datetime_t *out)
     return SYS->hdr.version >= 2 && SYS->local_time(out);
 }
 
+bool papp_random(void *buf, size_t len)
+{
+    if (SYS->hdr.version < 5 || !SYS->random) return false;
+    SYS->random(buf, len);
+    return true;
+}
+
 bool        papp_utc_time(int64_t *seconds)
 {
     return SYS->hdr.version >= 3 && SYS->utc_time(seconds);
