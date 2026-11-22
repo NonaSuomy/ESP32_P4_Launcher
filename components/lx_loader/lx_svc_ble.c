@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include "lx_net.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -25,11 +26,22 @@
 #include "esp_timer.h"
 #if LX_HOSTED_MAJOR >= 2
 #include "esp_hosted_misc.h"
+#include "lx_c6.h"
+/* A C6 still on 1.x firmware (a Tab5 as it ships) starts its BLE controller at boot, keeps it on and
+ * does not know the 2.x call that switches it (Req_FeatureControl times out): left alone (#48) */
+static bool c6_switches_bt(void)
+{
+    const char *v = lx_c6_version();
+    return !((v[0] == '0' || v[0] == '1') && v[1] == '.');
+}
+static esp_err_t bt_ctrl_init(void)    { return c6_switches_bt() ? esp_hosted_bt_controller_init() : ESP_OK; }
+static esp_err_t bt_ctrl_enable(void)  { return c6_switches_bt() ? esp_hosted_bt_controller_enable() : ESP_OK; }
+static esp_err_t bt_ctrl_disable(void) { return c6_switches_bt() ? esp_hosted_bt_controller_disable() : ESP_OK; }
 #else
-/* esp_hosted 1.4 (Tab5): the C6 starts its BLE controller at boot and keeps it on */
-static inline esp_err_t esp_hosted_bt_controller_init(void) { return ESP_OK; }
-static inline esp_err_t esp_hosted_bt_controller_enable(void) { return ESP_OK; }
-static inline esp_err_t esp_hosted_bt_controller_disable(void) { return ESP_OK; }
+/* esp_hosted 1.4 (Waveshare 3.5"): the C6 starts its BLE controller at boot and keeps it on */
+static inline esp_err_t bt_ctrl_init(void) { return ESP_OK; }
+static inline esp_err_t bt_ctrl_enable(void) { return ESP_OK; }
+static inline esp_err_t bt_ctrl_disable(void) { return ESP_OK; }
 /* IDF 5.5's nimble_port_deinit calls it; 1.4's VHCI driver has only the init (nothing to undo) */
 void ble_transport_ll_deinit(void);
 void ble_transport_ll_deinit(void) {}
@@ -47,8 +59,11 @@ void ble_transport_ll_deinit(void) {}
 #include "services/gatt/ble_svc_gatt.h"
 #include "host/ble_store.h"
 
-/* NimBLE's key store (ble_store_config.c); kept in NVS when CONFIG_BT_NIMBLE_NVS_PERSIST is on */
+/* NimBLE's key store (ble_store_config.c), in RAM (CONFIG_BT_NIMBLE_NVS_PERSIST off on every board):
+ * bonds_load / bonds_changed keep it on the card */
 void ble_store_config_init(void);
+int ble_store_config_write(int obj_type, const union ble_store_value *val);
+int ble_store_config_delete(int obj_type, const union ble_store_key *key);
 
 static const char *TAG = "lx_svc_ble";
 
@@ -242,6 +257,132 @@ static void on_reset(int reason)
     s_synced = false;
 }
 
+/* ── Bonds on the SD card ────────────────────────────────────────────────
+ * Every board keeps its bonds in /sd/config/ble_bonds.bin, not in NVS: they move with the card (the
+ * apps that paired are on it too), survive a reflash, and a host restart within a run (gatt_register)
+ * no longer drops them. The file is NimBLE's store as records: a header, then type + union value per
+ * entry. A change is written a moment later by a short-lived task on an internal stack (a pairing
+ * writes several entries in a burst); stop() writes what is still pending before the host goes. */
+#define BONDS_FILE  "/sd/config/ble_bonds.bin"
+#define BONDS_MAGIC 0x31444E42u                    /* "BND1" */
+
+static const uint8_t k_bond_types[] = {
+    BLE_STORE_OBJ_TYPE_OUR_SEC, BLE_STORE_OBJ_TYPE_PEER_SEC, BLE_STORE_OBJ_TYPE_CCCD,
+    BLE_STORE_OBJ_TYPE_PEER_ADDR, BLE_STORE_OBJ_TYPE_CSFC,     /* not LOCAL_IRK: made anew at each start */
+};
+static volatile bool s_bonds_dirty;
+static volatile bool s_bonds_saving;               /* a saver task is up (or about to be) */
+static portMUX_TYPE s_bonds_mux = portMUX_INITIALIZER_UNLOCKED;
+static SemaphoreHandle_t s_bonds_lock;             /* one writer of the file at a time */
+
+/* The idx-th entry of a type (NimBLE's "any address" key, as ble_store_iterate builds it) */
+static int bond_read(int type, int idx, union ble_store_value *v)
+{
+    union ble_store_key k;
+    memset(&k, 0, sizeof(k));
+    switch (type) {
+    case BLE_STORE_OBJ_TYPE_OUR_SEC:
+    case BLE_STORE_OBJ_TYPE_PEER_SEC:   k.sec.peer_addr = *BLE_ADDR_ANY; k.sec.idx = idx; break;
+    case BLE_STORE_OBJ_TYPE_CCCD:       k.cccd.peer_addr = *BLE_ADDR_ANY; k.cccd.idx = idx; break;
+    case BLE_STORE_OBJ_TYPE_PEER_ADDR:  k.rpa_rec.peer_rpa_addr = *BLE_ADDR_ANY; k.rpa_rec.idx = idx; break;
+    case BLE_STORE_OBJ_TYPE_CSFC:       k.csfc.peer_addr = *BLE_ADDR_ANY; k.csfc.idx = idx; break;
+    default: return -1;
+    }
+    return ble_store_read(type, &k, v);            /* under the host's lock */
+}
+
+static void bonds_save(void)
+{
+    if (!s_bonds_lock) return;
+    xSemaphoreTake(s_bonds_lock, portMAX_DELAY);
+    s_bonds_dirty = false;
+    mkdir("/sd/config", 0775);
+    FILE *f = fopen(BONDS_FILE ".part", "wb");
+    int n = 0;
+    bool ok = f != NULL;
+    if (f) {
+        const uint32_t hdr[2] = { BONDS_MAGIC, sizeof(union ble_store_value) };
+        ok = fwrite(hdr, sizeof(hdr), 1, f) == 1;
+        for (size_t t = 0; ok && t < sizeof(k_bond_types); t++) {
+            union ble_store_value v;
+            for (int i = 0; ok && i < 64 && bond_read(k_bond_types[t], i, &v) == 0; i++, n++)
+                ok = fwrite(&k_bond_types[t], 1, 1, f) == 1 && fwrite(&v, sizeof(v), 1, f) == 1;
+        }
+        ok &= fclose(f) == 0;
+    }
+    if (ok) {
+        remove(BONDS_FILE);                        /* FAT's rename does not replace */
+        ok = rename(BONDS_FILE ".part", BONDS_FILE) == 0;
+    }
+    if (ok) ESP_LOGI(TAG, "bonds: %d entries saved to the card", n);
+    else ESP_LOGW(TAG, "bonds: could not write " BONDS_FILE);
+    xSemaphoreGive(s_bonds_lock);
+}
+
+static void bonds_saver(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(300));            /* the rest of the burst */
+        taskENTER_CRITICAL(&s_bonds_mux);
+        bool more = s_bonds_dirty;
+        if (!more) s_bonds_saving = false;
+        taskEXIT_CRITICAL(&s_bonds_mux);
+        if (!more) break;
+        bonds_save();
+    }
+    vTaskDelete(NULL);
+}
+
+static void bonds_changed(void)
+{
+    taskENTER_CRITICAL(&s_bonds_mux);
+    s_bonds_dirty = true;
+    bool start = !s_bonds_saving;
+    s_bonds_saving = true;
+    taskEXIT_CRITICAL(&s_bonds_mux);
+    if (start && xTaskCreatePinnedToCore(bonds_saver, "lx_ble_bonds", 6144, NULL, 3, NULL, tskNO_AFFINITY) != pdPASS)
+        s_bonds_saving = false;                    /* stop() still writes it */
+}
+
+static int bonds_write_cb(int type, const union ble_store_value *v)
+{
+    int rc = ble_store_config_write(type, v);
+    if (rc == 0) bonds_changed();
+    return rc;
+}
+
+static int bonds_delete_cb(int type, const union ble_store_key *k)
+{
+    int rc = ble_store_config_delete(type, k);
+    if (rc == 0) bonds_changed();
+    return rc;
+}
+
+/* Once the host has synced (its start-up runs ble_store_config_init, which empties the RAM store and
+ * sets NimBLE's own callbacks): the card's bonds back in, then the callbacks that keep the file current */
+static void bonds_load(void)
+{
+    if (!s_bonds_lock) s_bonds_lock = xSemaphoreCreateMutex();
+    int n = 0;
+    FILE *f = fopen(BONDS_FILE, "rb");
+    if (f) {
+        uint32_t hdr[2];
+        if (fread(hdr, sizeof(hdr), 1, f) == 1 && hdr[0] == BONDS_MAGIC && hdr[1] == sizeof(union ble_store_value)) {
+            uint8_t type;
+            union ble_store_value v;
+            while (fread(&type, 1, 1, f) == 1 && fread(&v, sizeof(v), 1, f) == 1)
+                if (ble_store_config_write(type, &v) == 0) n++;
+        } else {
+            ESP_LOGW(TAG, "bonds: " BONDS_FILE " is from another NimBLE build, not used");
+        }
+        fclose(f);
+    }
+    if (n) ESP_LOGI(TAG, "bonds: %d entries from the card", n);
+    ble_hs_cfg.store_write_cb = bonds_write_cb;
+    ble_hs_cfg.store_delete_cb = bonds_delete_cb;
+}
+
 static void host_task(void *arg)
 {
     nimble_port_run();                  /* returns after nimble_port_stop */
@@ -287,10 +428,12 @@ static void stop(void)
         if (!any) break;
         vTaskDelay(pdMS_TO_TICKS(50));
     }
+    for (int t = 0; t < 40 && s_bonds_saving; t++) vTaskDelay(pdMS_TO_TICKS(50));   /* a save under way */
+    if (s_bonds_dirty) bonds_save();               /* the host's lock is still there */
     int rc = nimble_port_stop();
     if (rc == 0) nimble_port_deinit();
     else ESP_LOGW(TAG, "nimble_port_stop %d", rc);
-    esp_hosted_bt_controller_disable();
+    bt_ctrl_disable();
     s_running = false;
     s_synced = false;
     memset(s_conns, 0, sizeof(s_conns));
@@ -303,7 +446,7 @@ static bool start(void)
     if (s_failed) return false;
     if (lx_net_radio_up(&lx_svc_exit_flag) != ESP_OK) return false;
     if (!s_ctrl_init) {
-        esp_err_t e = esp_hosted_bt_controller_init();
+        esp_err_t e = bt_ctrl_init();
         if (e != ESP_OK) {
             ESP_LOGE(TAG, "BT controller init: %s (C6 firmware without BT?)", esp_err_to_name(e));
             s_failed = true;
@@ -311,13 +454,13 @@ static bool start(void)
         }
         s_ctrl_init = true;
     }
-    esp_err_t e = esp_hosted_bt_controller_enable();
+    esp_err_t e = bt_ctrl_enable();
     if (e != ESP_OK) ESP_LOGW(TAG, "BT controller enable: %s", esp_err_to_name(e));   /* may be on already */
 
     e = nimble_port_init();
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "nimble_port_init: %s", esp_err_to_name(e));
-        esp_hosted_bt_controller_disable();
+        bt_ctrl_disable();
         s_failed = true;
         return false;
     }
@@ -349,6 +492,7 @@ static bool start(void)
         stop();
         return false;
     }
+    bonds_load();                                  /* the host's start-up has set up (and emptied) the store */
     uint8_t a[6] = { 0 };
     ble_hs_id_copy_addr(s_own_type, a, NULL);
     ESP_LOGI(TAG, "up, address %02x:%02x:%02x:%02x:%02x:%02x (type %d)",
@@ -356,9 +500,9 @@ static bool start(void)
     return true;
 }
 
-/* NimBLE's key store lives in NVS, and a flash write turns the cache off: a task whose stack is in
- * PSRAM (every app thread's) must not be the one doing it. Starting the host loads the store, forgetting hosts
- * erases it, so those run on a short-lived task with its stack in internal RAM. */
+/* NimBLE's host must not start on a task whose stack is in PSRAM (every app thread's), and the key store's
+ * work (loading the card's bonds, forgetting them) is kept off those stacks too: those run on a short-lived
+ * task with its stack in internal RAM. */
 typedef struct {
     int (*fn)(void *);
     void *arg;
