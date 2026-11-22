@@ -673,7 +673,7 @@ static int fs_mkdir(const char *path)
     return r;
 }
 
-/* FS v2: stat, rename, rmdir and directories (patch 7). Directories are tracked like files and
+/* FS v2: stat, rename, rmdir and directories. Directories are tracked like files and
  * closed at the end of the run. */
 static DIR *s_dirs[PAPP_FS_MAX_DIRS];
 

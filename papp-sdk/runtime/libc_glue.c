@@ -209,7 +209,7 @@ int _fstat(int fd, struct stat *st)
     return 0;
 }
 
-/* FS v2 (launcher patch 7): stat with directories, rename, rmdir, directory listing. */
+/* FS v2: stat with directories, rename, rmdir, directory listing. */
 static const papp_if_fs_t *fs2(void)
 {
     const papp_if_fs_t *fs = papp_fs();

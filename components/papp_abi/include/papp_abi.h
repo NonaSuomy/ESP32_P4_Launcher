@@ -753,7 +753,7 @@ typedef struct {
  * advertising, scans, connections and the GATT table. Results use the
  * PAPP_E_* codes of NET (>= 0 success). Blocking calls take a timeout in ms
  * and return PAPP_E_EXIT as soon as the app is asked to exit. v1 has no
- * pairing: characteristics are open. v2 (launcher patch 11) adds pairing and
+ * pairing: characteristics are open. v2 adds pairing and
  * bonds kept across runs, characteristics that need an encrypted link,
  * descriptors, the GAP appearance and a static random address: enough for a
  * HID over GATT keyboard. */

@@ -47,7 +47,7 @@ void ble_transport_ll_deinit(void) {}
 #include "services/gatt/ble_svc_gatt.h"
 #include "host/ble_store.h"
 
-/* NimBLE's key store (ble_store_config.c); kept in NVS when CONFIG_BT_NIMBLE_NVS_PERSIST is on (patch 11) */
+/* NimBLE's key store (ble_store_config.c); kept in NVS when CONFIG_BT_NIMBLE_NVS_PERSIST is on */
 void ble_store_config_init(void);
 
 static const char *TAG = "lx_svc_ble";
@@ -356,7 +356,7 @@ static bool start(void)
     return true;
 }
 
-/* NimBLE's key store lives in NVS (patch 11), and a flash write turns the cache off: a task whose stack is in
+/* NimBLE's key store lives in NVS, and a flash write turns the cache off: a task whose stack is in
  * PSRAM (every app thread's) must not be the one doing it. Starting the host loads the store, forgetting hosts
  * erases it, so those run on a short-lived task with its stack in internal RAM. */
 typedef struct {
