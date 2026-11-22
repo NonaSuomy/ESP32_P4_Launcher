@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "lx_app.c" "lx_services.c" "lx_svc_disp.c" "lx_svc_audio.c" "lx_svc_input.c" "lx_svc_thrd.c" "lx_svc_ui.c" "lx_svc_net.c" "lx_svc_ble.c" "lx_lpram.c" "lx_svc_usbh.c"
+    SRCS "lx_app.c" "lx_services.c" "lx_svc_disp.c" "lx_svc_audio.c" "lx_svc_input.c" "lx_svc_thrd.c" "lx_svc_ui.c" "lx_svc_net.c" "lx_svc_ble.c" "lx_lpram.c" "lx_svc_usbh.c" "lx_svc_pwr.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
     REQUIRES papp_abi esp_mm

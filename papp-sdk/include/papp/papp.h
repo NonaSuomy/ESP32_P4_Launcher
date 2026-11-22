@@ -229,6 +229,9 @@ const papp_if_ble_t *papp_ble(void);
  * without a USB host port its list() answers PAPP_E_UNSUPPORTED. */
 const papp_if_usbh_t *papp_usbh(void);
 
+/* The battery and charging (papp_abi.h has the calls): NULL on launchers without it. */
+const papp_if_pwr_t *papp_pwr(void);
+
 #define PAPP_BLE_UUID16(v) { 2, { (uint8_t)((v) & 0xFF), (uint8_t)((v) >> 8) } }
 
 /* Advertising data: appends one AD structure to buf (31 bytes at most); false if it doesn't fit */

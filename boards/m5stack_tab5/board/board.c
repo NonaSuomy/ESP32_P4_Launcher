@@ -101,7 +101,10 @@ esp_err_t bsp_init(void)
     };
     esp_err_t err = i2c_new_master_bus(&cfg, &s_i2c);
     if (err != ESP_OK) ESP_LOGE(TAG, "I2C bus init failed: %s", esp_err_to_name(err));
-    else expanders_init();
+    else {
+        expanders_init();
+        bsp_power_init();
+    }
     return ESP_OK;      /* devices report their own absence */
 }
 

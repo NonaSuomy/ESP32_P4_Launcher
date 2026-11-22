@@ -6,6 +6,7 @@
 
 i2c_master_bus_handle_t board_i2c_bus(void);
 void board_set_cap(uint32_t cap);
+esp_err_t bsp_power_init(void);                /* board_power.c: the battery, and charging on */
 int board_imu_read(int axis);      /* board_imu.c: 0..2 -> 0..65535, -1 if no accelerometer */
 void board_touch_reset(void);      /* GT911: reset through the I/O expander, address 0x14 */
 

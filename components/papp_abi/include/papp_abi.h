@@ -964,6 +964,30 @@ typedef struct {
     bool  (*gone)(papp_usb_dev_t *d);                      /* unplugged since it was opened  */
 } papp_if_usbh_t;
 
+/* ── PWR interface ──────────────────────────────────────────────────────── */
+/* The battery and its charging, on boards that measure it. Charging is on whenever the launcher runs; an app
+ * may stop it for a while (a USB device it powers that wants the full 5 V while the battery charges, as a T48
+ * programmer does), and it comes back on when the app ends, however it ends. */
+
+#define PAPP_IF_PWR       PAPP_FOURCC('P', 'W', 'R', ' ')
+#define PAPP_IF_PWR_VER   1
+
+typedef struct {
+    int32_t  pack_mv;                    /* the whole battery; 0 if not measured           */
+    int32_t  cell_mv;                    /* a cell's share                                 */
+    int32_t  ma;                         /* positive = charging, negative = running on it  */
+    int8_t   percent;                    /* 0..100 by voltage, -1 unknown                  */
+    uint8_t  charging;                   /* the charger says it is charging                */
+    uint8_t  charge_enabled;             /* charging allowed now                           */
+    uint8_t  can_switch;                 /* set_charge works on this board                 */
+} papp_power_t;
+
+typedef struct {
+    papp_iface_hdr_t hdr;
+    int   (*read)(papp_power_t *out);    /* PAPP_E_OK, or PAPP_E_UNSUPPORTED (no battery reading) */
+    int   (*set_charge)(bool on);        /* PAPP_E_OK, or PAPP_E_UNSUPPORTED                    */
+} papp_if_pwr_t;
+
 /* ── Entry point ────────────────────────────────────────────────────────── */
 
 /* Provided by the SDK runtime (crt0), located at entry_off. */

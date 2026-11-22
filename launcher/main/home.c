@@ -1459,9 +1459,12 @@ static void refresh_info(void)
     const bsp_info_t *b = bsp_info();
     uint64_t total = 0, free_b = 0;
     esp_vfs_fat_info("/sd", &total, &free_b);
-    char buf[512], batt[32] = "";
+    char buf[512], batt[48] = "";
     int mv = bsp_battery_mv();
-    if (mv >= 0) snprintf(batt, sizeof(batt), "   Battery pin %.2f V", mv / 1000.0);   /* -1: none */
+    bsp_power_t pw;
+    if (bsp_power_read(&pw) == ESP_OK)                     /* the whole pack and its current */
+        snprintf(batt, sizeof(batt), "   Battery %.2f V %+d mA", pw.pack_mv / 1000.0, pw.ma);
+    else if (mv >= 0) snprintf(batt, sizeof(batt), "   Battery pin %.2f V", mv / 1000.0);   /* -1: none */
     /* the SD bus width: "(1-bit, 4-bit failed)" = the card was moved to 1 bit (D1-D3 contact) */
     char bus[32] = "";
     int bits = ff_sdmmc_bus_width();
@@ -1935,10 +1938,14 @@ static void update_status(lv_timer_t *t)
         pads += lx_input_gamepad(i, &g);
     }
     int bat = (bsp_info()->caps & BSP_CAP_BATTERY) ? bsp_battery_mv() : -1;
+    bsp_power_t pw;
+    const bool measured = bsp_power_read(&pw) == ESP_OK;   /* a board that says when it charges (Tab5) */
     if (bat >= BAT_MV_MIN && bat <= BAT_MV_MAX) {           /* a cell is fitted */
-        int pct = (bat - BAT_MV_EMPTY) * 100 / (BAT_MV_FULL - BAT_MV_EMPTY);
+        int pct = measured ? (bat - 3300) * 100 / (4150 - 3300)
+                           : (bat - BAT_MV_EMPTY) * 100 / (BAT_MV_FULL - BAT_MV_EMPTY);
         pct = pct < 0 ? 0 : pct > 100 ? 100 : pct;
-        const char *sym = bat > BAT_MV_FULL ? LV_SYMBOL_CHARGE : pct > 75 ? LV_SYMBOL_BATTERY_FULL :
+        const bool charging = measured ? pw.charging : bat > BAT_MV_FULL;
+        const char *sym = charging ? LV_SYMBOL_CHARGE : pct > 75 ? LV_SYMBOL_BATTERY_FULL :
                           pct > 50 ? LV_SYMBOL_BATTERY_3 : pct > 25 ? LV_SYMBOL_BATTERY_2 :
                           pct > 8 ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY;
         snprintf(buf, sizeof(buf), LV_SYMBOL_USB " %d pad%s   %s %d%%", pads, pads == 1 ? "" : "s", sym, pct);

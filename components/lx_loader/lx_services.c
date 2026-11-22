@@ -790,6 +790,7 @@ static const papp_iface_hdr_t *const s_registry[] = {
     &lx_if_ble.hdr,
 #endif
     &lx_if_usbh.hdr,
+    &lx_if_pwr.hdr,
 };
 
 void lx_svc_init(lx_app_log_sink_t log_sink)
@@ -862,6 +863,7 @@ void lx_svc_end_run(uint32_t *leaked_allocs, uint32_t *leaked_bytes, uint32_t *l
     lx_svc_net_end_run();       /* after the threads: none of them is in a call */
     lx_svc_ble_end_run();       /* advertising, connections, GATT table, host */
     lx_svc_usbh_end_run();      /* USB devices the app left open */
+    lx_svc_pwr_end_run();       /* charging back on if the app stopped it */
     lx_ui_reset();              /* a browser the app was killed in */
     *leaked_allocs = na; *leaked_bytes = nb; *leaked_files = nf;
 }

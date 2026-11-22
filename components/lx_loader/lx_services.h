@@ -47,6 +47,8 @@ extern const papp_if_usbh_t lx_if_usbh;
 
 /* USBH bookkeeping (lx_svc_usbh.c) */
 int  lx_svc_usbh_end_run(void);             /* -> devices the app left open */
+extern const papp_if_pwr_t lx_if_pwr;
+void lx_svc_pwr_end_run(void);              /* lx_svc_pwr.c: charging back on */
 
 /* NET bookkeeping (lx_svc_net.c) */
 void lx_svc_net_init(void);
