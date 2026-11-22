@@ -229,8 +229,6 @@ static const papp_if_sys_t s_if_sys = {
     .local_time     = sys_local_time,
     .utc_time       = sys_utc_time,
     .chip_rev       = sys_chip_rev,
-}
-
     .random         = sys_random,
 };
 
