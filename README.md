@@ -20,7 +20,7 @@ copy the `SDcard` folder to a card and get the apps from the Store, see [Getting
 
 | Launcher version | App ABI | Toolchain | Boards |
 |---|---|---|---|
-| 0.32.0 | 2.0-preview | ESP-IDF v5.5.6 | Guition ESP32-P4 4.3" (480×800; chip v1.x, or v3.x with its own image), Guition JC1060P470C 7" (1024×600), M5Stack Tab5 (720×1280), Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (320×480, contributed), Elecrow All-in-one Starter Kit for ESP32-P4 (1024×600, not tested yet: [docs/PORT_ELECROW_AIO.md](docs/PORT_ELECROW_AIO.md)). Which boards qualify: [docs/BOARD_SUPPORT.md](docs/BOARD_SUPPORT.md) |
+| 0.33.0 | 2.0-preview | ESP-IDF v5.5.6 | Guition ESP32-P4 4.3" (480×800; chip v1.x, or v3.x with its own image), Guition JC1060P470C 7" (1024×600; chip v1.x, or v3.x with the 2026 panel and its own image), M5Stack Tab5 (720×1280), Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (320×480, contributed), Elecrow All-in-one Starter Kit for ESP32-P4 (1024×600, not tested yet: [docs/PORT_ELECROW_AIO.md](docs/PORT_ELECROW_AIO.md)). Which boards qualify: [docs/BOARD_SUPPORT.md](docs/BOARD_SUPPORT.md) |
 
 > **Status: active development.** The ABI is a preview and may still change. Everything below describes
 > what exists in the code today; the plan for what comes next is in [docs/WORKPLAN.md](docs/WORKPLAN.md).
@@ -122,6 +122,10 @@ Two rules keep this portable: apps only see the ABI, and the launcher core only 
   for the board's screen size
 - App search: finds an app in any folder by a part of its name, from the home screen's search field or by
   typing on a USB keyboard; a red dot on the Settings gear when a launcher update is waiting
+- SD card bus shown on the home screen ("SD Card (4-bit)"); a card whose 4-bit transfers time out (a bad
+  contact on D1-D3) moves to 1-bit and keeps working, shown in orange
+- Apps can ask for the chip revision (`papp_chip_rev`), so SIMD code picks the right encoding: v1.x and v3.x
+  chips encode the P4's PIE instructions differently. The e3d 3D games use it: one .papp, SIMD on both
 - More than one board from one source tree: each board is a package under `boards/`, and apps never change
 - Compositor: an app draws a surface of any size, and the launcher scales and rotates it with the PPA, tear-free
 - Audio engine: up to 8 streams at any rate from 4 to 192 kHz, resampled and mixed
@@ -170,9 +174,9 @@ from the same SD card. Which boards can be added, and how: [docs/BOARD_SUPPORT.m
 | Part | Guition ESP32-P4 4.3" | Guition JC1060P470C 7" | M5Stack Tab5 |
 |---|---|---|---|
 | Board id (`-DLX_BOARD=`) | `guition_p4_43` (default) | `guition_p4_7` | `m5stack_tab5` |
-| SoC | ESP32-P4, dual RISC-V at 360 MHz, chip revision v1.x (v3.x: board id `guition_p4_43_v3`) | same | same |
+| SoC | ESP32-P4, dual RISC-V at 360 MHz, chip revision v1.x (v3.x: board id `guition_p4_43_v3`) | same (v3.x: `guition_p4_7_v3`, 400 MHz) | same |
 | Memory | 32 MB hex PSRAM at 200 MHz, 16 MB flash | same | same |
-| Display | 480×800 ST7701 MIPI-DSI, used in landscape as 800×480 | 1024×600 JD9165 MIPI-DSI, landscape | 720×1280 MIPI-DSI (ILI9881C, ST7123 or ST7121, detected at start), used in landscape as 1280×720 |
+| Display | 480×800 ST7701 MIPI-DSI, used in landscape as 800×480 | 1024×600 JD9165 MIPI-DSI, landscape (v3.x boards: the 2026 "New Panel", its own setup) | 720×1280 MIPI-DSI (ILI9881C, ST7123 or ST7121, detected at start), used in landscape as 1280×720 |
 | Touch | GT911 capacitive | GT911 capacitive | GT911, or the touch built into the ST7123 / ST7121 panel |
 | Radio | ESP32-C6 over SDIO (Wi-Fi; BLE firmware present) | same, newer C6 firmware | ESP32-C6 over SDIO, M5Stack's C6 firmware |
 | Audio | ES8311 codec at a fixed 48 kHz | ES8311 codec at 48 kHz, NS4150 speaker amplifier | ES8388 codec at 48 kHz |
@@ -204,6 +208,7 @@ have) and a USB cable for the board's USB-Serial-JTAG port.
    | Guition ESP32-P4 4.3" | `launcher_guition_p4_43_full.bin` |
    | Guition ESP32-P4 4.3" with a v3.x chip (see below) | `launcher_guition_p4_43_v3_full.bin` |
    | Guition JC1060P470C 7" | `launcher_guition_p4_7_full.bin` |
+   | Guition JC1060P470C 7" with a v3.x chip, e.g. JC1060P470C-I-W-Y (see below) | `launcher_guition_p4_7_v3_full.bin` |
    | M5Stack Tab5 | `launcher_m5stack_tab5_full.bin` |
    | Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 | `launcher_waveshare_p4_35_full.bin` |
    | Elecrow All-in-one Starter Kit for ESP32-P4 (not tested yet) | `launcher_elecrow_p4_aio_full.bin` |
@@ -228,11 +233,13 @@ The same in a terminal, if you have esptool:
 esptool.py --chip esp32p4 -p COMx write_flash 0x0 launcher_guition_p4_43_full.bin
 ```
 
-**Which 4.3" chip do I have?** Newer Guition 4.3" boards carry a rev v3.x ESP32-P4. An image runs on one
+**Which chip do I have?** Newer Guition 4.3" and 7" boards carry a rev v3.x ESP32-P4. An image runs on one
 chip generation only, so these have their own image. On the ESP Tool page, the log after **Connect**
 shows the chip revision, for example "revision v1.0" or "revision v3.2"; `esptool.py --chip esp32p4
 -p COMx chip_id` shows it too. If you flashed the wrong one, the screen stays dark: flash the other
-file. After the first install, Settings → Update picks the right image by itself.
+file. After the first install, Settings → Update picks the right image by itself. The 7" v3 image also
+drives the 2026 "New Panel" these boards have (label "V2" on the back); a 7" with that panel and a v1.x
+chip is not supported.
 
 ### 2. Build the launcher yourself (optional)
 
@@ -257,6 +264,7 @@ cd launcher
 idf.py -p COM9 build flash                                                    # Guition 4.3" (default board)
 idf.py -B build_guition_p4_43_v3 -DLX_BOARD=guition_p4_43_v3 -p COMx build flash  # Guition 4.3" with a v3.x chip
 idf.py -B build_guition_p4_7 -DLX_BOARD=guition_p4_7 -p COM10 build flash     # Guition 7"
+idf.py -B build_guition_p4_7_v3 -DLX_BOARD=guition_p4_7_v3 -p COMx build flash    # Guition 7" with a v3.x chip
 idf.py -B build_m5stack_tab5 -DLX_BOARD=m5stack_tab5 -p COM15 build flash     # M5Stack Tab5
 idf.py -B build_waveshare_p4_rpi_dsi -DLX_BOARD=waveshare_p4_rpi_dsi -p COMxx build flash   # Waveshare + RPi display (retired, example port)
 cd ..
@@ -264,7 +272,8 @@ cd ..
 
 Each board builds in its own folder. The boards use different versions of the ESP32-C6 driver, so when you
 switch to the other board, add `reconfigure` once: `idf.py -B <folder> -DLX_BOARD=<id> reconfigure build`.
-The 4.3" with a v3.x chip has its own board id, `guition_p4_43_v3` (same board code, built for v3 silicon).
+The boards with a v3.x chip have their own board ids, `guition_p4_43_v3` and `guition_p4_7_v3` (same board code,
+built for v3 silicon; the 7" one also sets up the 2026 panel and runs the C6 link at 10 MHz).
 
 > On Windows, `papp_dev.py` needs the same COM port, so close any serial monitor first. Text logs go to
 > UART0. USB-Serial-JTAG belongs to DevLink.
@@ -617,7 +626,7 @@ Include only `papp/papp.h`. The full API, with examples, is in
 
 | Interface | Version | What it gives you | Example calls |
 |---|---|---|---|
-| `SYS` | 3 | Logging, time, local time, UTC time, exit, board id | `papp_log`, `papp_time_us`, `papp_local_time`, `papp_utc_time`, `papp_exit` |
+| `SYS` | 4 | Logging, time, local time, UTC time, exit, board id, chip revision (v4: picks SIMD code, PIE on v1.x chips, xespv on v3.x) | `papp_log`, `papp_time_us`, `papp_local_time`, `papp_utc_time`, `papp_exit`, `papp_chip_rev` |
 | `MEM` | 1 | Tracked allocation from PSRAM, internal or DMA memory | `papp_alloc`, `papp_free` |
 | `FS` | 1 | Files, also reachable through stdio with `--libc` | `papp_fs()` |
 | `DISP` | 3 | Surfaces, scaling, tear-free present, zero-copy present, touch | `papp_disp_surface_create`, `papp_disp_present`, `papp_disp_present_ext` |
@@ -768,7 +777,7 @@ the board qualifies and open an issue: [docs/BOARD_SUPPORT.md](docs/BOARD_SUPPOR
 ```
 launcher/              ESP-IDF project: main.c + home.c (LVGL home screen)
 boards/<id>/           board packages: guition_p4_43 (4.3"), guition_p4_43_v3 (the 4.3" with a v3.x chip),
-                       guition_p4_7 (7"), m5stack_tab5,
+                       guition_p4_7 (7"), guition_p4_7_v3 (the 7" with a v3.x chip and the 2026 panel), m5stack_tab5,
                        waveshare_p4_35 (Waveshare 3.5" SPI, needs ESP-IDF >= 5.5.5),
                        waveshare_p4_rpi_dsi (Waveshare dev kit + RPi DSI display)
 components/
