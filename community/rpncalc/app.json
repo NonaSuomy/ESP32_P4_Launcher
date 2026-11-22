@@ -1,0 +1,6 @@
+{
+  "author": "Donnie Barnes",
+  "description": "HP-style RPN calculator: 4-level stack, registers, trig, stats, base conversion, undo. For the Tab5's screen",
+  "category": "tools",
+  "license": "MIT"
+}
