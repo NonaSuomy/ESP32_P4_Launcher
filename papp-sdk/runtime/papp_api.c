@@ -6,7 +6,7 @@
 
 __attribute__((section(".papp_imports"), used))
 papp_import_t __papp_imports[] = {
-    { PAPP_IF_SYS, 1, PAPP_IMPORT_REQUIRED, 0 },     /* v2 for papp_local_time, v3 for papp_utc_time */
+    { PAPP_IF_SYS, 1, PAPP_IMPORT_REQUIRED, 0 },     /* v2 papp_local_time, v3 papp_utc_time, v4 papp_chip_rev */
     { PAPP_IF_MEM, 1, PAPP_IMPORT_REQUIRED, 0 },          /* v2 code memory checked at call */
     { PAPP_IF_FS,  PAPP_IF_FS_VER,  PAPP_IMPORT_OPTIONAL, 0 },
     { PAPP_IF_DISP, 3, PAPP_IMPORT_OPTIONAL, 0 },             /* v3 present_ext; v4 blit checked at call */
@@ -54,6 +54,11 @@ bool        papp_local_time(papp_datetime_t *out)
 bool        papp_utc_time(int64_t *seconds)
 {
     return SYS->hdr.version >= 3 && SYS->utc_time(seconds);
+}
+
+int         papp_chip_rev(void)
+{
+    return SYS->hdr.version >= 4 ? SYS->chip_rev() : -1;
 }
 
 void  *papp_alloc(size_t size, uint32_t caps, size_t align)

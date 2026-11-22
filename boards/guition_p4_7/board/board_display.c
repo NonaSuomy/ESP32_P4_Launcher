@@ -1,7 +1,9 @@
 /*
  * BSP display — JD9165 1024x600 MIPI-DSI panel (2 lanes), landscape, double-buffered DPI.
- * Init table and timing from the ESP32_P4_Internet_Radio project (V1 panel; Guition's
- * 2026 "V2" panel needs the other table there and resets on GPIO 0).
+ * V1 panel: init table and timing from the ESP32_P4_Internet_Radio project.
+ * 2026 "New Panel" (the v3-chip boards, BOARD_PANEL_NEW): table and timing from Guition's
+ * JC1060P470C_I_W_Y New_Panel demo (esp_lcd_jd9165.c), as EspControl uses them. The V1 settings
+ * on it give a white screen with a vertical noise band.
  */
 #include "board_internal.h"
 #include "board_pins.h"
@@ -26,6 +28,41 @@ static const char *TAG = "bsp_disp";
 #define CMD(c, ...) { (c), (uint8_t[]){ __VA_ARGS__ }, sizeof((uint8_t[]){ __VA_ARGS__ }), 0 }
 #define CMD_DELAY(c, ms) { (c), (uint8_t[]){ 0x00 }, 0, (ms) }
 
+#ifdef BOARD_PANEL_NEW
+static const jd9165_lcd_init_cmd_t s_panel_init[] = {
+    CMD(0x30, 0x00), CMD(0xF7, 0x49, 0x61, 0x02, 0x00), CMD(0x30, 0x01), CMD(0x04, 0x0C), CMD(0x05, 0x08),
+    CMD(0x0B, 0x11), CMD(0x20, 0x04), CMD(0x1F, 0x05), CMD(0x23, 0x38), CMD(0x28, 0x18), CMD(0x29, 0x29),
+    CMD(0x2A, 0x01), CMD(0x2B, 0x29), CMD(0x2C, 0x01),
+    CMD(0x30, 0x02), CMD(0x00, 0x05), CMD(0x01, 0x22), CMD(0x02, 0x08), CMD(0x03, 0x12), CMD(0x04, 0x16),
+    CMD(0x05, 0x64), CMD(0x06, 0x00), CMD(0x07, 0x00), CMD(0x08, 0x78), CMD(0x09, 0x00), CMD(0x0A, 0x04),
+    CMD(0x0B, 0x16, 0x17, 0x0B, 0x0D, 0x0D, 0x0D, 0x11, 0x10, 0x07, 0x07, 0x09),
+    CMD(0x0C, 0x09, 0x1E, 0x1E, 0x1C, 0x1C, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D),
+    CMD(0x0D, 0x0A, 0x05, 0x0B, 0x0D, 0x0D, 0x0D, 0x11, 0x10, 0x06, 0x06, 0x08),
+    CMD(0x0E, 0x08, 0x1F, 0x1F, 0x1D, 0x1D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D),
+    CMD(0x0F, 0x0A, 0x05, 0x0D, 0x0B, 0x0D, 0x0D, 0x11, 0x10, 0x1D, 0x1D, 0x1F),
+    CMD(0x10, 0x1F, 0x08, 0x08, 0x06, 0x06, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D),
+    CMD(0x11, 0x16, 0x17, 0x0D, 0x0B, 0x0D, 0x0D, 0x11, 0x10, 0x1C, 0x1C, 0x1E),
+    CMD(0x12, 0x1E, 0x09, 0x09, 0x07, 0x07, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D),
+    CMD(0x13, 0x00, 0x00, 0x00, 0x00), CMD(0x14, 0x00, 0x00, 0x41, 0x41), CMD(0x15, 0x00, 0x00, 0x00, 0x00),
+    CMD(0x17, 0x00), CMD(0x18, 0x85), CMD(0x19, 0x06, 0x09), CMD(0x1A, 0x05, 0x08), CMD(0x1B, 0x0A, 0x04),
+    CMD(0x26, 0x00), CMD(0x27, 0x00),
+    CMD(0x30, 0x06),
+    CMD(0x12, 0x3F, 0x25, 0x27, 0x35, 0x1D, 0x1B, 0x1B, 0x1A, 0x18, 0x0A, 0x2A, 0x21, 0x19, 0x30),
+    CMD(0x13, 0x3F, 0x26, 0x27, 0x35, 0x1E, 0x1C, 0x1C, 0x1A, 0x18, 0x0B, 0x2A, 0x21, 0x19, 0x30),
+    CMD(0x30, 0x0A), CMD(0x02, 0x4F), CMD(0x0B, 0x40), CMD(0x30, 0x0D), CMD(0x0D, 0x04), CMD(0x10, 0x05),
+    CMD(0x11, 0x0C), CMD(0x12, 0x05), CMD(0x13, 0x0C), CMD(0x30, 0x00),
+    CMD_DELAY(0x11, 120),   /* SLPOUT */
+    CMD_DELAY(0x29, 20),    /* DISPON */
+};
+#define PANEL_PCLK_MHZ  52
+#define PANEL_LANE_MBPS 750
+#define PANEL_HPW       24
+#define PANEL_HBP       136
+#define PANEL_HFP       160
+#define PANEL_VPW       2
+#define PANEL_VBP       21
+#define PANEL_VFP       12
+#else
 static const jd9165_lcd_init_cmd_t s_panel_init[] = {
     CMD(0x30, 0x00), CMD(0xF7, 0x49, 0x61, 0x02, 0x00), CMD(0x30, 0x01), CMD(0x04, 0x0C), CMD(0x05, 0x00),
     CMD(0x06, 0x00), CMD(0x0B, 0x11), CMD(0x17, 0x00), CMD(0x20, 0x04), CMD(0x1F, 0x05), CMD(0x23, 0x00),
@@ -54,11 +91,14 @@ static const jd9165_lcd_init_cmd_t s_panel_init[] = {
 #define PANEL_VPW       10
 #define PANEL_VBP       23
 #define PANEL_VFP       12
+#endif
 
 static esp_lcd_panel_handle_t s_panel;
 static uint16_t *s_fbs[NUM_FBS];
 static int s_visible;
 static volatile bool s_flip_pending;
+static volatile bool s_scan_off;       /* bsp_display_scanout(false) */
+static int s_backlight = 100;
 static SemaphoreHandle_t s_vsync;
 
 static bool IRAM_ATTR on_refresh_done(esp_lcd_panel_handle_t panel, esp_lcd_dpi_panel_event_data_t *edata,
@@ -101,6 +141,9 @@ esp_err_t bsp_display_init(void)
 
     esp_lcd_dsi_bus_handle_t bus;
     esp_lcd_dsi_bus_config_t bus_cfg = JD9165_PANEL_BUS_DSI_2CH_CONFIG();
+#ifdef PANEL_LANE_MBPS
+    bus_cfg.lane_bit_rate_mbps = PANEL_LANE_MBPS;
+#endif
     ESP_RETURN_ON_ERROR(esp_lcd_new_dsi_bus(&bus_cfg, &bus), TAG, "DSI bus");
 
     esp_lcd_panel_io_handle_t io;
@@ -159,7 +202,13 @@ esp_err_t bsp_display_init(void)
     bsp_display_backlight(100);
     board_set_cap(BSP_CAP_DISPLAY);
 
-    ESP_LOGI(TAG, "JD9165 %dx%d up, fb0=%p fb1=%p", BOARD_LCD_H_RES, BOARD_LCD_V_RES, s_fbs[0], s_fbs[1]);
+    ESP_LOGI(TAG, "JD9165 %dx%d (%s panel) up, fb0=%p fb1=%p", BOARD_LCD_H_RES, BOARD_LCD_V_RES,
+#ifdef BOARD_PANEL_NEW
+             "new",
+#else
+             "V1",
+#endif
+             s_fbs[0], s_fbs[1]);
     return ESP_OK;
 }
 
@@ -189,6 +238,7 @@ esp_err_t bsp_display_show(int index)
 
 bool bsp_display_wait_flip(uint32_t timeout_ms)
 {
+    if (s_scan_off) s_flip_pending = false;     /* nothing is scanned out */
     if (!s_flip_pending) return true;
     bool ok = xSemaphoreTake(s_vsync, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
     if (ok) s_flip_pending = false;
@@ -203,6 +253,10 @@ int bsp_display_visible(void)
 bool bsp_display_wait_vsync(uint32_t timeout_ms)
 {
     if (!s_vsync) return false;
+    if (s_scan_off) {
+        vTaskDelay(pdMS_TO_TICKS(16));
+        return true;
+    }
     xSemaphoreTake(s_vsync, 0);     /* drop a stale edge */
     return xSemaphoreTake(s_vsync, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
 }
@@ -211,6 +265,28 @@ void bsp_display_backlight(int percent)
 {
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
+    s_backlight = percent;
+    if (s_scan_off) return;                     /* comes back with the scan-out */
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 1023 * percent / 100);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+}
+
+/* The DSI host's pattern generator takes over and the bridge stops pulling pixels, so the frame DMA
+ * stops reading PSRAM; turning it back on resumes the frame buffers. Backlight off meanwhile. */
+esp_err_t bsp_display_scanout(bool on)
+{
+    if (!s_panel) return ESP_ERR_INVALID_STATE;
+    if (on != s_scan_off) return ESP_OK;
+    if (!on) {
+        int bl = s_backlight;
+        bsp_display_backlight(0);
+        s_backlight = bl;
+        s_scan_off = true;
+        return esp_lcd_dpi_panel_set_pattern(s_panel, MIPI_DSI_PATTERN_BAR_HORIZONTAL);
+    }
+    esp_err_t e = esp_lcd_dpi_panel_set_pattern(s_panel, MIPI_DSI_PATTERN_NONE);
+    s_scan_off = false;
+    xSemaphoreTake(s_vsync, 0);
+    bsp_display_backlight(s_backlight);
+    return e;
 }

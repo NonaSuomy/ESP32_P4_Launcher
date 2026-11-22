@@ -29,6 +29,8 @@
 #include "esp_system.h"
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
+#include "ff.h"
+#include "diskio_sdmmc.h"
 #include "esp_core_dump.h"
 #include "driver/usb_serial_jtag.h"
 #include "freertos/FreeRTOS.h"
@@ -216,9 +218,11 @@ static void h_info(uint16_t seq)
     jstr(&j, b->id);
     jcat(&j, ",\"board_name\":");
     jstr(&j, b->name);
-    jcat(&j, ",\"caps\":%lu,\"display\":[%u,%u],\"sd\":%s,\"uptime_ms\":%lld,"
+    jcat(&j, ",\"caps\":%lu,\"display\":[%u,%u],\"sd\":%s,\"sd_bits\":%d,\"sd_1bit\":%s,\"uptime_ms\":%lld,"
              "\"free_internal\":%u,\"free_psram\":%u,\"largest_psram\":%u,\"app_state\":\"%s\",\"app\":",
          (unsigned long)b->caps, b->display_w, b->display_h, bsp_sdcard_mounted() ? "true" : "false",
+         ff_sdmmc_bus_width(),                             /* data lines in use */
+         ff_sdmmc_bus_fell_back() ? "true" : "false",     /* 4-bit failed, card moved to 1-bit */
          esp_timer_get_time() / 1000,
          (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
          (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
@@ -545,6 +549,9 @@ static void h_input(uint16_t seq, const uint8_t *p, uint32_t len)
     }
 }
 
+/* Boards without it */
+__attribute__((weak)) esp_err_t bsp_display_scanout(bool on) { return ESP_ERR_NOT_SUPPORTED; }
+
 static void dispatch(uint8_t type, uint16_t seq, uint8_t *p, uint32_t len)
 {
     p[len] = 0;   /* string payloads are NUL-terminated for free */
@@ -614,6 +621,12 @@ static void dispatch(uint8_t type, uint16_t seq, uint8_t *p, uint32_t len)
     case DL_BOOTLOG: reply(type, seq, s_boot, s_boot ? s_boot_len : 0); break;
     case DL_SHOT: h_shot(seq, p, len); break;
     case DL_INPUT: h_input(seq, p, len); break;
+    case DL_DISPLAY: {
+        esp_err_t e = bsp_display_scanout(!len || p[0]);
+        if (e == ESP_OK) reply_str(type, seq, !len || p[0] ? "display on" : "display off");
+        else reply_err(type, seq, "display: %s", esp_err_to_name(e));
+        break;
+    }
     case DL_NET: {
         if (len && p[0]) lx_net_diag_start(p[0]);
         static char text[1600];

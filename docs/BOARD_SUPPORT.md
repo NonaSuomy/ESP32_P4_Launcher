@@ -31,7 +31,7 @@ Not supported:
 
 | Level | Meaning | Boards today |
 |---|---|---|
-| **Supported** | Built into every release and tested on the board before each one | Guition ESP32-P4 4.3" (`guition_p4_43`, and `guition_p4_43_v3` for v3.x chips), Guition JC1060P470C 7" (`guition_p4_7`), M5Stack Tab5 (`m5stack_tab5`) |
+| **Supported** | Built into every release and tested on the board before each one | Guition ESP32-P4 4.3" (`guition_p4_43`, and `guition_p4_43_v3` for v3.x chips), Guition JC1060P470C 7" (`guition_p4_7`, and `guition_p4_7_v3` for v3.x chips), M5Stack Tab5 (`m5stack_tab5`) |
 | **Community** | Built into every release; tested by the person who owns the board, who confirms each release or says it broke | Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (`waveshare_p4_35`), Elecrow All-in-one Starter Kit for ESP32-P4 (`elecrow_p4_aio`, not tested yet) |
 
 A community board that nobody tests for three releases in a row is marked "not tested" in the release notes,

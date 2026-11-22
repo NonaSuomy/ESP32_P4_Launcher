@@ -16,9 +16,18 @@
 
 static const char *TAG = "bsp";
 
+/* boards/guition_p4_7_v3 builds these sources for a rev v3.x chip, under its own id */
+#ifdef BOARD_CHIP_V3
+#define BOARD_ID   "guition_p4_7_v3"
+#define BOARD_NAME "Guition ESP32-P4 7\" 1024x600 (chip v3)"
+#else
+#define BOARD_ID   "guition_p4_7"
+#define BOARD_NAME "Guition ESP32-P4 7\" 1024x600"
+#endif
+
 static bsp_info_t s_info = {
-    .id        = "guition_p4_7",
-    .name      = "Guition ESP32-P4 7\" 1024x600",
+    .id        = BOARD_ID,
+    .name      = BOARD_NAME,
     .caps      = BSP_CAP_USB_HOST,      /* USB OTG HS port; the rest is set at init */
     .display_w = BOARD_LCD_H_RES,
     .display_h = BOARD_LCD_V_RES,

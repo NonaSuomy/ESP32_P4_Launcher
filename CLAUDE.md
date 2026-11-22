@@ -14,7 +14,8 @@ launcher/                 ESP-IDF project (factory app; main.c + home.c = LVGL h
                           first home tile: categories, app pages, install/update/remove; home_ui.h = what it uses from home.c). Board: -DLX_BOARD=<id> (default guition_p4_43)
 boards/<id>/board/        BSP implementation (component "board", pins esp_hosted for its C6); boards/<id>/sdkconfig.board.
                           guition_p4_43 (4.3" 480x800, image "launcher"; guition_p4_43_v3 = same sources built for
-                          rev v3.x chips, BOARD_CHIP_V3 picks the id), guition_p4_7 (7" 1024x600), m5stack_tab5 (720x1280,
+                          rev v3.x chips, BOARD_CHIP_V3 picks the id), guition_p4_7 (7" 1024x600; guition_p4_7_v3 = v3.x chip, which comes with
+                          the 2026 "New Panel": BOARD_PANEL_NEW = other JD9165 table/timing, reset GPIO 0, C6 SDIO 10 MHz), m5stack_tab5 (720x1280,
                           power rails on two PI4IOE5V6408 I2C expanders, esp_hosted 1.4 for M5Stack's C6 firmware;
                           BMI270 accelerometer = PAPP_ANALOG_ACCEL_X/Y/Z 16..18 via bsp_analog_read, started on an app's first read, board_imu.c),
                           waveshare_p4_rpi_dsi (RETIRED after 0.30.0, make_release.py RETIRED; example port: Waveshare dev kit + RPi Touch Display V1-style 800x480 panel: TC358762, ATTINY88
@@ -39,6 +40,10 @@ components/lx_loader/     App Manager: loader, relocation, imports, services (SY
                           the C6 runs its controller from boot, lx_svc_ble.c stubs the 2.x controller calls; waveshare_p4_rpi_dsi needs
                           the release's C6 firmware), the slot is NULL on the Waveshare 3.5"
 components/fatfs/         copy of IDF 5.5.6's fatfs with exFAT on (FF_FS_EXFAT 1, + FF_USE_LABEL fix): overrides IDF's;
+                          diskio_sdmmc.c: a 4-bit SD transfer that times out moves the card to 1-bit (CMD12 + ACMD6, no
+                          re-init or controller reset: the C6 shares it) until reboot (v3.2 7" with bad D1-D3);
+                          ff_sdmmc_bus_width() / ff_sdmmc_bus_fell_back() = home SD panel "SD Card (4-bit)" (orange
+                          "(1-bit)" after a fallback), Settings "(1-bit, 4-bit failed)", DevLink info sd_bits / sd_1bit;
                           README_LAUNCHER.md = the changes, to redo when moving to another IDF version
 components/lx_devlink/    DevLink: framed protocol over USB-Serial-JTAG (devlink_proto.h)
 components/lx_common/     crc32, launcher version; lx_zip = zipped ROMs (central directory + the chip ROM's miniz tinfl):
@@ -129,6 +134,12 @@ apps/common/icons/        88x88 icons of the emulator apps (emubuild copies <app
 apps/common/v1compat/     v1 `app_services_t` host on the SDK + v1build.py: the RetroESP32 v1 PSRAM games
                           doom, opentyrian, quake, duke3d build with their own glue unchanged; frames go to the PPA without a copy (DISP v3 `present_ext`)
 tools/papp_dev.py         DevLink host tool
+tools/perf_bench.py       Benchmark (apps/perf_bench: CoreMark, PSRAM/SRAM bandwidth+latency, PPA, e3d 3D engine), screen on/off,
+                          per board -> build/perf_bench/report.md; results v1.x vs v3.2: docs/BENCHMARK_V1_V3.md.
+                          No build.py (not in build_all / the Store). PIE: v1.x = -march .._xesppie, v3.x = .._xespv (other
+                          encodings: each faults on the other generation; SYS v4 papp_chip_rev() = major*100+minor tells
+                          apps which, -1 before 0.33). e3d builds its SIMD set twice (e3d_simd_pie.c / _espv.c) and picks
+                          one at e3d_create: one .papp for both. perf_bench = engine in C (-DE3D_NO_SIMD), perf_bench_simd
 tools/build_c6_fw.py      C6 firmware matching a board's esp_hosted -> build/c6_fw/c6_<version>.bin (make_release adds it)
 tools/make_release.py     Release files: launcher.bin per board (Settings → Update) + launcher_<id>_full.bin (first install at 0x0,
                           ESP Tool web page) + latest.json, prints the gh command
@@ -151,7 +162,7 @@ tests/board/smoke.py      Board regression: relocation test, test apps, crash re
 
 - ESP-IDF v5.5.6 at `C:\Users\97254\esp\v5.5.6\esp-idf` (5.5.2 still installed beside it); in PowerShell: `. .\tools\idf_env.ps1`
 - Python with pyserial + pyelftools: `C:\Users\97254\.espressif\python_env\idf5.5_py3.12_env\Scripts\python.exe`
-- Boards (both chip rev v1.x, `CONFIG_ESP32P4_SELECTS_REV_LESS_V3`); USB-Serial-JTAG belongs to DevLink, UART0 is the text console:
+- Boards (chip rev v1.x, `CONFIG_ESP32P4_SELECTS_REV_LESS_V3`, except the v3.2 7" `guition_p4_7_v3` on **COM6**); USB-Serial-JTAG belongs to DevLink, UART0 is the text console:
   Guition 4.3" `guition_p4_43` on **COM9** (build in `launcher/build`), Guition 7" JC1060P470C `guition_p4_7` on **COM10**
   (`idf.py -B build_guition_p4_7 -DLX_BOARD=guition_p4_7 -p COM10 build flash`). Porting: `docs/PORTING_GUIDE.md`.
   M5Stack Tab5 `m5stack_tab5` on **COM15** (`-B build_m5stack_tab5`; image "launcher_m5stack_tab5").
@@ -184,6 +195,7 @@ command also sets the board clock from the PC (`--no-time` skips it; `info` show
 (124 timeout). `shot out.png` = screenshot of the visible framebuffer, in landscape (open it to see
 the screen). Other commands: `info ls stat put get rm mkdir mv run stop status log reboot crash-clear`;
 `net [--quick|--scan]` = network self-test on the board (link, pings, TCP, DNS, nearby networks).
+`display off|on` = panel scan-out + backlight (bsp_display_scanout, Guition 7" only): no LCD refresh reads from PSRAM.
 Input without touching the board: `input state [--watch 10]`, `input pad A+START [--hold ms]`,
 `input key ENTER`, `input text "hi"`, or timed during a run: `deploy app.papp --inject 500:pad:A --inject 900:text:hi`.
 

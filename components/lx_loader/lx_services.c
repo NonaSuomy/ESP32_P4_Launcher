@@ -21,6 +21,7 @@
 #include "esp_mmu_map.h"
 #include "esp_memory_utils.h"
 #include "esp_timer.h"
+#include "esp_chip_info.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -202,6 +203,13 @@ static bool sys_utc_time(int64_t *seconds)
     return true;
 }
 
+static int sys_chip_rev(void)
+{
+    esp_chip_info_t ci;
+    esp_chip_info(&ci);
+    return ci.revision;              /* major * 100 + minor */
+}
+
 static const papp_if_sys_t s_if_sys = {
     .hdr = { PAPP_IF_SYS, PAPP_IF_SYS_VER, sizeof(papp_if_sys_t) },
     .abi_version    = LX_ABI_VERSION,
@@ -213,6 +221,7 @@ static const papp_if_sys_t s_if_sys = {
     .board_id       = sys_board_id,
     .local_time     = sys_local_time,
     .utc_time       = sys_utc_time,
+    .chip_rev       = sys_chip_rev,
 };
 
 /* â”€â”€ MEM â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */

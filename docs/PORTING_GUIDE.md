@@ -138,4 +138,5 @@ on-board hub's ports need a Transaction Translator that ESP-IDF doesn't have.
 A board sold with either chip generation gets one board id per generation, because an image runs on one
 only (the ROM and memory map differ, and the bootloader checks the revision range). `boards/guition_p4_43_v3`
 is the pattern: an `sdkconfig.board` with the v3 lines, and a `board/CMakeLists.txt` that builds
-`guition_p4_43`'s sources with `BOARD_CHIP_V3` defined, which `board.c` turns into the other id and name.
+`guition_p4_43`'s sources with `BOARD_CHIP_V3` defined, which `board.c` turns into the other id and name. `boards/guition_p4_7_v3` does the same; there
+`BOARD_CHIP_V3` also selects the panel those boards ship with (`BOARD_PANEL_NEW` in `board_pins.h`).

@@ -1,0 +1,36 @@
+# Guition JC1060P470C 7" with a rev v3.x chip — board-specific sdkconfig fragment
+# (builds guition_p4_7's sources; v3.x chip and the 2026 "New Panel", BOARD_PANEL_NEW)
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+# Rev v3.x silicon. v3.2 needs ESP-IDF >= 5.5.5 (Espressif advisory AR2026-004).
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=n
+CONFIG_ESP32P4_REV_MIN_300=y
+# The CPU runs at 400 MHz: the v3 default, 360 is a pre-v3 choice
+# ESP32-C6 on SDIO with the Function EV board wiring: CLK 18, CMD 19, D0-D3 14-17, reset 54
+CONFIG_ESP_HOSTED_P4_DEV_BOARD_FUNC_BOARD=y
+# 10 MHz SDIO: faster links put vertical streaks on the New Panel (Guition's demo and EspControl use 10)
+CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=10000
+# esp_hosted 2.12 takes its SDIO buffer pools from internal RAM; keep them small
+CONFIG_ESP_HOSTED_SDIO_TX_Q_SIZE=12
+CONFIG_ESP_HOSTED_SDIO_RX_Q_SIZE=12
+# The speaker amp's current peaks dip the 3.3 V rail on weak USB supplies
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_5=y
+
+# BLE for apps (BLE interface): NimBLE host on the P4, controller on the C6 over esp_hosted (VHCI).
+# The host only runs while a BLE app does; its memory comes from PSRAM.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_CONTROLLER_DISABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_TRANSPORT_UART=n
+CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE=y
+CONFIG_ESP_HOSTED_NIMBLE_HCI_VHCI=y
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=256
+CONFIG_BT_NIMBLE_NVS_PERSIST=n
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=6144
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y

@@ -64,6 +64,11 @@ bool      bsp_display_wait_vsync(uint32_t timeout_ms);
  * into the hidden buffer. */
 bool      bsp_display_wait_flip(uint32_t timeout_ms);
 void      bsp_display_backlight(int percent);   /* 0 = off                    */
+/* Test aid (DevLink "display off"): false stops the panel's scan-out of the frame buffers, so no
+ * PSRAM bandwidth goes to the refresh, and turns the backlight off; true restores both. While it is
+ * off, wait_flip / wait_vsync return at once / after a frame time. Optional: ESP_ERR_NOT_SUPPORTED
+ * on boards that don't have it. */
+esp_err_t bsp_display_scanout(bool on);
 
 /* ── Touch ─────────────────────────────────────────────────────────────────
  * Points are reported in landscape coordinates (the same frame lx_canvas and

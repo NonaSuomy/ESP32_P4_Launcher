@@ -5,7 +5,14 @@
 #define BOARD_LCD_H_RES     1024
 #define BOARD_LCD_V_RES     600
 #define BOARD_LCD_BL_GPIO   23      /* PWM */
-#define BOARD_LCD_RST_GPIO  27      /* V1 panel; the 2026 "V2" panel resets on GPIO 0 */
+/* The 2026 "New Panel" (rear label "V2"; every board with a rev v3.x chip has it) needs its own JD9165
+ * table and timing and resets on GPIO 0. Only the v3 image (boards/guition_p4_7_v3) drives it. */
+#ifdef BOARD_CHIP_V3
+#define BOARD_PANEL_NEW     1
+#define BOARD_LCD_RST_GPIO  0
+#else
+#define BOARD_LCD_RST_GPIO  27
+#endif
 #define BOARD_DSI_PHY_LDO_CHAN 3
 #define BOARD_DSI_PHY_LDO_MV   2500
 

@@ -145,7 +145,7 @@ typedef struct {
 /* ── SYS interface ──────────────────────────────────────────────────────── */
 
 #define PAPP_IF_SYS       PAPP_FOURCC('S', 'Y', 'S', ' ')
-#define PAPP_IF_SYS_VER   3      /* v2: local_time; v3: utc_time */
+#define PAPP_IF_SYS_VER   4      /* v2: local_time; v3: utc_time; v4: chip_rev */
 
 typedef struct {
     int16_t year;
@@ -164,6 +164,10 @@ typedef struct {
     const char *(*board_id)(void);
     bool     (*local_time)(papp_datetime_t *out);   /* v2: false if the clock isn't set */
     bool     (*utc_time)(int64_t *seconds);          /* v3: Unix time (UTC); false if the clock isn't set */
+    /* v4: the chip revision, major * 100 + minor (v1.3 = 103, v3.2 = 302). Code using the P4's SIMD
+     * extension depends on it: v1.x chips have PIE (-march ..._xesppie), v3.x the re-encoded _xespv;
+     * the same instructions with other encodings, so each faults on the other generation. */
+    int      (*chip_rev)(void);
 } papp_if_sys_t;
 
 /* ── MEM interface ──────────────────────────────────────────────────────── */

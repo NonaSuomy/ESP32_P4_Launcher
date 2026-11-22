@@ -37,6 +37,16 @@ void ff_diskio_register_sdmmc(unsigned char pdrv, sdmmc_card_t* card);
  */
 BYTE ff_diskio_get_pdrv_card(const sdmmc_card_t* card);
 
+/**
+ * @brief Launcher addition: true when a card's 4-bit transfers failed and it was moved to the 1-bit bus
+ */
+bool ff_sdmmc_bus_fell_back(void);
+
+/**
+ * @brief Launcher addition: data lines the (first) SD card uses now: 1, 4 or 8; 0 = no card registered
+ */
+int ff_sdmmc_bus_width(void);
+
 #ifdef __cplusplus
 }
 #endif

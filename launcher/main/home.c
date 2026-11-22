@@ -51,6 +51,8 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_vfs_fat.h"
+#include "ff.h"
+#include "diskio_sdmmc.h"
 #include "driver/temperature_sensor.h"
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
@@ -92,6 +94,7 @@ static lv_obj_t *s_home, *s_settings;
 static lv_obj_t *s_clk_area;            /* home clock: opens the clock setup (RTC boards) */
 static void on_clk_open(lv_event_t *ev);
 static lv_obj_t *s_clock, *s_date, *s_sd_free, *s_sd_apps, *s_grid, *s_count, *s_title;
+static lv_obj_t *s_sd_title;     /* "SD Card (4-bit)"; orange "(1-bit)" = 4-bit failed (D1-D3 contact) */
 static lv_obj_t *s_sys_cpu, *s_sys_sram, *s_sys_psram, *s_sys_temp, *s_sys_pads, *s_sys_state;
 static lv_obj_t *s_vol_slider, *s_bri_slider, *s_vol_val, *s_bri_val, *s_info;
 static temperature_sensor_handle_t s_tsens;
@@ -617,8 +620,8 @@ static void build_home(void)
     lv_obj_add_event_cb(sd, on_sd_click, LV_EVENT_CLICKED, NULL);
     lv_obj_t *sdi = label(sd, &lv_font_montserrat_28, C_GREEN, LV_SYMBOL_SD_CARD);
     lv_obj_set_pos(sdi, 14, 20);
-    lv_obj_t *sdt = label(sd, &lv_font_montserrat_16, C_TEXT, "SD Card");
-    lv_obj_set_pos(sdt, 52, 6);
+    s_sd_title = label(sd, &lv_font_montserrat_16, C_TEXT, "SD Card");
+    lv_obj_set_pos(s_sd_title, 52, 6);
     s_sd_free = label(sd, &lv_font_montserrat_16, C_GREEN, "");
     lv_obj_set_pos(s_sd_free, 52, 28);
     s_sd_apps = label(sd, &lv_font_montserrat_14, C_DIM, "");
@@ -1459,16 +1462,20 @@ static void refresh_info(void)
     char buf[512], batt[32] = "";
     int mv = bsp_battery_mv();
     if (mv >= 0) snprintf(batt, sizeof(batt), "   Battery pin %.2f V", mv / 1000.0);   /* -1: none */
+    /* the SD bus width: "(1-bit, 4-bit failed)" = the card was moved to 1 bit (D1-D3 contact) */
+    char bus[32] = "";
+    int bits = ff_sdmmc_bus_width();
+    if (bits) snprintf(bus, sizeof(bus), "  (%d-bit%s)", bits, ff_sdmmc_bus_fell_back() ? ", 4-bit failed" : "");
     snprintf(buf, sizeof(buf),
              "Board         %s\n"
              "Launcher      v%s   (app ABI %s, ESP-IDF %s)\n"
              "Memory        %u KB internal free,  %u KB PSRAM free\n"
-             "SD card       %.1f GB free of %.1f GB,  %d apps%s\n"
+             "SD card       %.1f GB free of %.1f GB,  %d apps%s%s\n"
              "Input         %s",
              b->name, LX_LAUNCHER_VERSION, LX_ABI_STRING, esp_get_idf_version(),
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
-             free_b / 1e9, total / 1e9, s_ninstalled, batt, "");
+             free_b / 1e9, total / 1e9, s_ninstalled, bus, batt, "");
     size_t n = strlen(buf);
     lx_input_describe(buf + n, sizeof(buf) - n);
     if (!buf[n]) snprintf(buf + n, sizeof(buf) - n, "no gamepad or keyboard");
@@ -1904,6 +1911,11 @@ static void update_status(lv_timer_t *t)
         }
         snprintf(buf, sizeof(buf), "%d app%s installed", s_ninstalled, s_ninstalled == 1 ? "" : "s");
         lv_label_set_text(s_sd_apps, buf);
+        int bits = card ? ff_sdmmc_bus_width() : 0;
+        if (bits) snprintf(buf, sizeof(buf), "SD Card (%d-bit)", bits);
+        else snprintf(buf, sizeof(buf), "SD Card");
+        lv_label_set_text(s_sd_title, buf);
+        lv_obj_set_style_text_color(s_sd_title, ff_sdmmc_bus_fell_back() ? C_ORANGE : C_TEXT, 0);
     }
 
     snprintf(buf, sizeof(buf), "%d MHz x2", CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);

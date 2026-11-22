@@ -52,6 +52,10 @@ const char *papp_board_id(void);
 uint32_t    papp_launcher_abi(void);
 bool        papp_local_time(papp_datetime_t *out);  /* false: clock not set, or older launcher */
 bool        papp_utc_time(int64_t *seconds);        /* Unix time (UTC); false: not set, or launcher < 0.27 */
+/* The chip revision, major * 100 + minor (v1.3 = 103, v3.2 = 302); -1: launcher < 0.33, which can't
+ * tell. SIMD code must match it: PIE (-march ..._xesppie) below 300, _xespv from 300 (other encodings
+ * of the same instructions; either faults on the other generation). Unknown = use plain C. */
+int         papp_chip_rev(void);
 
 /* ── Memory ─────────────────────────────────────────────────────────────── */
 void  *papp_alloc(size_t size, uint32_t caps, size_t align);   /* PAPP_MEM_* caps */
