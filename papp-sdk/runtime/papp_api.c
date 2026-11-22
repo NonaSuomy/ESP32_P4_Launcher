@@ -157,6 +157,11 @@ uint16_t papp_input_modifiers(void)                   { return INPT ? INPT->modi
 bool     papp_input_poll_event(papp_input_event_t *e) { return INPT && INPT->poll_event(e); }
 void     papp_input_flush(void)                       { if (INPT) INPT->flush(); }
 
+bool papp_input_keyboard(void)
+{
+    return INPT && INPT->hdr.version >= 3 && INPT->keyboard ? INPT->keyboard() : false;
+}
+
 int papp_input_analog(int ch)
 {
     return INPT && INPT->hdr.version >= 2 ? INPT->analog(ch) : -1;

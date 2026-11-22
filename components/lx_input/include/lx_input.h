@@ -30,6 +30,7 @@ esp_err_t lx_input_init(lx_input_sys_cb_t sys_cb);
 /* Consumers */
 bool     lx_input_gamepad(int player, papp_gamepad_t *out);
 bool     lx_input_key_down(uint16_t usage);
+bool     lx_input_keyboard_attached(void);          /* a USB keyboard or the board's own */
 uint16_t lx_input_modifiers(void);
 bool     lx_input_poll_event(papp_input_event_t *out);
 void     lx_input_flush(void);

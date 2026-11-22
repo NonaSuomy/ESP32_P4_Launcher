@@ -20,7 +20,8 @@ static const char *TAG = "bsp";
 static bsp_info_t s_info = {
     .id        = "m5stack_tab5",
     .name      = "M5Stack Tab5 1280x720",
-    .caps      = BSP_CAP_USB_HOST,      /* USB-A host port (5 V switched by IOX2 P3); the rest is set at init */
+    .caps      = BSP_CAP_USB_HOST |     /* USB-A host port (5 V switched by IOX2 P3); the rest is set at init */
+                 BSP_CAP_KEYBOARD,      /* the clip-on Tab5 Keyboard, looked for while the launcher runs */
     .display_w = BOARD_LCD_H_RES,
     .display_h = BOARD_LCD_V_RES,
     .display_rot = 90,                  /* portrait panel, used in landscape */

@@ -375,7 +375,7 @@ typedef struct {
 /* ── INPT interface ─────────────────────────────────────────────────────── */
 
 #define PAPP_IF_INPT      PAPP_FOURCC('I', 'N', 'P', 'T')
-#define PAPP_IF_INPT_VER  2      /* v2: analog */
+#define PAPP_IF_INPT_VER  3      /* v2: analog, v3: keyboard */
 
 #define PAPP_MAX_PLAYERS  4
 
@@ -453,6 +453,8 @@ typedef struct {
     void     (*flush)(void);
     /* v2 */
     int      (*analog)(int ch);                           /* PAPP_ANALOG_*: 0..65535, -1 absent */
+    /* v3 */
+    bool     (*keyboard)(void);                           /* a keyboard is attached (USB or the board's own) */
 } papp_if_inpt_t;
 
 /* ── THRD interface ─────────────────────────────────────────────────────── */
