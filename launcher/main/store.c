@@ -405,9 +405,22 @@ static void on_tab(lv_event_t *ev)
     list_show();
 }
 
+/* Back to the home screen. The rows and the app page are LVGL objects in internal RAM (about 2 KB a row),
+ * rebuilt on every visit: freed here, or they would hold ~85 KB of the largest free piece until a restart and
+ * apps that want a FAST region and an internal stack could no longer start (#50). */
+static void leave(void)
+{
+    ui_focus_drop();                    /* the focus may be on a row */
+    lv_obj_clean(s_list);
+    s_nrows = 0;
+    lv_obj_clean(s_dbody);
+    s_dget = s_dopen = s_dremove = s_dstate = NULL;
+    show_home();
+}
+
 static void on_back(lv_event_t *ev)
 {
-    show_home();
+    leave();
 }
 
 static void on_all(lv_event_t *ev)
@@ -857,7 +870,7 @@ bool store_back(void)
         return true;
     }
     if (lv_screen_active() == s_scr) {
-        show_home();
+        leave();
         return true;
     }
     return false;
