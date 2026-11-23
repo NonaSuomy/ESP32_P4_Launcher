@@ -22,6 +22,7 @@
  "emu.lynx":        {"category": "emulators", "description": "Atari Lynx games (.lnx) from /sd/roms/lynx"},
  "emu.neogeo":      {"category": "emulators", "description": "Neo Geo games (.zip) from /sd/roms/neogeo; needs the neogeo.zip BIOS"},
  "emu.nes":         {"category": "emulators", "description": "Nintendo NES games (.nes) from /sd/roms/nes"},
+ "emu.ngp":         {"category": "emulators", "description": "Neo Geo Pocket and Color ROMs (.ngp, .ngc) from /sd/roms/ngp (built-in BIOS emulation)"},
  "emu.pce":         {"category": "emulators", "description": "PC Engine / TurboGrafx-16 games (.pce) from /sd/roms/pce"},
  "emu.sms":         {"category": "emulators", "description": "Sega Master System games (.sms) from /sd/roms/sms"},
  "emu.snes":        {"category": "emulators", "description": "Super Nintendo games (.smc, .sfc) from /sd/roms/snes"},
