@@ -14,7 +14,6 @@ extern "C" {
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <setjmp.h>
 
 extern "C" {
 __attribute__((section(".papp_manifest"), used))
@@ -30,8 +29,8 @@ static papp_audio_stream_t *s_audio;
 static int16_t *s_audio_frame;
 static uint16_t *s_frame;
 static uint8_t *s_rom;
-static jmp_buf s_exit_env;
 static int s_can_exit;
+static int s_leave_game;
 static int s_apu_ready;
 static int s_render_ready;
 static int s_rom_ready;
@@ -59,8 +58,13 @@ extern "C" int ws_input_poll(int mode)
 {
     papp_gamepad_t pad = {0};
     papp_input_gamepad(0, &pad);
-    if (s_can_exit && (papp_exit_requested() || (pad.buttons & PAPP_BTN_L3)))
-        longjmp(s_exit_env, 1);
+    if (s_can_exit && (papp_exit_requested() || (pad.buttons & PAPP_BTN_L3))) {
+        /* Finish the current emulation frame and unwind normally. Jumping out
+           of the CPU core skips its frame/interrupt stack and made teardown
+           unreliable on device. */
+        s_leave_game = 1;
+        return 0;
+    }
     int state = 0;
     if (mode == 0) {
         if (pad.buttons & PAPP_BTN_UP) state |= 1 << 4;
@@ -172,41 +176,44 @@ static int play(const char *path)
     s_apu_ready = 1;
     apuInit();
     int result = -1;
-    if (setjmp(s_exit_env) == 0) {
-        papp_log("WonderSwan PAPP2: loading %s (%ld bytes)\n", path, size);
-        if (WsCreateFromMemory(s_rom, (size_t)size) != 0) {
-            papp_ui_message("WonderSwan", "ROM mapping failed.");
-        } else {
-            s_rom_ready = 1;
-            s_can_exit = 1;
-            uint32_t previous = (uint32_t)(papp_time_us() / 1000);
-            int menu_was_down = 0, volume_was_down = 0;
-            while (!papp_exit_requested()) {
-                papp_gamepad_t pad = {0};
-                papp_input_gamepad(0, &pad);
-                if (pad.buttons & PAPP_BTN_L3) break;
-                int menu_down = !!(pad.buttons & PAPP_BTN_X);
-                int volume_down = !!(pad.buttons & PAPP_BTN_Y);
-                if (menu_down && !menu_was_down) {
-                    papp_audio_pause(s_audio, true);
-                    static const char *const items[] = { "RESUME GAME", "EXIT GAME" };
-                    int choice = papp_ui_menu("WONDERSWAN", items, 2, 0);
-                    papp_audio_pause(s_audio, false);
-                    if (choice == 1) break;
-                }
-                if (volume_down && !volume_was_down) papp_ui_volume();
-                menu_was_down = menu_down;
-                volume_was_down = volume_down;
-                WsRun();
-                uint32_t now = (uint32_t)(papp_time_us() / 1000);
-                uint32_t elapsed = now - previous;
-                if (elapsed < 13) papp_delay_ms(13 - elapsed);
-                previous = now;
-            }
-            result = 0;
-        }
+    papp_log("WonderSwan PAPP2: loading %s (%ld bytes)\n", path, size);
+    if (WsCreateFromMemory(s_rom, (size_t)size) != 0) {
+        papp_ui_message("WonderSwan", "ROM mapping failed.");
     } else {
+        s_rom_ready = 1;
+        s_leave_game = 0;
+        s_can_exit = 1;
+        uint32_t previous = (uint32_t)(papp_time_us() / 1000);
+        int menu_was_down = 0, volume_was_down = 0;
+        while (!papp_exit_requested() && !s_leave_game) {
+            papp_gamepad_t pad = {0};
+            papp_input_gamepad(0, &pad);
+            if (pad.buttons & PAPP_BTN_L3) break;
+            int menu_down = !!(pad.buttons & PAPP_BTN_X);
+            int volume_down = !!(pad.buttons & PAPP_BTN_Y);
+            if (menu_down && !menu_was_down) {
+                papp_audio_pause(s_audio, true);
+                static const char *const items[] = { "RESUME GAME", "EXIT GAME" };
+                int choice = papp_ui_menu("WONDERSWAN", items, 2, 0);
+                papp_audio_pause(s_audio, false);
+                if (choice == 1) break;
+            }
+            if (volume_down && !volume_was_down) papp_ui_volume();
+            menu_was_down = menu_down;
+            volume_was_down = volume_down;
+            WsRun();
+            if (s_leave_game || papp_exit_requested()) break;
+            uint32_t now = (uint32_t)(papp_time_us() / 1000);
+            uint32_t elapsed = now - previous;
+            if (elapsed < 13) papp_delay_ms(13 - elapsed);
+            previous = now;
+        }
         result = 0;
+    }
+    s_can_exit = 0;
+    if (s_audio) {
+        papp_audio_pause(s_audio, true);
+        papp_audio_clear(s_audio);
     }
     cleanup();
     return result;
