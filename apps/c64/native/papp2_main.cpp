@@ -21,6 +21,8 @@ int app_entry(const app_services_t *);
 void app_return_to_launcher(void);
 }
 static papp_surface_t *surface;
+static uint16_t surface_width;
+static uint16_t surface_height;
 static papp_audio_stream_t *audio;
 static papp_gamepad_t pad{};
 static papp_disp_info_t display{};
@@ -106,30 +108,75 @@ static void audio_init(int rate) {
   }
 }
 static void audio_submit(short *samples, int frames) {
-  if (audio && samples && frames > 0)
-    papp_audio_write(audio, samples, (size_t)frames, 100);
+  if (!audio || !samples || frames <= 0)
+    return;
+
+  /* A PAPP write can accept fewer frames than requested when its timeout
+   * expires. Keep the remainder instead of silently dropping it; the
+   * blocking writes also pace the emulator to the audio clock. */
+  size_t written = 0;
+  const size_t total = (size_t)frames;
+  while (written < total && !papp_exit_requested()) {
+    size_t n = papp_audio_write(audio, samples + written * 2,
+                                total - written, 100);
+    if (!n) {
+      if (papp_exit_requested())
+        break;
+      papp_delay_ms(1);
+      continue;
+    }
+    written += n;
+  }
 }
+
+static papp_surface_t *surface_for(uint16_t w, uint16_t h) {
+  if (surface && (surface_width != w || surface_height != h)) {
+    papp_disp_surface_destroy(surface);
+    surface = NULL;
+  }
+  if (!surface) {
+    papp_surface_cfg_t cfg = {.width = w,
+                              .height = h,
+                              .format = PAPP_PIXFMT_RGB565,
+                              .scale = PAPP_SCALE_FIT_ASPECT,
+                              .buffers = 1};
+    surface = papp_disp_surface_create(&cfg);
+    if (surface) {
+      surface_width = w;
+      surface_height = h;
+    }
+  }
+  return surface;
+}
+
 static void frame(const uint16_t *src, uint16_t w, uint16_t h, float scale,
                   bool swap) {
-  (void)swap;
-  if (!surface || !src || !w || !h)
+  (void)scale;
+  if (!src || !w || !h)
     return;
+  papp_surface_t *s = surface_for(w, h);
+  if (!s)
+    return;
+
+  if (!swap) {
+    /* The P4 PPA scales this native-resolution frame to the display. The
+     * pixel buffer is contiguous RGB565 and remains owned by the core until
+     * the next frame callback. */
+    papp_disp_present_ext(s, src);
+    return;
+  }
+
   int stride = 0;
-  uint16_t *dst = (uint16_t *)papp_disp_lock(surface, &stride);
+  uint16_t *dst = (uint16_t *)papp_disp_lock(s, &stride);
   if (!dst)
     return;
-  for (int y = 0; y < display.height; y++)
-    memset(dst + y * stride, 0, (size_t)display.width * 2);
-  int dw = (int)(w * scale + 0.5f), dh = (int)(h * scale + 0.5f);
-  if (dw > display.width)
-    dw = display.width;
-  if (dh > display.height)
-    dh = display.height;
-  int ox = (display.width - dw) / 2, oy = (display.height - dh) / 2;
-  for (int y = 0; y < dh; y++)
-    for (int x = 0; x < dw; x++)
-      dst[(oy + y) * stride + ox + x] = src[(y * h / dh) * w + (x * w / dw)];
-  papp_disp_present(surface);
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      uint16_t pixel = src[y * w + x];
+      dst[y * stride + x] = (uint16_t)((pixel >> 8) | (pixel << 8));
+    }
+  }
+  papp_disp_present(s);
 }
 static void clear(uint16_t color) {
   if (!surface)
@@ -137,8 +184,8 @@ static void clear(uint16_t color) {
   int stride = 0;
   uint16_t *dst = (uint16_t *)papp_disp_lock(surface, &stride);
   if (dst) {
-    for (int y = 0; y < display.height; y++)
-      for (int x = 0; x < display.width; x++)
+    for (int y = 0; y < surface_height; y++)
+      for (int x = 0; x < surface_width; x++)
         dst[y * stride + x] = color;
     papp_disp_present(surface);
   }
@@ -330,6 +377,11 @@ static int task_create(void (*fn)(void *), const char *name, uint32_t stack,
                        void *arg, int prio, void *out, int core) {
   if (!fn || !out)
     return -1;
+  /* Keep C64 audio on the emulator thread. PAPP audio writes block while
+   * the output ring is full, which provides clock pacing without a second
+   * high-priority task competing with frame rendering on this core. */
+  if (name && !strcmp(name, "pax_audio"))
+    return -1;
   auto *c = (TaskCtx *)papp_alloc(sizeof(TaskCtx), PAPP_MEM_ANY, 16);
   if (!c)
     return -1;
@@ -372,14 +424,6 @@ int main(int argc, char **argv) {
   if (papp_ui_pick_file(&pc, &pr) == PAPP_PICK_RUN)
     snprintf(selected_rom, sizeof(selected_rom), "%s", pr.path);
   if (!papp_disp_info(&display))
-    return -1;
-  papp_surface_cfg_t dc = {.width = display.width,
-                           .height = display.height,
-                           .format = PAPP_PIXFMT_RGB565,
-                           .scale = PAPP_SCALE_NONE,
-                           .buffers = 2};
-  surface = papp_disp_surface_create(&dc);
-  if (!surface)
     return -1;
   app_services_t svc{};
   svc.abi_version = PAX_ABI_VERSION;
