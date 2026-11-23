@@ -35,9 +35,10 @@ static int s_apu_ready;
 static int s_render_ready;
 static int s_rom_ready;
 
-/* Oswan emits four held samples at each of 159 HBlank intervals per frame:
-   159 * 4 * 75 Hz = 47.7 kHz. The PAPP stream resamples this at 48 kHz. */
-static const uint32_t WS_AUDIO_RATE = 48000;
+/* The P4 display path presents at 60 Hz. Oswan emits four held samples at
+   each of 159 HBlank intervals per frame: 159 * 4 * 60 = 38.16 kHz. Feeding
+   this stream at 48 kHz underruns whenever display pacing holds it to 60 fps. */
+static const uint32_t WS_AUDIO_RATE = 38400;
 
 extern "C" void init_ModRM_tables(void);
 extern "C" void WsAllocateBuffers(void);
@@ -212,6 +213,13 @@ static int play(const char *path)
     }
     s_can_exit = 0;
     if (s_audio) {
+        papp_audio_stats_t stats = {0};
+        papp_audio_stats(s_audio, &stats);
+        papp_log("WonderSwan audio: played=%llu queued=%lu/%lu underruns=%lu\n",
+                 (unsigned long long)stats.played_frames,
+                 (unsigned long)stats.queued_frames,
+                 (unsigned long)stats.capacity_frames,
+                 (unsigned long)stats.underruns);
         papp_audio_pause(s_audio, true);
         papp_audio_clear(s_audio);
     }
