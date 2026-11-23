@@ -34,6 +34,12 @@ WORD (*Palette)[16] = NULL;
 WORD MonoColor[8];
 int Layer[3] = {1, 1, 1};
 int Segment[11];
+static WORD *FrameBufferAllocation;
+
+/* BG rendering starts each scanline at pSBuf - (scroll & 7), so the first
+ * scanline can write up to seven pixels before the visible buffer. Keep that
+ * clipped area inside the allocation rather than in the heap header. */
+#define FRAMEBUFFER_GUARD_PIXELS 8
 
 #ifdef WS_USE_SEGMENT_BUFFER
     WORD* SegmentBuffer = NULL;
@@ -45,8 +51,10 @@ void AllocateBuffers(void) {
     // SprTMap : 512 bytes
     SprTMap = (BYTE*)malloc(512 * sizeof(BYTE));
 
-    // FrameBuffer : LINE_SIZE * LCD_MAIN_H WORDs
-    FrameBuffer = (WORD*)malloc(LINE_SIZE * LCD_MAIN_H * sizeof(WORD));
+    // Guard the left edge for horizontal scroll's up-to-7-pixel pre-roll.
+    FrameBufferAllocation = (WORD*)malloc(
+        (LINE_SIZE * LCD_MAIN_H + FRAMEBUFFER_GUARD_PIXELS) * sizeof(WORD));
+    FrameBuffer = FrameBufferAllocation ? FrameBufferAllocation + FRAMEBUFFER_GUARD_PIXELS : NULL;
     if (!Palette || !SprTMap || !FrameBuffer) return;
     memset(SprTMap, 0, 512 * sizeof(BYTE));
     memset(FrameBuffer, 0, LINE_SIZE * LCD_MAIN_H * sizeof(WORD));
@@ -68,10 +76,9 @@ void FreeBuffers(void) {
         free(SprTMap);
         SprTMap = NULL;
     }
-    if (FrameBuffer) {
-        free(FrameBuffer);
-        FrameBuffer = NULL;
-    }
+    if (FrameBufferAllocation) free(FrameBufferAllocation);
+    FrameBufferAllocation = NULL;
+    FrameBuffer = NULL;
 
 #ifdef WS_USE_SEGMENT_BUFFER
     if (SegmentBuffer) {

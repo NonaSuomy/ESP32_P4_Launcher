@@ -36,9 +36,8 @@ static int s_render_ready;
 static int s_rom_ready;
 
 /* The P4 display path presents at 60 Hz. Oswan emits four held samples at
-   each of 159 HBlank intervals per frame: 159 * 4 * 60 = 38.16 kHz. Feeding
-   this stream at 48 kHz underruns whenever display pacing holds it to 60 fps. */
-static const uint32_t WS_AUDIO_RATE = 38400;
+   each of 159 HBlank intervals per frame: 159 * 4 * 60 = 38,160 Hz. */
+static const uint32_t WS_AUDIO_RATE = 38160;
 
 extern "C" void init_ModRM_tables(void);
 extern "C" void WsAllocateBuffers(void);
@@ -184,6 +183,13 @@ static int play(const char *path)
         s_rom_ready = 1;
         s_leave_game = 0;
         s_can_exit = 1;
+        /* Queue two emulated frames before playback. The display callback
+           feeds audio at frame boundaries, so this cushion absorbs a slow
+           render/present without letting the mixer empty the stream ring. */
+        papp_audio_pause(s_audio, true);
+        for (int i = 0; i < 2 && !s_leave_game && !papp_exit_requested(); ++i)
+            WsRun();
+        papp_audio_pause(s_audio, false);
         uint32_t previous = (uint32_t)(papp_time_us() / 1000);
         int menu_was_down = 0, volume_was_down = 0;
         while (!papp_exit_requested() && !s_leave_game) {
