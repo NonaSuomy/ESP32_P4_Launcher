@@ -546,6 +546,21 @@ static void usb_lib_task(void *arg)
         uint32_t flags;
         usb_host_lib_handle_events(portMAX_DELAY, &flags);
         if (flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) usb_host_device_free_all();
+        if (flags & USB_HOST_LIB_EVENT_FLAGS_ALL_FREE) {
+            /* A failed root-port enumeration can leave the port disabled until
+             * another physical disconnect. Power-cycle it after the device tree
+             * has been fully released so a hub reconnect can enumerate again. */
+            esp_err_t power_err = usb_host_lib_set_root_port_power(false);
+            if (power_err == ESP_OK) {
+                vTaskDelay(pdMS_TO_TICKS(250));
+                power_err = usb_host_lib_set_root_port_power(true);
+            }
+            if (power_err != ESP_OK) {
+                ESP_LOGW(TAG, "USB root-port recovery failed: %s", esp_err_to_name(power_err));
+            } else {
+                ESP_LOGI(TAG, "USB root port power-cycled after all devices were freed");
+            }
+        }
     }
 }
 

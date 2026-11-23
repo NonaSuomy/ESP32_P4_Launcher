@@ -31,6 +31,7 @@
 #include "lx_update.h"
 #include "lx_appstore.h"
 #include "lx_net.h"
+#include "lx_bt.h"
 #include "lx_c6.h"
 #include "lx_web.h"
 #include "lx_devlink.h"
@@ -103,6 +104,11 @@ static char s_launch[160];      /* set by a click; launched by the task loop */
 static int s_volume = 60, s_brightness = 100;
 static bool s_show_dev;          /* show PAPP_MF_HIDDEN apps */
 static lv_obj_t *s_dev_switch;
+static lv_obj_t *s_auto_btn, *s_auto_val;     /* Settings: the app started at boot */
+static void on_auto_click(lv_event_t *ev);
+static void autostart_show(void);
+static void autostart_load(void);
+static void autostart_moved(const char *from_dir, const char *to_dir);
 
 /* ── Focus (gamepad / keyboard): nearest item in the pressed direction ──── */
 
@@ -384,10 +390,14 @@ static bool s_long_press;        /* the click ending a long press is not a click
 static void folder_enter(const char *name);
 static void tile_menu(const app_entry_t *e);
 
+static bool s_find_pick;         /* the search screen chooses the app started at boot */
+static void autostart_pick(const char *path);
+
 static void on_tile_click(lv_event_t *ev)
 {
     const app_entry_t *e = lv_event_get_user_data(ev);
     if (s_long_press) s_long_press = false;
+    else if (s_find_pick) autostart_pick(e->path);
     else if (e == &s_store_tile) store_open(NULL);
     else if (e->is_folder) folder_enter(e->name);
     else snprintf(s_launch, sizeof(s_launch), "%s", e->path);
@@ -1384,6 +1394,137 @@ static void wifi_tick(void)
     wifi_focus();
 }
 
+/* ── Bluetooth speaker (Bluedroid boards with a USB Bluetooth dongle) ─────
+ * The launcher's sound goes to the speaker while it is connected (lx_bt_speaker.c). */
+
+static lv_obj_t *s_bt_btn, *s_bt_scr, *s_bt_status, *s_bt_list, *s_bt_note;
+static lv_obj_t *s_bt_back, *s_bt_scan, *s_bt_onoff, *s_bt_forget;
+static bool s_bt_scanning;
+static lx_bt_found_t s_bt_found[LX_BT_MAX_FOUND];
+
+static void bt_focus(void)
+{
+    lv_obj_t *keep = s_focused;
+    bool fixed = keep == s_bt_back || keep == s_bt_scan || keep == s_bt_onoff || keep == s_bt_forget;
+    if (fixed) lv_obj_remove_state(keep, LV_STATE_FOCUSED);
+    focus_clear_list();
+    focus_add(s_bt_back);
+    focus_add(s_bt_scan);
+    focus_add(s_bt_onoff);
+    focus_add(s_bt_forget);
+    for (uint32_t i = 0; i < lv_obj_get_child_count(s_bt_list); i++)
+        focus_add(lv_obj_get_child(s_bt_list, i));
+    s_focused = NULL;
+    focus_set(fixed && lv_screen_active() == s_bt_scr ? keep : s_bt_scan);
+}
+
+static void on_bt_scan(lv_event_t *ev)
+{
+    lv_obj_clean(s_bt_list);
+    if (lx_bt_speaker_scan()) {
+        s_bt_scanning = true;
+        lv_list_add_text(s_bt_list, "Searching... (put the speaker in pairing mode)");
+    } else {
+        lv_list_add_text(s_bt_list, "Plug a USB Bluetooth dongle into the board first");
+    }
+    bt_focus();
+}
+
+static void on_bt_open(lv_event_t *ev)
+{
+    lv_screen_load(s_bt_scr);
+    lv_obj_clean(s_bt_list);
+    bt_focus();
+    if (!lx_bt_speaker_name()[0] && lx_bt_dongle_present()) on_bt_scan(NULL);
+}
+
+static void on_bt_back(lv_event_t *ev) { show_settings(); }
+
+static void on_bt_onoff(lv_event_t *ev)
+{
+    if (lx_bt_speaker_name()[0]) lx_bt_speaker_enable(!lx_bt_speaker_enabled());
+}
+
+static void on_bt_forget(lv_event_t *ev) { lx_bt_speaker_forget(); }
+
+static void on_bt_pick(lv_event_t *ev)
+{
+    int i = (int)(intptr_t)lv_event_get_user_data(ev);
+    lx_bt_speaker_pick(s_bt_found[i].addr, s_bt_found[i].name);
+}
+
+static void build_bt_screen(void)
+{
+    s_bt_scr = lv_obj_create(NULL);
+    lv_obj_remove_flag(s_bt_scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(s_bt_scr, C_BG_TOP, 0);
+    lv_obj_set_style_bg_grad_color(s_bt_scr, C_BG_BOTTOM, 0);
+    lv_obj_set_style_bg_grad_dir(s_bt_scr, LV_GRAD_DIR_VER, 0);
+    s_bt_back = wifi_button(s_bt_scr, 16, 14, 56, LV_SYMBOL_LEFT, on_bt_back);
+    lv_obj_t *t = label(s_bt_scr, &lv_font_montserrat_28, C_TEXT, "Bluetooth speaker");
+    lv_obj_set_pos(t, 92, 20);
+    s_bt_status = label(s_bt_scr, &lv_font_montserrat_16, C_DIM, "");
+    lv_obj_set_pos(s_bt_status, 24, 72);
+    lv_obj_set_width(s_bt_status, 752 + s_dx);
+    lv_label_set_long_mode(s_bt_status, LV_LABEL_LONG_DOT);
+    s_bt_scan = wifi_button(s_bt_scr, 24, 104, 120, "Scan", on_bt_scan);
+    s_bt_onoff = wifi_button(s_bt_scr, 160, 104, 200, "Connect", on_bt_onoff);
+    s_bt_forget = wifi_button(s_bt_scr, 376, 104, 200, "Forget speaker", on_bt_forget);
+    s_bt_list = lv_list_create(s_bt_scr);
+    lv_obj_set_pos(s_bt_list, 24, 160);
+    lv_obj_set_size(s_bt_list, 752 + s_dx, 282 + s_dy);
+    lv_obj_set_style_bg_color(s_bt_list, C_PANEL, 0);
+    lv_obj_set_style_border_color(s_bt_list, C_BORDER, 0);
+    s_bt_note = label(s_bt_scr, &lv_font_montserrat_16, C_DIM, "");
+    lv_obj_set_pos(s_bt_note, 24, 450 + s_dy);
+    lv_obj_set_width(s_bt_note, 752 + s_dx);
+    lv_label_set_long_mode(s_bt_note, LV_LABEL_LONG_DOT);
+}
+
+static void bt_tick(void)
+{
+    static int64_t last;
+    int64_t now = esp_timer_get_time();
+    if (!s_bt_scr || lv_screen_active() != s_bt_scr || now - last < 300000) return;
+    last = now;
+    char buf[128];
+    const char *spk = lx_bt_speaker_name();
+    static const char *const k_state[] = {
+        [LX_BT_SPK_OFF] = "off", [LX_BT_SPK_NO_DONGLE] = "waiting for a USB Bluetooth dongle",
+        [LX_BT_SPK_CONNECTING] = "connecting...", [LX_BT_SPK_CONNECTED] = "connected",
+        [LX_BT_SPK_PLAYING] = "playing: the launcher's sound goes here",
+        [LX_BT_SPK_RETRY] = "not connected, trying again",
+    };
+    if (!lx_bt_dongle_present())
+        snprintf(buf, sizeof(buf), LV_SYMBOL_WARNING " No USB Bluetooth dongle. The Wi-Fi chip has no Bluetooth audio.");
+    else if (!spk[0])
+        snprintf(buf, sizeof(buf), LV_SYMBOL_BLUETOOTH " %s. No speaker yet: Scan and pick one.", lx_bt_dongle_name());
+    else
+        snprintf(buf, sizeof(buf), LV_SYMBOL_BLUETOOTH " %s: %s", spk, k_state[lx_bt_speaker_state()]);
+    lv_label_set_text(s_bt_status, buf);
+    lv_label_set_text(lv_obj_get_child(s_bt_onoff, 0), lx_bt_speaker_enabled() ? "Disconnect" : "Connect");
+    lv_label_set_text(s_bt_note, lx_bt_speaker_error());
+    if (!s_bt_scanning) return;
+    int n = lx_bt_speaker_results(s_bt_found, LX_BT_MAX_FOUND);
+    if (n < 0) return;
+    s_bt_scanning = false;
+    lv_obj_clean(s_bt_list);
+    for (int pass = 0; pass < 2; pass++)            /* speakers and headphones first */
+        for (int i = 0; i < n; i++) {
+            const lx_bt_found_t *f = &s_bt_found[i];
+            if (f->audio != (pass == 0)) continue;
+            if (f->name[0]) snprintf(buf, sizeof(buf), "%s  (%d dBm%s)", f->name, f->rssi, f->audio ? "" : ", not audio");
+            else snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X  (%d dBm%s)", f->addr[0], f->addr[1],
+                          f->addr[2], f->addr[3], f->addr[4], f->addr[5], f->rssi, f->audio ? "" : ", not audio");
+            lv_obj_t *b = lv_list_add_button(s_bt_list, f->audio ? LV_SYMBOL_AUDIO : LV_SYMBOL_BLUETOOTH, buf);
+            lv_obj_set_style_outline_width(b, 2, LV_STATE_FOCUSED);
+            lv_obj_set_style_outline_color(b, C_ACCENT, LV_STATE_FOCUSED);
+            lv_obj_add_event_cb(b, on_bt_pick, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        }
+    if (!n) lv_list_add_text(s_bt_list, "Nothing found. Is the speaker in pairing mode?");
+    bt_focus();
+}
+
 static lv_obj_t *s_update_btn;
 static void on_upd_check(lv_event_t *ev);
 enum { ACT_CLOSE, ACT_OPEN, ACT_RENAME, ACT_DELETE, ACT_DELETE_YES, ACT_PICK, ACT_OUT, ACT_NEW_MOVE, ACT_FORGET,
@@ -1420,17 +1561,35 @@ static void build_settings(void)
     lv_obj_t *dev = panel(s_settings, 24, 220, 752 + s_dx, 52, 14);
     lv_obj_t *di = label(dev, &lv_font_montserrat_24, C_ACCENT, LV_SYMBOL_LIST);
     lv_obj_set_pos(di, 18, 13);
-    lv_obj_t *dt = label(dev, &lv_font_montserrat_20, C_TEXT, "Show developer apps");
+    lv_obj_t *dt = label(dev, &lv_font_montserrat_20, C_TEXT, "Developer apps");
     lv_obj_set_pos(dt, 60, 14);
     s_dev_switch = lv_switch_create(dev);
-    lv_obj_set_pos(s_dev_switch, 664 + s_dx, 10);
+    lv_obj_set_pos(s_dev_switch, 228, 10);
+    /* Start at boot: the app picked in the search screen (autostart_pick), or none */
+    lv_obj_t *at = label(dev, &lv_font_montserrat_20, C_TEXT, LV_SYMBOL_PLAY " At boot");
+    lv_obj_set_pos(at, 330, 14);
+    s_auto_btn = lv_button_create(dev);
+    lv_obj_set_pos(s_auto_btn, 460, 6);
+    lv_obj_set_size(s_auto_btn, 280 + s_dx, 40);
+    lv_obj_set_style_bg_color(s_auto_btn, C_BLUE, 0);
+    lv_obj_set_style_outline_width(s_auto_btn, 3, LV_STATE_FOCUSED);
+    lv_obj_set_style_outline_color(s_auto_btn, C_ACCENT, LV_STATE_FOCUSED);
+    lv_obj_set_style_outline_pad(s_auto_btn, 3, LV_STATE_FOCUSED);
+    s_auto_val = label(s_auto_btn, &lv_font_montserrat_20, C_TEXT, "");
+    lv_obj_set_width(s_auto_val, 260 + s_dx);
+    lv_label_set_long_mode(s_auto_val, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(s_auto_val, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(s_auto_val);
+    lv_obj_add_event_cb(s_auto_btn, on_auto_click, LV_EVENT_CLICKED, NULL);
+    autostart_show();
     lv_obj_set_style_bg_color(s_dev_switch, C_BLUE, LV_PART_INDICATOR | LV_STATE_CHECKED);
     lv_obj_set_style_outline_width(s_dev_switch, 3, LV_STATE_FOCUSED);
     lv_obj_set_style_outline_color(s_dev_switch, C_ACCENT, LV_STATE_FOCUSED);
     lv_obj_set_style_outline_pad(s_dev_switch, 6, LV_STATE_FOCUSED);
     if (s_show_dev) lv_obj_add_state(s_dev_switch, LV_STATE_CHECKED);
     lv_obj_add_event_cb(s_dev_switch, on_dev_switch, LV_EVENT_VALUE_CHANGED, NULL);
-    int bw = (752 + s_dx - 2 * 10) / 3;        /* three buttons share the row */
+    int nb = lx_bt_supported() ? 4 : 3;        /* the buttons that share the row */
+    int bw = (752 + s_dx - (nb - 1) * 10) / nb;
     s_map_btn = lv_button_create(s_settings);
     lv_obj_set_pos(s_map_btn, 24, 278);
     lv_obj_set_size(s_map_btn, bw, 52);
@@ -1451,8 +1610,20 @@ static void build_settings(void)
     lv_obj_center(label(s_wifi_btn, &lv_font_montserrat_20, C_TEXT, LV_SYMBOL_WIFI " Wi-Fi"));
     lv_obj_add_event_cb(s_wifi_btn, on_wifi_open, LV_EVENT_CLICKED, NULL);
     build_wifi_screens();
+    if (lx_bt_supported()) {
+        s_bt_btn = lv_button_create(s_settings);
+        lv_obj_set_pos(s_bt_btn, 24 + 2 * (bw + 10), 278);
+        lv_obj_set_size(s_bt_btn, bw, 52);
+        lv_obj_set_style_bg_color(s_bt_btn, C_BLUE, 0);
+        lv_obj_set_style_outline_width(s_bt_btn, 3, LV_STATE_FOCUSED);
+        lv_obj_set_style_outline_color(s_bt_btn, C_ACCENT, LV_STATE_FOCUSED);
+        lv_obj_set_style_outline_pad(s_bt_btn, 3, LV_STATE_FOCUSED);
+        lv_obj_center(label(s_bt_btn, &lv_font_montserrat_20, C_TEXT, LV_SYMBOL_BLUETOOTH " Speaker"));
+        lv_obj_add_event_cb(s_bt_btn, on_bt_open, LV_EVENT_CLICKED, NULL);
+        build_bt_screen();
+    }
     s_update_btn = lv_button_create(s_settings);
-    lv_obj_set_pos(s_update_btn, 24 + 2 * (bw + 10), 278);
+    lv_obj_set_pos(s_update_btn, 24 + (nb - 1) * (bw + 10), 278);
     lv_obj_set_size(s_update_btn, bw, 52);
     lv_obj_set_style_bg_color(s_update_btn, C_BLUE, 0);
     lv_obj_set_style_outline_width(s_update_btn, 3, LV_STATE_FOCUSED);
@@ -1509,8 +1680,10 @@ static void show_settings(void)
     focus_add(s_vol_slider);
     focus_add(s_bri_slider);
     focus_add(s_dev_switch);
+    focus_add(s_auto_btn);
     focus_add(s_map_btn);
     focus_add(s_wifi_btn);
+    if (s_bt_btn) focus_add(s_bt_btn);
     focus_add(s_update_btn);
     for (int i = 0; i < s_nfocus; i++)      /* back from Wi-Fi or a dialog: no ring left on the old one */
         lv_obj_remove_state(s_focusable[i], LV_STATE_FOCUSED);
@@ -1616,7 +1789,7 @@ static void folder_leave(void)
  * keyboard on the home screen. The list follows the text; Enter starts the
  * focused (or first) result. */
 
-static lv_obj_t *s_find_scr, *s_find_text, *s_find_grid, *s_find_note, *s_find_back;
+static lv_obj_t *s_find_scr, *s_find_text, *s_find_grid, *s_find_note, *s_find_back, *s_find_none;
 
 static bool name_has(const char *name, const char *q)
 {
@@ -1637,14 +1810,16 @@ static void find_update(void)
     int n = 0;
     for (int i = -1; i < s_napps; i++) {
         app_entry_t *e = i < 0 ? &s_store_tile : &s_apps[i];
-        if (e->is_folder || !name_has(e->name, q)) continue;
+        if (e->is_folder || !name_has(e->name, q) || (s_find_pick && e == &s_store_tile)) continue;
         focus_add(app_tile(s_find_grid, e, false));
         n++;
     }
-    if (!q[0]) lv_label_set_text_fmt(s_find_note, "%d apps", n);
+    if (s_find_pick) lv_label_set_text(s_find_note, "");
+    else if (!q[0]) lv_label_set_text_fmt(s_find_note, "%d apps", n);
     else if (n) lv_label_set_text_fmt(s_find_note, "%d found", n);
     else lv_label_set_text(s_find_note, "No app matches");
     focus_add(s_find_back);
+    if (s_find_pick) focus_add(s_find_none);
     lv_obj_scroll_to_y(s_find_grid, 0, LV_ANIM_OFF);
     focus_set(n ? s_focusable[0] : NULL);           /* Enter starts the first one */
 }
@@ -1652,6 +1827,13 @@ static void find_update(void)
 static void find_close(void)
 {
     if (s_focused) lv_obj_remove_state(s_focused, LV_STATE_FOCUSED);
+    if (s_find_pick) {                              /* choosing the app for boot: back to Settings */
+        s_find_pick = false;
+        s_focused = NULL;
+        show_settings();
+        focus_set(s_auto_btn);
+        return;
+    }
     lv_screen_load(s_home);
     s_focused = s_find_btn;                         /* home_focus_list keeps it */
     home_focus_list();
@@ -1660,12 +1842,17 @@ static void find_close(void)
 /* Enter / the keyboard's OK: the focused result, else the first */
 static void find_go(void)
 {
+    if (s_focused && (s_focused == s_find_none || s_focused == s_find_back)) {   /* a header button */
+        lv_obj_send_event(s_focused, LV_EVENT_CLICKED, NULL);
+        return;
+    }
     lv_obj_t *t = s_focused && lv_obj_get_parent(s_focused) == s_find_grid ? s_focused
                 : lv_obj_get_child_count(s_find_grid) ? lv_obj_get_child(s_find_grid, 0) : NULL;
     if (t) lv_obj_send_event(t, LV_EVENT_CLICKED, NULL);
 }
 
 static void on_find_changed(lv_event_t *ev) { find_update(); }
+static void on_find_none(lv_event_t *ev)    { autostart_pick(""); }
 static void on_find_back(lv_event_t *ev)    { find_close(); }
 
 static void on_find_key(lv_event_t *ev)
@@ -1695,6 +1882,8 @@ static void build_find(void)
     lv_obj_add_event_cb(s_find_text, on_find_changed, LV_EVENT_VALUE_CHANGED, NULL);
     s_find_note = label(s_find_scr, &lv_font_montserrat_16, C_DIM, "");
     lv_obj_set_pos(s_find_note, 644 + s_dx, 24);
+    s_find_none = wifi_button(s_find_scr, 640 + s_dx, 8, 148, "None", on_find_none);   /* pick mode only */
+    lv_obj_add_flag(s_find_none, LV_OBJ_FLAG_HIDDEN);
     s_find_grid = lv_obj_create(s_find_scr);
     lv_obj_remove_style_all(s_find_grid);
     lv_obj_set_pos(s_find_grid, 10, 66);
@@ -1717,6 +1906,9 @@ static void build_find(void)
 static void find_open(const char *text)
 {
     if (!s_find_scr) build_find();
+    if (s_find_pick) lv_obj_remove_flag(s_find_none, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(s_find_none, LV_OBJ_FLAG_HIDDEN);
+    lv_textarea_set_placeholder_text(s_find_text, s_find_pick ? "App to start at boot" : "Search apps");
     if (s_focused) lv_obj_remove_state(s_focused, LV_STATE_FOCUSED);
     s_focused = NULL;
     lv_textarea_set_text(s_find_text, text);
@@ -1766,6 +1958,7 @@ static void move_app(const char *path, const char *folder)
     else snprintf(dst, sizeof(dst), APPS_DIR "/%s", base);
     struct stat st;
     bool ok = stat(dst, &st) != 0 && rename(dir, dst) == 0;
+    if (ok) autostart_moved(dir, dst);
     home_view(NULL);
     if (!ok) folder_message("Cannot move the app", "An app with the same directory name is already there.");
 }
@@ -2571,6 +2764,204 @@ static void launch(const char *path)
     }
 }
 
+/* ── Start at boot ──────────────────────────────────────────────────────
+ * Settings → At boot names an app (chosen in the search screen) that starts by itself after the
+ * launcher boots. For AUTOSTART_WAIT_US first a screen says so; a touch held on it (also one already
+ * down when it comes up, so the screen can be held from power-on) or any button or key opens a menu:
+ * back to the launcher, or start the app now. The app is not started after a crash (an app's crash
+ * record, or the launcher's own panic or watchdog), so a bad app can't keep the board restarting. */
+
+#define AUTOSTART_FILE    "/sd/config/autostart.txt"
+#define AUTOSTART_WAIT_US 2500000
+#define AUTOSTART_HOLD_US 300000
+
+static char s_auto[160];            /* the .papp, "" = none */
+static int s_auto_state;            /* 0 nothing, 1 the starting screen, 2 the menu */
+static int64_t s_auto_end, s_auto_down_since;
+static lv_obj_t *s_auto_scr, *s_auto_bar, *s_auto_box;
+
+static void autostart_name(const char *path, char *out, size_t len)
+{
+    papp_manifest_t m;
+    if (lx_app_read_manifest(path, &m) == ESP_OK && m.name[0]) {
+        snprintf(out, len, "%s", m.name);
+        return;
+    }
+    const char *b = strrchr(path, '/');
+    snprintf(out, len, "%s", b ? b + 1 : path);
+    char *dot = strrchr(out, '.');
+    if (dot) *dot = 0;
+}
+
+static void autostart_load(void)
+{
+    s_auto[0] = 0;
+    FILE *f = fopen(AUTOSTART_FILE, "r");
+    if (!f) return;
+    if (fgets(s_auto, sizeof(s_auto), f)) s_auto[strcspn(s_auto, "\r\n")] = 0;
+    fclose(f);
+}
+
+static void autostart_show(void)
+{
+    if (!s_auto_val) return;
+    char name[48];
+    if (s_auto[0]) autostart_name(s_auto, name, sizeof(name));
+    lv_label_set_text(s_auto_val, s_auto[0] ? name : "None");
+}
+
+/* The search screen's choice ("" = None): saved, and back to Settings */
+static void autostart_pick(const char *path)
+{
+    snprintf(s_auto, sizeof(s_auto), "%s", path);
+    mkdir("/sd/config", 0775);
+    if (!s_auto[0]) {
+        unlink(AUTOSTART_FILE);
+    } else {
+        FILE *f = fopen(AUTOSTART_FILE, "w");
+        if (f) { fprintf(f, "%s\n", s_auto); fclose(f); }
+    }
+    ESP_LOGI(TAG, "at boot: %s", s_auto[0] ? s_auto : "nothing");
+    autostart_show();
+    find_close();                       /* pick mode: back to Settings */
+}
+
+static void on_auto_click(lv_event_t *ev)
+{
+    s_find_pick = true;
+    find_open("");
+}
+
+/* An app moved to another folder (move_app): the setting follows it */
+static void autostart_moved(const char *from_dir, const char *to_dir)
+{
+    size_t n = strlen(from_dir);
+    if (!s_auto[0] || strncmp(s_auto, from_dir, n) || s_auto[n] != '/') return;
+    char p[160];
+    snprintf(p, sizeof(p), "%s%s", to_dir, s_auto + n);
+    snprintf(s_auto, sizeof(s_auto), "%s", p);
+    FILE *f = fopen(AUTOSTART_FILE, "w");
+    if (f) { fprintf(f, "%s\n", s_auto); fclose(f); }
+    autostart_show();
+}
+
+static void autostart_close_menu(void)
+{
+    if (s_auto_box) lv_msgbox_close(s_auto_box);
+    s_auto_box = NULL;
+    s_auto_state = 0;
+    s_focused = NULL;
+    home_focus_list();
+}
+
+static void on_auto_quit(lv_event_t *ev)  { autostart_close_menu(); }
+static void on_auto_start(lv_event_t *ev)
+{
+    autostart_close_menu();
+    snprintf(s_launch, sizeof(s_launch), "%s", s_auto);
+}
+
+static void autostart_menu(void)
+{
+    if (s_auto_scr) { lv_obj_delete(s_auto_scr); s_auto_scr = NULL; }
+    char name[48], text[96], start[64];
+    autostart_name(s_auto, name, sizeof(name));
+    snprintf(text, sizeof(text), "%s is set to start at boot.", name);
+    snprintf(start, sizeof(start), LV_SYMBOL_PLAY " Start %s", name);
+    lv_obj_t *mb = s_auto_box = lv_msgbox_create(NULL);
+    lv_msgbox_add_title(mb, LV_SYMBOL_HOME "  Start at boot");
+    lv_msgbox_add_text(mb, text);
+    lv_obj_t *quit = lv_msgbox_add_footer_button(mb, "Quit to launcher");
+    lv_obj_t *go = lv_msgbox_add_footer_button(mb, start);
+    lv_obj_add_event_cb(quit, on_auto_quit, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(go, on_auto_start, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_width(mb, 560);
+    focus_clear_list();
+    focus_add(quit);
+    focus_add(go);
+    focus_set(quit);
+    /* the touch that is still down is the one that asked: it may not press a button as it lifts */
+    s_touch_wait_lift = true;
+    s_touch_quiet_until = esp_timer_get_time() + BACK_QUIET_US;
+    lx_input_flush();
+    s_auto_state = 2;
+    ESP_LOGI(TAG, "at boot: held, asking");
+}
+
+/* home_start: the starting screen, if an app is set and may start */
+static void autostart_begin(void)
+{
+    autostart_load();
+    if (!s_auto[0]) return;
+    struct stat st;
+    esp_reset_reason_t why = esp_reset_reason();
+    const char *skip = stat(s_auto, &st) != 0 ? "the app is not on the card"
+                     : s_crash_box ? "the app crashed last time"
+                     : why == ESP_RST_PANIC || why == ESP_RST_INT_WDT || why == ESP_RST_TASK_WDT ||
+                       why == ESP_RST_WDT ? "the launcher restarted after an error" : NULL;
+    if (skip) {
+        ESP_LOGW(TAG, "at boot: not starting %s: %s", s_auto, skip);
+        return;
+    }
+    char name[48], text[80];
+    autostart_name(s_auto, name, sizeof(name));
+    snprintf(text, sizeof(text), "Starting %s", name);
+    lv_obj_t *s = s_auto_scr = lv_obj_create(lv_layer_top());     /* over the home screen, takes the touches */
+    lv_obj_remove_style_all(s);
+    lv_obj_set_size(s, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_opa(s, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s, C_BG_TOP, 0);
+    lv_obj_set_style_bg_grad_color(s, C_BG_BOTTOM, 0);
+    lv_obj_set_style_bg_grad_dir(s, LV_GRAD_DIR_VER, 0);
+    lv_obj_add_flag(s, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t *t = label(s, &lv_font_montserrat_28, C_TEXT, text);
+    lv_obj_align(t, LV_ALIGN_CENTER, 0, -50);
+    lv_obj_t *h = label(s, &lv_font_montserrat_20, C_DIM, "Touch and hold the screen to stay in the launcher");
+    lv_obj_align(h, LV_ALIGN_CENTER, 0, 0);
+    s_auto_bar = lv_bar_create(s);
+    lv_obj_set_size(s_auto_bar, 360, 10);
+    lv_obj_align(s_auto_bar, LV_ALIGN_CENTER, 0, 50);
+    lv_bar_set_range(s_auto_bar, 0, 100);
+    lv_obj_set_style_bg_color(s_auto_bar, C_BLUE, LV_PART_INDICATOR);
+    s_auto_end = esp_timer_get_time() + AUTOSTART_WAIT_US;
+    s_auto_down_since = 0;
+    s_auto_state = 1;
+    ESP_LOGI(TAG, "at boot: %s in %d s unless held", s_auto, AUTOSTART_WAIT_US / 1000000);
+}
+
+/* home_task, while the starting screen is up */
+static void autostart_tick(void)
+{
+    int64_t now = esp_timer_get_time();
+    bsp_touch_point_t p[1];
+    bool down = (bsp_info()->caps & BSP_CAP_TOUCH) && bsp_touch_read(p, 1) > 0;
+    if (!down) s_auto_down_since = 0;
+    else if (!s_auto_down_since) s_auto_down_since = now;
+    bool asked = down && now - s_auto_down_since >= AUTOSTART_HOLD_US;
+    papp_input_event_t ev;
+    while (lx_input_poll_event(&ev))
+        if (ev.type == PAPP_EV_BUTTON_DOWN || ev.type == PAPP_EV_KEY_DOWN) asked = true;
+    if (asked) {
+        autostart_menu();
+        return;
+    }
+    if (lx_app_state() != LX_APP_IDLE) {           /* something else started one (DevLink) */
+        ESP_LOGI(TAG, "at boot: an app is already running");
+        lv_obj_delete(s_auto_scr);
+        s_auto_scr = NULL;
+        s_auto_state = 0;
+        return;
+    }
+    if (now < s_auto_end) {
+        lv_bar_set_value(s_auto_bar, (int)(100 - (s_auto_end - now) * 100 / AUTOSTART_WAIT_US), LV_ANIM_OFF);
+        return;
+    }
+    lv_obj_delete(s_auto_scr);
+    s_auto_scr = NULL;
+    s_auto_state = 0;
+    snprintf(s_launch, sizeof(s_launch), "%s", s_auto);
+}
+
 static void home_task(void *arg)
 {
     bool was_running = false, confirmed = false, offered = false;
@@ -2618,10 +3009,12 @@ static void home_task(void *arg)
         }
         dim_tick();
         screenshot_tick();
-        if (s_touch_wait_lift && esp_timer_get_time() < s_touch_quiet_until) lx_input_flush();
+        if (s_auto_state == 1) autostart_tick();
+        else if (s_touch_wait_lift && esp_timer_get_time() < s_touch_quiet_until) lx_input_flush();
         else if (s_map_step >= 0) map_tick();
         else poll_keys();
         wifi_tick();
+        bt_tick();
         store_tick();
         if (store_updates() != s_badge_shown) badge_update();
         if (files_changed() != s_web_seen && lv_screen_active() == s_home &&
@@ -2682,6 +3075,7 @@ esp_err_t home_start(void)
 
     s_dx = w - 800;
     s_dy = h_px - 480;
+    autostart_load();                   /* Settings shows it */
     build_home();
     build_settings();
     store_build();
@@ -2691,6 +3085,7 @@ esp_err_t home_start(void)
     lv_timer_create(update_status, 1000, NULL);
     update_status(NULL);
     show_crash_notice();
+    autostart_begin();
 
     xTaskCreatePinnedToCore(home_task, "home", 8192, NULL, 4, NULL, 0);
     ESP_LOGI(TAG, "home screen up, %d apps", s_ninstalled);

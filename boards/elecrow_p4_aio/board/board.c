@@ -4,6 +4,7 @@
  * their own files. Capability bits are set as each device comes up.
  */
 #include "board_internal.h"
+#include "esp_bit_defs.h"
 #include "board_pins.h"
 
 #include "esp_log.h"
@@ -121,4 +122,12 @@ esp_err_t bsp_sdcard_mount(const char *mount_point)
 bool bsp_sdcard_mounted(void)
 {
     return s_sd_mounted;
+}
+
+/* Pins for apps (IRQ interface), from Elecrow's V1.0 schematic: the kit's headers mostly repeat on-board
+ * signals. Free: 47/48 (UART connector J19, through a 3.3/5 V level shifter with pull-ups) and 45/46 (I2C2
+ * on J8, shared with the camera connector). Not tested on the hardware. */
+uint64_t bsp_app_gpio_mask(void)
+{
+    return BIT64(45) | BIT64(46) | BIT64(47) | BIT64(48);
 }

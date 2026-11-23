@@ -4,6 +4,7 @@
  * their own files. Capability bits are set as each device comes up.
  */
 #include "board_internal.h"
+#include "esp_bit_defs.h"
 #include "board_pins.h"
 
 #include "esp_log.h"
@@ -127,4 +128,15 @@ esp_err_t bsp_sdcard_mount(const char *mount_point)
 bool bsp_sdcard_mounted(void)
 {
     return s_sd_mounted;
+}
+
+/* Pins for apps (IRQ interface): the 2x13 header JP1 (Guition's pinout picture; no schematic found).
+ * 34/35 are on it too but are strapping pins (35 = BOOT): left out. With the launcher's GPIO gamepad
+ * add-on fitted, its pins (board_pins.h BOARD_PAD_*, BOARD_PADDLE_ADC) are its, which leaves 31. */
+uint64_t bsp_app_gpio_mask(void)
+{
+    uint64_t m = BIT64(28) | BIT64(29) | BIT64(30) | BIT64(31) | BIT64(32) | BIT64(33) | BIT64(49) | BIT64(50) | BIT64(51) | BIT64(52);
+    if (bsp_info()->caps & (BSP_CAP_GPIO_PAD | BSP_CAP_PADDLE))
+        m = BIT64(31);
+    return m;
 }

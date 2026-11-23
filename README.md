@@ -122,6 +122,8 @@ Two rules keep this portable: apps only see the ABI, and the launcher core only 
   for the board's screen size
 - App search: finds an app in any folder by a part of its name, from the home screen's search field or by
   typing on a USB keyboard; a red dot on the Settings gear when a launcher update is waiting
+- Start an app at boot (Settings → At boot, chosen with the app search): touch and hold the screen
+  while it says "Starting ..." (or press any button or key) to choose between the launcher and the app
 - SD card bus shown on the home screen ("SD Card (4-bit)"); a card whose 4-bit transfers time out (a bad
   contact on D1-D3) moves to 1-bit and keeps working, shown in orange
 - Apps can ask for the chip revision (`papp_chip_rev`), so SIMD code picks the right encoding: v1.x and v3.x
@@ -129,6 +131,13 @@ Two rules keep this portable: apps only see the ABI, and the launcher core only 
 - Apps can list folders, rename and delete them (FS v2), get hardware random bytes, talk to USB devices on the
   host port (USBH), act as a USB keyboard or mouse on the board's USB-C (HIDD), and pair over BLE with bonds
   kept on the SD card
+- Bluetooth speaker or headphones (Settings → Speaker) through a USB Bluetooth dongle (Bluetooth 4.0 or newer,
+  e.g. CSR8510; Realtek dongles not yet): the launcher's and the apps' sound plays there instead of the board's
+  speaker, with the usual Bluetooth delay (about 0.2 s). The board's Wi-Fi chip (C6) has only Bluetooth LE, which
+  carries no audio. With a dongle plugged in, BLE apps use it too
+- Apps can use the board's free header pins and hardware timers, with their interrupts on the core they choose
+  (IRQ): each event handled in an app thread, or by the app's own code inside the interrupt (about 3 µs from
+  the edge)
 - M5Stack Tab5: the battery charges and shows in the status bar, the clip-on Tab5 Keyboard works as a launcher
   keyboard, and Settings → Update offers the Wi-Fi chip's 2.12.13 firmware (needed for BLE on a C6 that an
   Arduino updater moved to 2.x)
@@ -647,6 +656,7 @@ Include only `papp/papp.h`. The full API, with examples, is in
 | `USBH` | 1 | Raw USB host access: control, bulk and interrupt transfers to devices the launcher's pad drivers don't hold | `papp_usbh()` |
 | `PWR` | 1 | Battery voltage, current and charge; pause charging (Tab5) | `papp_pwr()` |
 | `HIDD` | 1 | The board's USB-C as the app's own USB HID device (keyboard, mouse); DevLink is away meanwhile | `papp_hidd()` |
+| `IRQ` | 1 | The board's free header pins and hardware timers, with interrupts on the core you choose: handled in a thread, or by your own `PAPP_FAST` function inside the interrupt | `papp_irq()`, `papp_irq_thread` |
 
 Interfaces are versioned independently. New functions are only ever appended and the version bumped, and a
 breaking change gets a new id, so older apps keep working. Interfaces can be required or optional: when an
