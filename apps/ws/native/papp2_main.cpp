@@ -81,12 +81,18 @@ static void audio_submit(void)
     int available = apuBufLen();
     if (!s_audio || available <= 0) return;
     if (available > 512) available = 512;
+    int32_t read = rBuf;
     for (int i = 0; i < available; ++i) {
-        s_audio_frame[2*i] = sndbuffer[0][rBuf];
-        s_audio_frame[2*i+1] = sndbuffer[1][rBuf];
-        if (++rBuf >= SND_RNGSIZE) rBuf = 0;
+        s_audio_frame[2*i] = sndbuffer[0][read];
+        s_audio_frame[2*i+1] = sndbuffer[1][read];
+        if (++read >= SND_RNGSIZE) read = 0;
     }
-    papp_audio_write(s_audio, s_audio_frame, (size_t)available, 100);
+    /* The launcher can accept fewer frames than requested when its stream
+       ring is full or the write times out. Keep unaccepted samples in the
+       emulator ring so a transient scheduling delay does not become a gap. */
+    size_t written = papp_audio_write(s_audio, s_audio_frame, (size_t)available, 1000);
+    if (written > (size_t)available) written = (size_t)available;
+    rBuf = (rBuf + (int32_t)written) % SND_RNGSIZE;
 }
 
 extern "C" void ws_graphics_paint(void)
@@ -139,7 +145,8 @@ static int play(const char *path)
     papp_surface_cfg_t display = { .width=LCD_MAIN_W, .height=LCD_MAIN_H,
         .format=PAPP_PIXFMT_RGB565, .scale=PAPP_SCALE_FIT_ASPECT, .buffers=2 };
     s_surface = papp_disp_surface_create(&display);
-    papp_audio_cfg_t audio = { .rate=12000, .channels=2, .format=PAPP_AUDIO_S16 };
+    papp_audio_cfg_t audio = { .rate=12000, .channels=2, .format=PAPP_AUDIO_S16,
+        .latency_ms=100 };
     s_audio = papp_audio_open(&audio);
     if (!s_surface || !s_audio) { cleanup(); return -1; }
 
