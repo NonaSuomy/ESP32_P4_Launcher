@@ -98,7 +98,8 @@ static int disp_touch_read(papp_surface_t *s, papp_touch_point_t *pts, int max)
     bsp_touch_point_t raw[BSP_TOUCH_MAX_POINTS];
     if (max > BSP_TOUCH_MAX_POINTS) max = BSP_TOUCH_MAX_POINTS;
     SVC_ENTER();
-    int n = s ? lx_comp_touch_read((lx_surface_t *)s, raw, max)
+    int n = lx_ui_owns_touch() ? 0      /* made on the pause menu or a UI call */
+          : s ? lx_comp_touch_read((lx_surface_t *)s, raw, max)
               : bsp_touch_read(raw, BSP_TOUCH_MAX_POINTS);       /* display coordinates */
     SVC_LEAVE();
     if (n > max) n = max;
