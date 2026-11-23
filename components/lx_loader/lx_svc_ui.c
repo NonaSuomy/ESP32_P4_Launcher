@@ -83,11 +83,30 @@ const papp_if_ui_t lx_if_ui = {
 
 static volatile bool s_ovl_req, s_ovl_open;
 static int s_shot_in;                   /* presents until the screenshot */
+static volatile bool s_touch_ours;      /* a touch was made on a launcher screen */
 
 void lx_overlay_reset(void)
 {
     s_ovl_req = s_ovl_open = false;
     s_shot_in = 0;
+    s_touch_ours = false;
+}
+
+/* A launcher screen over the app (the pause menu, a UI call) holds only the
+ * task that opened it: the app's other threads run on and may read the touch.
+ * What is touched then is that screen, not the app, and so is the rest of a
+ * touch still down as the screen closes. */
+bool lx_ui_owns_touch(void)
+{
+    if (s_ovl_open || s_ui_depth) {
+        s_touch_ours = true;
+        return true;
+    }
+    if (!s_touch_ours) return false;
+    bsp_touch_point_t p[1];
+    if (bsp_touch_read(p, 1) > 0) return true;
+    s_touch_ours = false;
+    return false;
 }
 
 bool lx_app_overlay_request(void)

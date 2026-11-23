@@ -70,6 +70,7 @@ int  lx_thrd_end_run(void);                /* -> sync objects freed */
 /* In-game overlay (lx_svc_ui.c): presents open it when HOME asked for it */
 void lx_overlay_poll(void);
 void lx_overlay_reset(void);
+bool lx_ui_owns_touch(void);                /* a launcher screen is over the app: touches are not the app's */
 
 /* Ends the run from any app thread with `code` (lx_app.c). */
 void lx_app_post_exit(int code);
