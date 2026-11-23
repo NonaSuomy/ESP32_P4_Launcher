@@ -26,6 +26,7 @@
  "emu.sms":         {"category": "emulators", "description": "Sega Master System games (.sms) from /sd/roms/sms"},
  "emu.snes":        {"category": "emulators", "description": "Super Nintendo games (.smc, .sfc) from /sd/roms/snes"},
  "emu.spectrum":    {"category": "emulators", "description": "ZX Spectrum snapshots (.z80, .sna) from /sd/roms/spectrum"},
+ "emu.wonderswan":  {"category": "emulators", "description": "WonderSwan and WonderSwan Color games (.ws, .wsc) from /sd/roms/ws"},
  "game.doom":       {"category": "games", "description": "The classic shooter (PrBoom). Needs a WAD in /sd/roms/doom, e.g. the shareware doom1.wad"},
  "game.duke3d":     {"category": "games", "description": "Duke Nukem 3D (Chocolate Duke3D). Needs DUKE3D.GRP in /sd/roms/duke3d"},
  "game.opentyrian": {"category": "games", "description": "Vertical shoot 'em up. Needs the free Tyrian 2.1 data in /sd/tyrian/data"},
