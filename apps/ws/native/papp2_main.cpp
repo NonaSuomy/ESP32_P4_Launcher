@@ -36,6 +36,10 @@ static int s_apu_ready;
 static int s_render_ready;
 static int s_rom_ready;
 
+/* Oswan emits four held samples at each of 159 HBlank intervals per frame:
+   159 * 4 * 75 Hz = 47.7 kHz. The PAPP stream resamples this at 48 kHz. */
+static const uint32_t WS_AUDIO_RATE = 48000;
+
 extern "C" void init_ModRM_tables(void);
 extern "C" void WsAllocateBuffers(void);
 
@@ -80,7 +84,7 @@ static void audio_submit(void)
 {
     int available = apuBufLen();
     if (!s_audio || available <= 0) return;
-    if (available > 512) available = 512;
+    if (available > SND_RNGSIZE) available = SND_RNGSIZE;
     int32_t read = rBuf;
     for (int i = 0; i < available; ++i) {
         s_audio_frame[2*i] = sndbuffer[0][read];
@@ -135,7 +139,8 @@ static int play(const char *path)
     s_rom = (uint8_t *)papp_alloc((size_t)size, PAPP_MEM_LARGE, 16);
     s_frame = (uint16_t *)papp_alloc(LCD_MAIN_W * LCD_MAIN_H * sizeof(uint16_t),
                                      PAPP_MEM_LARGE | PAPP_MEM_DMA, 64);
-    s_audio_frame = (int16_t *)papp_alloc(512u * 2u * sizeof(int16_t), PAPP_MEM_LARGE, 16);
+    s_audio_frame = (int16_t *)papp_alloc(SND_RNGSIZE * 2u * sizeof(int16_t),
+                                          PAPP_MEM_LARGE, 16);
     if (!s_rom || !s_frame || !s_audio_frame ||
         fread(s_rom, 1, (size_t)size, file) != (size_t)size) {
         fclose(file); cleanup(); return -1;
@@ -145,7 +150,7 @@ static int play(const char *path)
     papp_surface_cfg_t display = { .width=LCD_MAIN_W, .height=LCD_MAIN_H,
         .format=PAPP_PIXFMT_RGB565, .scale=PAPP_SCALE_FIT_ASPECT, .buffers=2 };
     s_surface = papp_disp_surface_create(&display);
-    papp_audio_cfg_t audio = { .rate=12000, .channels=2, .format=PAPP_AUDIO_S16,
+    papp_audio_cfg_t audio = { .rate=WS_AUDIO_RATE, .channels=2, .format=PAPP_AUDIO_S16,
         .latency_ms=100 };
     s_audio = papp_audio_open(&audio);
     if (!s_surface || !s_audio) { cleanup(); return -1; }
