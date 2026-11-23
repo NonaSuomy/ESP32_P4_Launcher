@@ -72,3 +72,5 @@ CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 # USB hubs (IDF's external hub driver); the root port runs at full speed so pads behind a hub
 # work without a transaction translator (lx_input_usb.c)
 CONFIG_USB_HOST_HUBS_SUPPORTED=y
+# Give downstream devices 100 ms after reset before requesting descriptors.
+CONFIG_USB_HOST_EXT_PORT_RESET_RECOVERY_DELAY_MS=100
