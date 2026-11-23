@@ -127,7 +127,11 @@ static int play(const char *path)
     }
 
     papp_surface_cfg_t display = { .width=128, .height=64,
-        .format=PAPP_PIXFMT_RGB565, .scale=PAPP_SCALE_FIT_ASPECT, .buffers=2 };
+        /* Frames come from Ardens' own contiguous framebuffer via
+         * present_ext(). A single surface buffer keeps presentation on the
+         * synchronous path and avoids copying every 128x64 frame into a
+         * launcher-owned spare buffer before the PPA scales it. */
+        .format=PAPP_PIXFMT_RGB565, .scale=PAPP_SCALE_FIT_ASPECT, .buffers=1 };
     s_surface = papp_disp_surface_create(&display);
     papp_audio_cfg_t audio = { .rate=50000, .channels=2, .format=PAPP_AUDIO_S16 };
     s_audio = papp_audio_open(&audio);
