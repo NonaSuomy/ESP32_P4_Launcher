@@ -413,6 +413,11 @@ bool ngp_mem_alloc_init(size_t mainram_sz, size_t cpurom_sz)
 
   if (!cpuram) cpuram = mainram;
 
+  // Bind the sound CPU after every successful allocation. The PAPP2 entry
+  // point allocates these buffers before ngp_mem_init(), so relying on the
+  // fallback allocation path there can leave the CZ80 fetch pointers NULL.
+  cz80_bind_memory();
+
   return true;
 }
 
@@ -433,7 +438,6 @@ void ngp_mem_init(void)
     // IMPORTANT : s’assurer que l’alloc a été faite
     if (!mainram || !cpurom) {
         if (!ngp_mem_alloc_init(NGP_MAINRAM_SIZE, 0x10000)) { for(;;){} }
-		cz80_bind_memory();
     }
 
 
