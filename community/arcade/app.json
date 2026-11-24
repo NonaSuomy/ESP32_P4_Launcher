@@ -1,0 +1,7 @@
+{
+  "author": "Donnie Barnes",
+  "description": "The 1980 Pac-Man arcade board for sets you own (as .arc files in /sd/roms/arcade). High scores kept. No games included",
+  "category": "emulators",
+  "license": "GPL-3.0-or-later",
+  "source": "https://github.com/djb-rh/tabulous5/tree/launcher-apps-1.0.2/launcher"
+}
