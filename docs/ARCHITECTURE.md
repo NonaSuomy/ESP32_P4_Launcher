@@ -489,14 +489,16 @@ its memory is freed): every interrupt detached and freed on its core, the dispat
 configured pins reset to inputs without pulls. Checked with `irq_test leave` (left attached) and `hang`
 (forced stop with two threads in `wait()`, a 50 µs direct timer and a toggling pin).
 
-### 7.10 Bluetooth: Bluedroid, USB dongles, speaker
+### 7.10 Bluetooth: Bluedroid, USB dongles, speaker, gamepads
 
 The Bluedroid boards (Guition, Tab5, Elecrow; `CONFIG_BT_BLUEDROID_ENABLED` in `sdkconfig.board`) build the
 dual-mode stack, because Bluetooth audio (A2DP) is Classic and NimBLE is LE only. It costs about 0.5 MB of
 image; its memory comes from PSRAM first.
 
 **One stack, two users** (`components/lx_loader/lx_bt.c`). Bluedroid has global state, so one core owns it:
-`lx_bt_acquire(user, need_classic)` / `lx_bt_release(user)`, users = the app's BLE interface and the speaker.
+`lx_bt_acquire(user, need_classic)` / `lx_bt_release(user)`, users = the app's BLE interface, the speaker and
+the gamepads. Bluedroid takes one GAP BLE and one GATT client callback, so `lx_bt.c` registers its own and
+fans every event out to slots (`lx_bt_ble_handlers`: app, pads, scan, test); each slot filters its own.
 Start and stop run as jobs on the "lx_bt" task (internal stack: Bluedroid must not start on a PSRAM stack).
 The stack stops when the last user lets go. Controller, chosen at start:
 
@@ -507,8 +509,15 @@ The stack stops when the last user lets go. Controller, chosen at start:
 **USB transport** (`lx_bt_usb.c`, a third client of the USB host after HID and XInput). Bluetooth USB class
 E0/01/01: HCI commands as class control requests, events on the interrupt IN endpoint (reassembled from its
 16-byte packets), ACL on the bulk pair; SCO is not used. Before Bluedroid starts, the transport resets the
-dongle and reads its features: a dongle without LE (Bluetooth 2.x/3.0) is refused, since Bluedroid with BLE
-built in asserts on one. Counterfeit CSR8510 dongles (0A12:0001, HCI revision = LMP subversion 0x1d86) say
+dongle and reads its features. Bluedroid with BLE built in asserts on a dongle without LE (Bluetooth
+1.x-3.0), so for one the transport answers LE itself: LE commands and Write LE Host Support complete with
+zeros, the features say LE, page 1 is answered here. Such a dongle runs Classic only (speaker, Classic pads;
+BLE pads never connect). An old one (genuine CSR, about Bluetooth 1.2: no SSP, legacy PIN pairing) refuses
+Read Local Supported Commands and Read Local Extended Features with a Command Status, where Bluedroid waits
+for a Command Complete and asserts on a failed one: refused controller / information / status commands are
+answered as done (no supported commands, extended page 0 = its own features). The board takes the master
+role on every link it accepts (Accept Connection Request, role 0): Bluedroid accepts the first incoming link
+as slave, and a second one then put the board in two piconets. Counterfeit CSR8510 dongles (0A12:0001, HCI revision = LMP subversion 0x1d86) say
 their last features page is 0 while setting the extended-features bit; Bluedroid reads LE host support from
 page 1, so the transport reports page 1 and answers it itself (SSP, LE, LE + BR/EDR host bits). An unplugged
 dongle gets every further command refused at once, so the stack shuts down without timeouts. Realtek dongles
@@ -517,10 +526,64 @@ need a firmware download, not done yet.
 **Speaker** (`lx_bt_speaker.c`, Settings → Speaker on the home screen). Scan (general inquiry, ~13 s; audio
 devices by class of device first), pick, pair (SSP "just works", legacy PIN 0000), A2DP source with
 Bluedroid's SBC encoder. The chosen speaker is kept in `/sd/config/bt_speaker.txt` (`addr=`, `name=`, `on=`);
-while it is on and a dongle is present the launcher keeps the stack and reconnects every 10 s. While audio
+while it is on and a dongle is present the launcher keeps the stack and calls it after 10, 20, 40, then every
+60 s. The board is connectable but not discoverable, so a speaker switched on later can reconnect by itself. The home
+status bar shows the Bluetooth symbol and the speaker's name while it is connected, and the "System ready"
+line says "connected" / "disconnected" for 5 s on a change. While audio
 streams, `lx_audio_set_tap` hands the mixer's 48 kHz blocks to the speaker (linear resampling to the A2DP rate,
 usually 44.1 kHz; at most 60 ms queued: the codec clock runs a bit fast, so a deeper ring only adds delay; master volume applied in software) and the codec plays silence, which
-still paces the mixer. Tested: counterfeit CSR8510 A10 with an A2DP speaker on the Guition 7".
+still paces the mixer. Tested: counterfeit CSR8510 A10 with an A2DP speaker on the Guition 7"; with a
+DualShock 4 and the speaker together, an old genuine CSR (Bluetooth ~1.2, 8 ACL buffers): pad ~230 reports/s,
+longest gap < 100 ms, sound steady (its basic-rate radio keeps the audio channel congested, as expected).
+
+**Gamepads** (`lx_bt_pads.c`, same Settings screen: the scan lists controllers too). Classic pads (DualShock 4,
+DualSense, Switch Pro) go through Bluedroid's HID host and call the board when switched on. BLE pads (Xbox
+Wireless, 8BitDo BLE mode) use a small HID-over-GATT client: encrypt, read the report map, PnP ID and report
+references, subscribe; reports (prefixed with the report id when the map has ids) go to `lx_input_hidpad`,
+so a Bluetooth pad is a player like a USB one. Bluedroid has no background LE connections, so one low-duty
+direct connection request (scan window 12.5 %) stays pending, rotating over the saved BLE pads, ~30 s each.
+Saved in `/sd/config/bt_pads.txt` (`addr name`, BLE: `addr le<type> name`); bonds in Bluedroid's NVS store.
+
+**Speaker and pads together.** Nothing is switched off while a device is connected. The one conflict: while
+the CSR8510 pages an absent speaker it carries no LE data at all, so every BLE pad's reports stop for the whole
+page (links stay up). With a pad connected a call therefore pages 2.56 s instead of 5.12 s, comes every 30,
+60, then 120 s, and only once no pad input has changed for 20 s (`lx_input_hidpad_still_ms`: buttons, or a
+stick / trigger moved past its noise): a missing speaker never freezes a game. A speaker switched on reconnects
+by itself anyway (the board stays connectable). AFH: the Classic and LE channel maps leave out the Wi-Fi channel
+±11 MHz (checked every 10 s, from `lx_net_channel`, which does not wait for the C6 the way `lx_net_info` does).
+
+**BLE pad encryption.** A bonded pad asks for security when it connects and Bluedroid encrypts the link by
+itself; asking as well gets the request queued, and when it runs on the already encrypted link it fails ("No
+key available") and Bluedroid deletes the bond. So `lx_bt_pads.c` asks only when pairing, or for a saved pad
+that started nothing within 5 s. Bluedroid's per-notification warnings (reports before the client registers
+again, 60+ a second per pad) are turned off (`BT_APPL`, `BT_GATT` at error level): on the console they blocked
+its task and stalled the pads' set-up. `CONFIG_BT_BLE_SMP_REMOVE_BOND_ON_PAIR_FAIL_AS_CENTRAL` is off (Bluedroid
+deleted a pad's bond on any failed encryption, a timeout at start-up included): a saved pad's keys go after 3
+failures in a row (`lx_bt_pads.c`), an app's outgoing link keeps the old rule (`lx_svc_ble_bd.c`).
+
+**CSR8510 quirks** (`lx_bt_usb.c`). It reports no LE buffers (LE Read Buffer Size = 0): its 10 ACL buffers are
+shared, and Bluedroid then gives all LE links together one transmit credit. The dongle sometimes holds an LE
+packet for seconds, and with one credit every pad's requests (MTU, service search, pairing) waited. The
+transport splits the buffers by adjusting the two replies: 4 for LE, 6 for Classic (given all 10 to
+Classic, the speaker's stream stopped for good when a DualShock 4 connected, and the dongle reset with
+hardware error 0x28). It does not run a speaker and a Classic pad together reliably: while the speaker
+streams it hears no pad calling (PS button), however long its page scan; a speaker joining a connected pad
+often dropped the pad's link (supervision timeout) or reset the dongle (0x28). Use another dongle for both.
+Sniff mode stays off: the "sniff allowed" bit is cleared from the link policies Bluedroid writes. An LE link it sets up while
+it pages comes up broken (encrypted, nothing sent gets through), so a pad's connection request is cancelled
+before each speaker call and none is made while it pages. `bt status` shows `acl_unacked` (packets the dongle
+has not completed, per link) to spot a stuck one.
+
+**Test aids.** DevLink `bt` (`papp_dev.py bt status|scan --wait|results|pair ADDR|speaker ADDR [NAME]|speaker
+on|off|forget-speaker|forget-pads`; `pair ADDR` of a saved pad pairs it again): `status` = JSON with each pad's
+reports, longest gap, stalls (gaps >= 100 ms) and stalls while in use (within 2 s of an input change) since the
+last read. A launcher built with `-DLX_BT_TESTPAD=1` (`lx_bt_testpad.c`) poses as a BLE gamepad on its C6
+("LX Test Pad XXXX", report every 15 ms once the host has subscribed, as a real pad: esp_hidd notifies
+before that, and a pad streaming during the host's service search slowed its answers past the 20 s set-up
+limit; 50 s playing with X = counter, 40 s resting; after two failed
+encryptions in a row it drops its keys, as a pad put in pairing mode would) for testing pads without one in hand.
+A Windows PC cannot stand in for the speaker: the counterfeit CSR8510 reports hardware error 0x28 a few seconds
+into any link with the PC's Intel adapter, and Bluedroid resets it.
 
 ## 8. App lifecycle & robustness
 

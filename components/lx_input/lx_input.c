@@ -174,7 +174,9 @@ int lx_input_pad_attach(const char *name, uint16_t vid, uint16_t pid)
     const char *from = map_load(name, vid, pid, map);
     bool has_map = from != NULL;
     LOCK();
-    int player = -1;
+    int player = 0;                                             /* the only pad: player 1, whoever */
+    for (int i = 0; i < PAPP_MAX_PLAYERS; i++)                  /* held the slots before (one-player */
+        if (s_pads[i].attached) player = -1;                    /* games read player 1 only) */
     for (int i = 0; i < PAPP_MAX_PLAYERS && player < 0; i++)    /* back to its own slot */
         if (!s_pads[i].attached && s_pads[i].last_vid == vid && s_pads[i].last_pid == pid) player = i;
     for (int i = 0; i < PAPP_MAX_PLAYERS && player < 0; i++)    /* else a slot nobody left */

@@ -43,10 +43,18 @@ components/lx_loader/     App Manager: loader, relocation, imports, services (SY
                           task, internal stack; users = app + speaker; controller = a USB Bluetooth dongle when plugged in and LE-capable,
                           else the C6 over esp_hosted VHCI (LE only; lx_bt.c fakes the C6's missing 0x1005/0x1004 replies); bonds in
                           Bluedroid's NVS store). lx_bt_usb.c = USB HCI transport (class E0/01/01: commands as control transfers,
-                          events on interrupt IN, ACL on bulk); probes LE first (Bluedroid with BLE asserts on an LE-less 2.x dongle) and
-                          answers features page 1 for counterfeit CSR8510s (0A12:0001, last page 0); Realtek dongles need a firmware
-                          download that isn't done. lx_bt_speaker.c = A2DP source to a speaker/headphones: home Settings "Speaker"
-                          screen (scan, pick, connect, forget), /sd/config/bt_speaker.txt, retry every 10 s; lx_audio_set_tap sends the
+                          events on interrupt IN, ACL on bulk); a dongle without LE (Bluetooth 1.x-3.0) gets LE answered by the transport
+                          (Classic only; an old genuine CSR also gets its unknown start-up commands answered), answers features page 1
+                          for counterfeit CSR8510s (0A12:0001, last page 0), board = master of every accepted link; the counterfeit
+                          CSR8510 can't run a speaker + Classic pad together (an old genuine CSR does); Realtek dongles need a firmware
+                          download that isn't done. lx_bt_pads.c = Bluetooth gamepads on the dongle: Classic HID host +
+                          own HID-over-GATT client for BLE pads (/sd/config/bt_pads.txt; same Settings screen); lx_bt.c fans
+                          Bluedroid's single GAP BLE / GATTC callbacks out to slots. DevLink `bt` (papp_dev.py bt status|scan|
+                          pair|speaker..) = test aid; -DLX_BT_TESTPAD=1 build = board poses as a BLE pad (lx_bt_testpad.c).
+                          lx_bt_speaker.c = A2DP source to a speaker/headphones: home Settings "Speaker"
+                          screen (scan, pick, connect, forget), /sd/config/bt_speaker.txt, calls after 10/20/40 s then every 60 s
+                          (with a pad connected: 2.5 s pages every 30/60/120 s, only after 20 s without pad input: a page
+                          stops all LE data on the CSR; pads are never cut off); lx_audio_set_tap sends the
                           mixer's output there (resampled 48 kHz -> A2DP rate, master volume in software) and silence to the codec.
                           NimBLE (lx_svc_ble.c) remains for boards that pick it: host starts on the first call and stops at teardown,
                           a C6 on 1.x firmware (stock Tab5) runs its controller from boot; bonds in /sd/config/ble_bonds.bin.

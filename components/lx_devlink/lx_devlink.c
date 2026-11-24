@@ -7,6 +7,7 @@
  * listening nothing is written, so the device never stalls on a full USB FIFO.
  */
 #include "lx_devlink.h"
+#include "esp_attr.h"     /* EXT_RAM_BSS_ATTR */
 #include "hal/usb_serial_jtag_ll.h"
 #include "devlink_proto.h"
 #include "lx_app.h"
@@ -14,6 +15,7 @@
 #include "bsp.h"
 #include "lx_input.h"
 #include "lx_net.h"
+#include "lx_bt.h"
 #include "lx_c6.h"
 
 #include <stdio.h>
@@ -221,12 +223,13 @@ static void h_info(uint16_t seq)
     jcat(&j, ",\"board_name\":");
     jstr(&j, b->name);
     jcat(&j, ",\"caps\":%lu,\"display\":[%u,%u],\"sd\":%s,\"sd_bits\":%d,\"sd_1bit\":%s,\"uptime_ms\":%lld,"
-             "\"free_internal\":%u,\"free_psram\":%u,\"largest_psram\":%u,\"app_state\":\"%s\",\"app\":",
+             "\"free_internal\":%u,\"largest_fast\":%u,\"free_psram\":%u,\"largest_psram\":%u,\"app_state\":\"%s\",\"app\":",
          (unsigned long)b->caps, b->display_w, b->display_h, bsp_sdcard_mounted() ? "true" : "false",
          ff_sdmmc_bus_width(),                             /* data lines in use */
          ff_sdmmc_bus_fell_back() ? "true" : "false",     /* 4-bit failed, card moved to 1-bit */
          esp_timer_get_time() / 1000,
          (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_EXEC | MALLOC_CAP_INTERNAL),   /* an app's FAST region */
          (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
          (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM), app_state_name());
     jstr(&j, lx_app_path());
@@ -631,10 +634,18 @@ static void dispatch(uint8_t type, uint16_t seq, uint8_t *p, uint32_t len)
     }
     case DL_NET: {
         if (len && p[0]) lx_net_diag_start(p[0]);
-        static char text[1600];
+        static EXT_RAM_BSS_ATTR char text[1600];
         text[0] = lx_net_diag_busy() ? '1' : '0';
         snprintf(text + 1, sizeof(text) - 1, "%s", lx_net_diag_text());
         reply_str(type, seq, text);
+        break;
+    }
+    case DL_BT: {
+        char cmd[96];
+        size_t n = len < sizeof(cmd) - 1 ? len : sizeof(cmd) - 1;
+        memcpy(cmd, p, n);
+        cmd[n] = 0;
+        reply_str(type, seq, lx_bt_devlink(cmd));
         break;
     }
     case DL_CRASH_CLEAR:

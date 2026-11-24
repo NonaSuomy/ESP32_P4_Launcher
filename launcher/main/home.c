@@ -20,6 +20,7 @@
  * and removes apps; its tile shows how many updates are waiting.
  */
 #include "home.h"
+#include "esp_attr.h"     /* EXT_RAM_BSS_ATTR */
 #include "home_ui.h"
 #include "store.h"
 #include "bsp.h"
@@ -113,7 +114,7 @@ static void autostart_moved(const char *from_dir, const char *to_dir);
 /* ── Focus (gamepad / keyboard): nearest item in the pressed direction ──── */
 
 #define MAX_FOCUS 160            /* the Store: apps + categories + buttons */
-static lv_obj_t *s_focusable[MAX_FOCUS];
+static EXT_RAM_BSS_ATTR lv_obj_t *s_focusable[MAX_FOCUS];
 static int s_nfocus;
 static lv_obj_t *s_focused;
 
@@ -971,7 +972,7 @@ static bool s_wifi_scanning;
 enum { PW_WIFI, PW_NEW_FOLDER, PW_RENAME };     /* s_pw_scr also asks for folder names */
 static int s_pw_mode;
 static void folder_name_done(const char *name);
-static lx_net_ap_t s_wifi_aps[LX_NET_MAX_APS];
+static EXT_RAM_BSS_ATTR lx_net_ap_t s_wifi_aps[LX_NET_MAX_APS];
 static int s_wifi_sel;
 
 static void wifi_focus(void)
@@ -1394,24 +1395,28 @@ static void wifi_tick(void)
     wifi_focus();
 }
 
-/* ── Bluetooth speaker (Bluedroid boards with a USB Bluetooth dongle) ─────
- * The launcher's sound goes to the speaker while it is connected (lx_bt_speaker.c). */
+/* ── Bluetooth: speaker and gamepads (Bluedroid boards with a USB Bluetooth dongle) ─────
+ * The launcher's sound goes to the speaker while it is connected (lx_bt_speaker.c); paired
+ * gamepads are players like USB ones (lx_bt_pads.c). One scan for both: a peripheral picked
+ * from the list pairs as a controller, anything else as the speaker. */
 
-static lv_obj_t *s_bt_btn, *s_bt_scr, *s_bt_status, *s_bt_list, *s_bt_note;
-static lv_obj_t *s_bt_back, *s_bt_scan, *s_bt_onoff, *s_bt_forget;
+static lv_obj_t *s_bt_btn, *s_bt_scr, *s_bt_status, *s_bt_pads, *s_bt_list, *s_bt_note;
+static lv_obj_t *s_bt_back, *s_bt_scan, *s_bt_onoff, *s_bt_forget, *s_bt_padforget;
 static bool s_bt_scanning;
-static lx_bt_found_t s_bt_found[LX_BT_MAX_FOUND];
+static EXT_RAM_BSS_ATTR lx_bt_found_t s_bt_found[LX_BT_MAX_FOUND];
 
 static void bt_focus(void)
 {
     lv_obj_t *keep = s_focused;
-    bool fixed = keep == s_bt_back || keep == s_bt_scan || keep == s_bt_onoff || keep == s_bt_forget;
+    bool fixed = keep == s_bt_back || keep == s_bt_scan || keep == s_bt_onoff || keep == s_bt_forget ||
+                 keep == s_bt_padforget;
     if (fixed) lv_obj_remove_state(keep, LV_STATE_FOCUSED);
     focus_clear_list();
     focus_add(s_bt_back);
     focus_add(s_bt_scan);
     focus_add(s_bt_onoff);
     focus_add(s_bt_forget);
+    focus_add(s_bt_padforget);
     for (uint32_t i = 0; i < lv_obj_get_child_count(s_bt_list); i++)
         focus_add(lv_obj_get_child(s_bt_list, i));
     s_focused = NULL;
@@ -1423,7 +1428,7 @@ static void on_bt_scan(lv_event_t *ev)
     lv_obj_clean(s_bt_list);
     if (lx_bt_speaker_scan()) {
         s_bt_scanning = true;
-        lv_list_add_text(s_bt_list, "Searching... (put the speaker in pairing mode)");
+        lv_list_add_text(s_bt_list, "Searching... (put the speaker or controller in pairing mode)");
     } else {
         lv_list_add_text(s_bt_list, "Plug a USB Bluetooth dongle into the board first");
     }
@@ -1435,7 +1440,8 @@ static void on_bt_open(lv_event_t *ev)
     lv_screen_load(s_bt_scr);
     lv_obj_clean(s_bt_list);
     bt_focus();
-    if (!lx_bt_speaker_name()[0] && lx_bt_dongle_present()) on_bt_scan(NULL);
+    lx_bt_pad_t pads[1];
+    if (!lx_bt_speaker_name()[0] && !lx_bt_pads_list(pads, 1) && lx_bt_dongle_present()) on_bt_scan(NULL);
 }
 
 static void on_bt_back(lv_event_t *ev) { show_settings(); }
@@ -1446,11 +1452,13 @@ static void on_bt_onoff(lv_event_t *ev)
 }
 
 static void on_bt_forget(lv_event_t *ev) { lx_bt_speaker_forget(); }
+static void on_bt_padforget(lv_event_t *ev) { lx_bt_pads_forget_all(); }
 
 static void on_bt_pick(lv_event_t *ev)
 {
     int i = (int)(intptr_t)lv_event_get_user_data(ev);
-    lx_bt_speaker_pick(s_bt_found[i].addr, s_bt_found[i].name);
+    if (s_bt_found[i].hid) lx_bt_pads_pair(&s_bt_found[i]);
+    else lx_bt_speaker_pick(s_bt_found[i].addr, s_bt_found[i].name);
 }
 
 static void build_bt_screen(void)
@@ -1461,18 +1469,23 @@ static void build_bt_screen(void)
     lv_obj_set_style_bg_grad_color(s_bt_scr, C_BG_BOTTOM, 0);
     lv_obj_set_style_bg_grad_dir(s_bt_scr, LV_GRAD_DIR_VER, 0);
     s_bt_back = wifi_button(s_bt_scr, 16, 14, 56, LV_SYMBOL_LEFT, on_bt_back);
-    lv_obj_t *t = label(s_bt_scr, &lv_font_montserrat_28, C_TEXT, "Bluetooth speaker");
+    lv_obj_t *t = label(s_bt_scr, &lv_font_montserrat_28, C_TEXT, "Bluetooth");
     lv_obj_set_pos(t, 92, 20);
     s_bt_status = label(s_bt_scr, &lv_font_montserrat_16, C_DIM, "");
-    lv_obj_set_pos(s_bt_status, 24, 72);
+    lv_obj_set_pos(s_bt_status, 24, 70);
     lv_obj_set_width(s_bt_status, 752 + s_dx);
     lv_label_set_long_mode(s_bt_status, LV_LABEL_LONG_DOT);
-    s_bt_scan = wifi_button(s_bt_scr, 24, 104, 120, "Scan", on_bt_scan);
-    s_bt_onoff = wifi_button(s_bt_scr, 160, 104, 200, "Connect", on_bt_onoff);
-    s_bt_forget = wifi_button(s_bt_scr, 376, 104, 200, "Forget speaker", on_bt_forget);
+    s_bt_pads = label(s_bt_scr, &lv_font_montserrat_16, C_DIM, "");
+    lv_obj_set_pos(s_bt_pads, 24, 94);
+    lv_obj_set_width(s_bt_pads, 752 + s_dx);
+    lv_label_set_long_mode(s_bt_pads, LV_LABEL_LONG_DOT);
+    s_bt_scan = wifi_button(s_bt_scr, 24, 122, 120, "Scan", on_bt_scan);
+    s_bt_onoff = wifi_button(s_bt_scr, 156, 122, 170, "Connect", on_bt_onoff);
+    s_bt_forget = wifi_button(s_bt_scr, 338, 122, 210, "Forget speaker", on_bt_forget);
+    s_bt_padforget = wifi_button(s_bt_scr, 560, 122, 216 + s_dx, "Forget controllers", on_bt_padforget);
     s_bt_list = lv_list_create(s_bt_scr);
-    lv_obj_set_pos(s_bt_list, 24, 160);
-    lv_obj_set_size(s_bt_list, 752 + s_dx, 282 + s_dy);
+    lv_obj_set_pos(s_bt_list, 24, 178);
+    lv_obj_set_size(s_bt_list, 752 + s_dx, 264 + s_dy);
     lv_obj_set_style_bg_color(s_bt_list, C_PANEL, 0);
     lv_obj_set_style_border_color(s_bt_list, C_BORDER, 0);
     s_bt_note = label(s_bt_scr, &lv_font_montserrat_16, C_DIM, "");
@@ -1495,33 +1508,53 @@ static void bt_tick(void)
         [LX_BT_SPK_PLAYING] = "playing: the launcher's sound goes here",
         [LX_BT_SPK_RETRY] = "not connected, trying again",
     };
+    lx_bt_pad_t pads[LX_BT_MAX_PADS];
+    int np = lx_bt_pads_list(pads, LX_BT_MAX_PADS), linked = 0;
+    for (int i = 0; i < np; i++) linked += pads[i].connected;
     if (!lx_bt_dongle_present())
         snprintf(buf, sizeof(buf), LV_SYMBOL_WARNING " No USB Bluetooth dongle. The Wi-Fi chip has no Bluetooth audio.");
     else if (!spk[0])
-        snprintf(buf, sizeof(buf), LV_SYMBOL_BLUETOOTH " %s. No speaker yet: Scan and pick one.", lx_bt_dongle_name());
+        snprintf(buf, sizeof(buf), LV_SYMBOL_AUDIO " %s. No speaker yet: Scan and pick one.", lx_bt_dongle_name());
+    else if (lx_bt_speaker_state() == LX_BT_SPK_RETRY && linked)     /* lx_bt_speaker.c: slower calls then */
+        snprintf(buf, sizeof(buf), LV_SYMBOL_AUDIO " %s: not connected. With a controller connected it "
+                 "is tried every minute or two, while nobody plays (switch the speaker on, or Disconnect + Connect "
+                 "to try now)", spk);
     else
-        snprintf(buf, sizeof(buf), LV_SYMBOL_BLUETOOTH " %s: %s", spk, k_state[lx_bt_speaker_state()]);
+        snprintf(buf, sizeof(buf), LV_SYMBOL_AUDIO " %s: %s", spk, k_state[lx_bt_speaker_state()]);
     lv_label_set_text(s_bt_status, buf);
+    if (lx_bt_pads_pairing())
+        snprintf(buf, sizeof(buf), LV_SYMBOL_KEYBOARD " Pairing the controller...");
+    else if (!np)
+        snprintf(buf, sizeof(buf), LV_SYMBOL_KEYBOARD " No controllers yet: put one in pairing mode, Scan and pick it.");
+    else {
+        int o = snprintf(buf, sizeof(buf), LV_SYMBOL_KEYBOARD " ");
+        for (int i = 0; i < np && o < (int)sizeof(buf); i++)
+            o += snprintf(buf + o, sizeof(buf) - o, "%s%.20s (%s)", i ? ", " : "", pads[i].name,
+                          pads[i].connected ? "connected" : "press its home button");
+    }
+    lv_label_set_text(s_bt_pads, buf);
     lv_label_set_text(lv_obj_get_child(s_bt_onoff, 0), lx_bt_speaker_enabled() ? "Disconnect" : "Connect");
-    lv_label_set_text(s_bt_note, lx_bt_speaker_error());
+    lv_label_set_text(s_bt_note, lx_bt_pads_error()[0] ? lx_bt_pads_error() : lx_bt_speaker_error());
     if (!s_bt_scanning) return;
     int n = lx_bt_speaker_results(s_bt_found, LX_BT_MAX_FOUND);
     if (n < 0) return;
     s_bt_scanning = false;
     lv_obj_clean(s_bt_list);
-    for (int pass = 0; pass < 2; pass++)            /* speakers and headphones first */
+    for (int pass = 0; pass < 3; pass++)            /* speakers and headphones, controllers, the rest */
         for (int i = 0; i < n; i++) {
             const lx_bt_found_t *f = &s_bt_found[i];
-            if (f->audio != (pass == 0)) continue;
-            if (f->name[0]) snprintf(buf, sizeof(buf), "%s  (%d dBm%s)", f->name, f->rssi, f->audio ? "" : ", not audio");
+            if ((f->audio ? 0 : f->hid ? 1 : 2) != pass) continue;
+            const char *what = f->audio ? "" : f->hid ? (f->ble ? ", BLE controller" : ", controller") : ", not audio";
+            if (f->name[0]) snprintf(buf, sizeof(buf), "%s  (%d dBm%s)", f->name, f->rssi, what);
             else snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X  (%d dBm%s)", f->addr[0], f->addr[1],
-                          f->addr[2], f->addr[3], f->addr[4], f->addr[5], f->rssi, f->audio ? "" : ", not audio");
-            lv_obj_t *b = lv_list_add_button(s_bt_list, f->audio ? LV_SYMBOL_AUDIO : LV_SYMBOL_BLUETOOTH, buf);
+                          f->addr[2], f->addr[3], f->addr[4], f->addr[5], f->rssi, what);
+            lv_obj_t *b = lv_list_add_button(s_bt_list, f->audio ? LV_SYMBOL_AUDIO : f->hid ? LV_SYMBOL_KEYBOARD
+                                                                                  : LV_SYMBOL_BLUETOOTH, buf);
             lv_obj_set_style_outline_width(b, 2, LV_STATE_FOCUSED);
             lv_obj_set_style_outline_color(b, C_ACCENT, LV_STATE_FOCUSED);
             lv_obj_add_event_cb(b, on_bt_pick, LV_EVENT_CLICKED, (void *)(intptr_t)i);
         }
-    if (!n) lv_list_add_text(s_bt_list, "Nothing found. Is the speaker in pairing mode?");
+    if (!n) lv_list_add_text(s_bt_list, "Nothing found. Is the speaker or controller in pairing mode?");
     bt_focus();
 }
 
@@ -1618,7 +1651,7 @@ static void build_settings(void)
         lv_obj_set_style_outline_width(s_bt_btn, 3, LV_STATE_FOCUSED);
         lv_obj_set_style_outline_color(s_bt_btn, C_ACCENT, LV_STATE_FOCUSED);
         lv_obj_set_style_outline_pad(s_bt_btn, 3, LV_STATE_FOCUSED);
-        lv_obj_center(label(s_bt_btn, &lv_font_montserrat_20, C_TEXT, LV_SYMBOL_BLUETOOTH " Speaker"));
+        lv_obj_center(label(s_bt_btn, &lv_font_montserrat_20, C_TEXT, LV_SYMBOL_BLUETOOTH " Bluetooth"));
         lv_obj_add_event_cb(s_bt_btn, on_bt_open, LV_EVENT_CLICKED, NULL);
         build_bt_screen();
     }
@@ -2094,7 +2127,7 @@ static void on_menu_item(lv_event_t *ev)
 static void update_status(lv_timer_t *t)
 {
     static int tick;
-    char buf[64];
+    char buf[96];
     time_t now = time(NULL);
     if (now > 1700000000) {                     /* set (by DevLink, later RTC / NTP) */
         struct tm tm;
@@ -2163,6 +2196,33 @@ static void update_status(lv_timer_t *t)
     if (lx_net_state() == LX_NET_CONNECTED) {
         size_t n = strlen(buf);
         snprintf(buf + n, sizeof(buf) - n, "   " LV_SYMBOL_WIFI);
+    }
+    /* Bluetooth speaker: icon + name while connected, and a few seconds' note in the state field
+     * when it comes or goes (it connects by itself after boot) */
+    static bool spk_was;
+    static int64_t spk_note_until;
+    lx_bt_spk_state_t spk = lx_bt_speaker_state();
+    bool spk_on = spk == LX_BT_SPK_CONNECTED || spk == LX_BT_SPK_PLAYING;
+    if (spk_on) {
+        size_t n = strlen(buf);
+        if (s_dx >= 100)                        /* the name fits on the wide screens */
+            snprintf(buf + n, sizeof(buf) - n, "   " LV_SYMBOL_BLUETOOTH " %.14s", lx_bt_speaker_name());
+        else
+            snprintf(buf + n, sizeof(buf) - n, "   " LV_SYMBOL_BLUETOOTH LV_SYMBOL_AUDIO);
+    }
+    int64_t now_us = esp_timer_get_time();
+    if (spk_on != spk_was) {
+        spk_was = spk_on;
+        char note[80];
+        snprintf(note, sizeof(note), LV_SYMBOL_AUDIO " %.16s %s", lx_bt_speaker_name(),
+                 spk_on ? "connected" : "disconnected");
+        lv_label_set_text(s_sys_state, note);
+        lv_obj_set_style_text_color(s_sys_state, spk_on ? C_ACCENT : C_DIM, 0);
+        spk_note_until = now_us + 5000000;
+    } else if (spk_note_until && now_us > spk_note_until) {
+        spk_note_until = 0;
+        lv_label_set_text(s_sys_state, LV_SYMBOL_OK " System ready");
+        lv_obj_set_style_text_color(s_sys_state, C_GREEN, 0);
     }
     lv_label_set_text(s_sys_pads, buf);
     if (lv_screen_active() == s_settings && tick % 2 == 0) refresh_info();

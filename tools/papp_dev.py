@@ -49,7 +49,7 @@ LS, STAT, MKDIR, RM, RENAME = 0x10, 0x11, 0x12, 0x13, 0x14
 PUT_BEGIN, PUT_DATA, PUT_END, GET = 0x20, 0x21, 0x22, 0x28
 RUN, STOP, STATUS = 0x30, 0x31, 0x32
 REBOOT, CRASH, CRASH_CLEAR, BOOTLOG = 0x40, 0x41, 0x42, 0x43
-NET, DISPLAY = 0x52, 0x53
+NET, DISPLAY, BT = 0x52, 0x53, 0x54
 SHOT, INPUT = 0x50, 0x51
 INPUT_PAD, INPUT_KEY, INPUT_STATE, INPUT_UNMAP = 1, 2, 3, 4
 
@@ -509,6 +509,10 @@ def main():
     sub.add_parser("crash-clear")
     sub.add_parser("bootlog", help="messages logged while the board was starting")
     sub.add_parser("reboot")
+    p = sub.add_parser("bt", help="Bluetooth speaker and gamepads (test aid): status | scan | results | "
+                       "pair ADDR | speaker ADDR [NAME] | speaker on|off | forget-speaker | forget-pads")
+    p.add_argument("words", nargs="*", default=["status"])
+    p.add_argument("--wait", action="store_true", help="scan: wait for the results")
     p = sub.add_parser("display", help="panel scan-out and backlight off/on (a test aid; not every board)"); p.add_argument("state", choices=["on", "off"])
     p = sub.add_parser("shot"); p.add_argument("out", nargs="?", default="screenshot.png")
     p = sub.add_parser("log"); p.add_argument("--seconds", type=float, default=0)
@@ -549,6 +553,14 @@ def main():
                 time.sleep(1)
                 r = dl.request(NET).decode("utf-8", "replace")
             print(r[1:].strip(chr(0)))
+        elif c == "bt":
+            cmd = " ".join(args.words)
+            r = dl.request(BT, cmd.encode()).decode("utf-8", "replace")
+            if cmd == "scan" and args.wait and r == "scanning":
+                while r == "scanning":
+                    time.sleep(1)
+                    r = dl.request(BT, b"results").decode("utf-8", "replace")
+            print(r)
         elif c == "display":
             print(dl.request(DISPLAY, bytes([args.state == "on"])).decode())
         elif c == "ping":

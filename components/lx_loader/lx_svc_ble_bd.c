@@ -65,6 +65,7 @@ typedef struct {
     papp_ble_addr_t addr;
     uint16_t        mtu;
     uint8_t         sub[PAPP_BLE_MAX_CHRS];     /* server: 0 off, 1 notify, 2 indicate */
+    bool            central;                    /* the app connected out (papp_ble_connect) */
 } conn_t;
 
 typedef struct {
@@ -287,7 +288,20 @@ static void gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *p)
 {
     papp_ble_event_t e;
     switch (event) {
+    case ESP_GAP_BLE_SEC_REQ_EVT:
+    case ESP_GAP_BLE_NC_REQ_EVT:
+    case ESP_GAP_BLE_PASSKEY_REQ_EVT:
+    case ESP_GAP_BLE_AUTH_CMPL_EVT:
+        if (lx_bt_pads_owns(event == ESP_GAP_BLE_AUTH_CMPL_EVT ? p->ble_security.auth_cmpl.bd_addr
+                                                               : p->ble_security.ble_req.bd_addr))
+            return;                                 /* a Bluetooth gamepad's (lx_bt_pads.c) */
+        break;
+    default:
+        break;
+    }
+    switch (event) {
     case ESP_GAP_BLE_SCAN_RESULT_EVT:
+        if (!s_scanning) break;                     /* another module's scan */
         if (p->scan_rst.search_evt == ESP_GAP_SEARCH_INQ_RES_EVT) {
             memset(&e, 0, sizeof(e));
             e.type = PAPP_BLE_EV_ADV;
@@ -326,8 +340,12 @@ static void gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *p)
         xSemaphoreTake(s_lock, portMAX_DELAY);
         conn_t *c = conn_by_bda(a->bd_addr);
         uint16_t idx = c ? c->idx : PAPP_BLE_CONN_NONE;
+        bool central = c && c->central;
         xSemaphoreGive(s_lock);
         if (!a->success) ESP_LOGW(TAG, "pairing failed: reason 0x%x", a->fail_reason);
+        /* Bluedroid keeps a bond after a failed pairing (CONFIG_BT_BLE_SMP_REMOVE_BOND_ON_PAIR_FAIL_AS_CENTRAL
+         * off, for the gamepads): an app's outgoing link keeps the old behaviour, the bond goes */
+        if (!a->success && central) esp_ble_remove_bond_device((uint8_t *)a->bd_addr);
         post_simple(PAPP_BLE_EV_ENCRYPTED, idx, 0, a->success ? 0 : (uint16_t)(a->fail_reason ? a->fail_reason : 1));
         break;
     }
@@ -367,6 +385,7 @@ static void gatts_cb(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble
         break;
     }
     case ESP_GATTS_CONNECT_EVT: {
+        if (lx_bt_pads_owns(p->connect.remote_bda)) break;     /* a gamepad link (lx_bt_pads.c) */
         uint16_t idx = p->connect.conn_id;
         papp_ble_event_t e;
         memset(&e, 0, sizeof(e));
@@ -403,6 +422,7 @@ static void gatts_cb(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble
         break;
     }
     case ESP_GATTS_DISCONNECT_EVT: {
+        if (lx_bt_pads_owns(p->disconnect.remote_bda)) break;
         uint16_t idx = p->disconnect.conn_id;
         papp_ble_event_t e;
         memset(&e, 0, sizeof(e));
@@ -478,12 +498,20 @@ static void op_finish(int status)
 
 static void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp_ble_gattc_cb_param_t *p)
 {
+    /* lx_bt.c hands every client event to every module: ours are those of our registration */
+    if (event == ESP_GATTC_REG_EVT ? p->reg.app_id != APP_ID_C : gattc_if != s_gattc_if) return;
     switch (event) {
     case ESP_GATTC_REG_EVT:
         if (p->reg.status == ESP_GATT_OK) s_gattc_if = gattc_if;
         xSemaphoreGive(s_reg_sem);
         break;
     case ESP_GATTC_OPEN_EVT:
+        if (p->open.status == ESP_GATT_OK) {
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            conn_t *oc = conn_by_bda(p->open.remote_bda);
+            if (oc) oc->central = true;
+            xSemaphoreGive(s_lock);
+        }
         if (s_op && s_op->kind == OP_CONNECT && !memcmp(s_op->bda, p->open.remote_bda, 6)) {
             s_op->open_conn = p->open.conn_id;
             op_finish(p->open.status == ESP_GATT_OK ? PAPP_E_OK : PAPP_E_REFUSED);
@@ -616,10 +644,9 @@ static bool start(void)
         return false;
     }
     s_running = true;
+    lx_bt_ble_handlers(LX_BT_BLE_APP, gap_cb, gattc_cb);   /* GAP and GATT client: shared, lx_bt.c */
     if (s_gatts_if == ESP_GATT_IF_NONE || s_gattc_if == ESP_GATT_IF_NONE) {
-        esp_ble_gap_register_callback(gap_cb);
         esp_ble_gatts_register_callback(gatts_cb);
-        esp_ble_gattc_register_callback(gattc_cb);
         esp_ble_gatt_set_local_mtu(LOCAL_MTU);
         xSemaphoreTake(s_reg_sem, 0);
         xSemaphoreTake(s_reg_sem, 0);

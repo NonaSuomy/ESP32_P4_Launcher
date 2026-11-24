@@ -16,6 +16,7 @@
  * are kept in /sd/launcher/store/<id>.png for the Store's list.
  */
 #include "lx_appstore.h"
+#include "esp_attr.h"     /* EXT_RAM_BSS_ATTR */
 #include "lx_http.h"
 
 #include <stdio.h>
@@ -45,7 +46,7 @@ static volatile int s_percent;
 static char s_error[96], s_why[40];
 static lx_appstore_app_t *s_apps;
 static int s_count;
-static struct { char name[24]; char icon[192]; } s_folders[MAX_FOLDERS];
+static EXT_RAM_BSS_ATTR struct { char name[24]; char icon[192]; } s_folders[MAX_FOLDERS];
 static int s_nfolders;
 static volatile bool s_pads_updated;
 

@@ -3,9 +3,16 @@
  * launcher's audio mixer (lx_audio_set_tap) while the speaker plays, so apps need no change.
  *
  * The speaker picked in Settings is saved in /sd/config/bt_speaker.txt (addr=, name=, on=). While
- * it is on and a dongle is plugged in, the launcher keeps the stack up and connects, again every
- * RETRY_MS when the speaker is off or out of range. Pairing: Secure Simple Pairing without input
- * (speakers have none), or legacy PIN 0000. Bonds stay in Bluedroid's NVS store.
+ * it is on and a dongle is plugged in, the launcher keeps the stack up, connectable (a speaker that
+ * reconnects by itself when switched on finds us), and calls it: again after 10, 20, 40, then every
+ * 60 s while it is off or out of range. A call pages the speaker, and while the dongle pages it
+ * carries nothing else (Classic or LE: a connected controller's reports stop). So with a controller
+ * connected a call pages 2.5 s instead of 5 (a speaker that is on answers in well under that), comes
+ * every 30, 60, then 120 s, and only once no input has changed for STILL_MS: nobody is playing. A
+ * missing speaker then never freezes a game, and never costs a controller its link. Connect calls at
+ * once.
+ * Pairing: Secure Simple Pairing without input (speakers have none), or legacy PIN 0000. Bonds stay
+ * in Bluedroid's NVS store.
  *
  * Audio: the mixer runs at the board's rate (48 kHz); A2DP (SBC) runs at the rate the speaker
  * picked, usually 44.1 kHz. The tap resamples into a ring that Bluedroid's A2DP task drains through
@@ -13,12 +20,14 @@
  * silence. The master volume is applied in software (the board's codec gets silence).
  */
 #include "sdkconfig.h"
+#include "esp_attr.h"     /* EXT_RAM_BSS_ATTR */
 
 #if CONFIG_BT_BLUEDROID_ENABLED && CONFIG_ESP_HOSTED_ENABLE_BT_BLUEDROID
 
 #include <stdio.h>
 #include <string.h>
 #include "lx_bt_priv.h"
+#include "esp_timer.h"
 #include "lx_audio.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -32,8 +41,12 @@
 static const char *TAG = "lx_bt_spk";
 
 #define CFG_FILE   "/sd/config/bt_speaker.txt"
-#define RETRY_MS   10000
-#define SCAN_S     10                       /* inquiry length: units of 1.28 s, 8 = ~10 s */
+#define RETRY_MS   10000        /* timer tick; calls are whole ticks apart */
+#define PAGE_LONG  0x2000       /* page timeout, 0.625 ms slots: 5.12 s, nothing else connected */
+#define PAGE_SHORT 0x1000       /* 2.56 s: a controller is connected */
+#define STILL_MS   20000        /* with a controller connected, calls wait until no input changed for this long */
+#define CONNECT_MS 20000        /* a connect attempt Bluedroid never answers is given up after this */
+#define SCAN_S     10                       /* inquiry length: units of 1.28 s, 10 = ~13 s */
 #define RING_MS    250
 /* Most the ring holds while playing: the mixer runs on the codec's clock, a bit faster than Bluedroid's
  * 30 ms pulls, so a bigger fill would just sit there as delay (it did: 250 ms). Beyond it frames are
@@ -45,11 +58,15 @@ static uint8_t  s_addr[6];
 static char     s_name[48];
 static bool     s_saved, s_on;
 static volatile lx_bt_spk_state_t s_state = LX_BT_SPK_OFF;
-static volatile bool s_linked, s_held, s_scanning, s_scan_hold;
+static volatile bool s_linked, s_held, s_scanning, s_scan_hold, s_ble_scan;
+static int s_fails, s_wait;         /* failed tries in a row; retry ticks still to skip */
+static volatile bool s_inquiry;    /* the dongle is inquiring (set from GAP events: cancel takes a moment) */
+static volatile int  s_paused;        /* scans and pad pairing: no reconnect attempts meanwhile */
+static volatile int64_t s_connect_t;    /* when the current connect attempt started */
 static char     s_err[128];
 static TimerHandle_t s_retry;
 
-static lx_bt_found_t s_found[LX_BT_MAX_FOUND];
+static EXT_RAM_BSS_ATTR lx_bt_found_t s_found[LX_BT_MAX_FOUND];
 static volatile int  s_nfound;
 
 /* Ring of S16 stereo frames at the A2DP rate: the mixer's tap writes, the A2DP task reads */
@@ -60,7 +77,9 @@ static volatile int s_rate = 44100;
 static uint32_t s_step, s_frac = 0x10000;    /* 16.16 mixer frames per A2DP frame */
 static int16_t  s_prev[2], s_cur[2];
 static uint32_t s_dropped, s_short;
+static volatile uint32_t s_taken;      /* frames Bluedroid took (status) */
 static volatile bool s_playing;
+static void start_job(void *a);
 
 /* ── Saved speaker ──────────────────────────────────────────────────────── */
 
@@ -142,6 +161,7 @@ static int32_t a2d_data(uint8_t *buf, int32_t len)
         memset(out + i * 2, 0, (frames - i) * 4);
     }
     __atomic_store_n(&s_tail, tail, __ATOMIC_RELEASE);
+    s_taken += frames;
     return frames * 4;
 }
 
@@ -183,7 +203,7 @@ static void set_err(const char *e)
 static void connect_job(void *a)
 {
     (void)a;
-    if (!s_saved || !s_on || s_linked || s_state == LX_BT_SPK_CONNECTING) return;
+    if (!s_saved || !s_on || s_linked || s_state == LX_BT_SPK_CONNECTING || s_scanning || s_paused) return;
     if (!lx_bt_usb_present()) { s_state = LX_BT_SPK_NO_DONGLE; return; }
     if (!s_held) {
         if (!lx_bt_acquire(LX_BT_USER_SPEAKER, true, NULL)) {
@@ -194,7 +214,14 @@ static void connect_job(void *a)
         }
         s_held = true;
     }
+    int pads = lx_bt_pads_linked();
+    esp_bt_gap_set_page_timeout(pads ? PAGE_SHORT : PAGE_LONG);
+    if (pads) ESP_LOGI(TAG, "calling %s (short page: %d controller%s connected)", s_name, pads, pads == 1 ? "" : "s");
+    /* a BLE pad's pending connection request makes way: an LE link the CSR8510 sets up while it pages
+     * comes up broken (encrypted, but nothing it is sent gets through) */
+    lx_bt_pads_cancel_open();
     s_state = LX_BT_SPK_CONNECTING;
+    s_connect_t = esp_timer_get_time();
     esp_err_t e = esp_a2d_source_connect(s_addr);
     if (e != ESP_OK) {
         s_state = LX_BT_SPK_RETRY;
@@ -212,11 +239,30 @@ static void release_job(void *a)
     }
 }
 
+/* on the lx_bt task: the timer task's 2 KB stack is too small for this (stack guard panic) */
+static void retry_job(void *a)
+{
+    (void)a;
+    if (s_state == LX_BT_SPK_CONNECTING && !s_linked &&
+        esp_timer_get_time() - s_connect_t > CONNECT_MS * 1000LL) {
+        ESP_LOGW(TAG, "no answer to the connect request: trying again");
+        s_state = LX_BT_SPK_RETRY;
+    }
+    /* not while a scan or a controller's pairing has the radio */
+    if (s_on && s_saved && !s_linked && s_state != LX_BT_SPK_CONNECTING && !s_scanning && !s_paused &&
+        lx_bt_usb_present()) {
+        if (s_wait > 0) s_wait--;
+        else if (lx_bt_pads_still_ms() < STILL_MS) { /* someone is playing: the call waits (it stalls the pads) */ }
+        else connect_job(NULL);
+    }
+}
+
+uint32_t lx_bt_speaker_taken(void) { return s_taken; }
+
 static void retry_tick(TimerHandle_t t)
 {
     (void)t;
-    if (s_on && s_saved && !s_linked && s_state != LX_BT_SPK_CONNECTING && lx_bt_usb_present())
-        lx_bt_post(connect_job, NULL);
+    lx_bt_post(retry_job, NULL);
 }
 
 static void start_job(void *a)
@@ -232,18 +278,34 @@ static void a2d_cb(esp_a2d_cb_event_t ev, esp_a2d_cb_param_t *p)
     switch (ev) {
     case ESP_A2D_CONNECTION_STATE_EVT:
         if (p->conn_stat.state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
+            if (!s_saved || memcmp(p->conn_stat.remote_bda, s_addr, 6)) {
+                ESP_LOGW(TAG, "%02X:%02X:%02X:%02X:%02X:%02X is not the chosen speaker: disconnected",
+                         p->conn_stat.remote_bda[0], p->conn_stat.remote_bda[1], p->conn_stat.remote_bda[2],
+                         p->conn_stat.remote_bda[3], p->conn_stat.remote_bda[4], p->conn_stat.remote_bda[5]);
+                esp_a2d_source_disconnect(p->conn_stat.remote_bda);
+                break;
+            }
             s_linked = true;
             s_state = LX_BT_SPK_CONNECTED;
+            s_fails = s_wait = 0;
             set_err("");
             ESP_LOGI(TAG, "connected to %s", s_name);
             lx_bt_post(start_job, NULL);
         } else if (p->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
+            if (s_saved && memcmp(p->conn_stat.remote_bda, s_addr, 6)) break;     /* one we turned away */
             bool was = s_linked;
             s_linked = false;
             audio_off();
             s_state = s_on && s_saved ? LX_BT_SPK_RETRY : LX_BT_SPK_OFF;
             if (was) ESP_LOGI(TAG, "disconnected (%s)", p->conn_stat.disc_rsn == ESP_A2D_DISC_RSN_NORMAL ? "normal" : "link lost");
-            else set_err("speaker not found: is it on and in pairing mode?");
+            else {
+                set_err("speaker not found: is it on?");
+                /* next call in ticks: 1, 2, 4, 6, 6.. alone; 3, 6, 12, 12.. with a controller connected */
+                int f = s_fails < 3 ? s_fails : 3;
+                int ticks = lx_bt_pads_linked() ? (f >= 2 ? 12 : 3 << f) : (f >= 3 ? 6 : 1 << f);
+                s_wait = ticks - 1;
+                s_fails++;
+            }
             if (!s_on) lx_bt_post(release_job, NULL);
         }
         break;
@@ -309,12 +371,96 @@ static void found(esp_bt_gap_cb_param_t *p)
     }
     if (name[0]) snprintf(s_found[k].name, sizeof(s_found[k].name), "%s", name);
     if (rssi != -127) s_found[k].rssi = rssi;
-    if (cod) s_found[k].audio = audio;
+    if (cod) {
+        s_found[k].audio = audio;
+        s_found[k].hid = esp_bt_gap_get_cod_major_dev(cod) == ESP_BT_COD_MAJOR_DEV_PERIPHERAL;
+    }
+}
+
+/* ── BLE half of the scan: HID adverts (gamepads, keyboards) ───────────── */
+
+static bool adv_field(const uint8_t *d, int len, uint8_t type, const uint8_t **v, int *vlen)
+{
+    for (int i = 0; i + 1 < len;) {
+        int l = d[i];
+        if (!l || i + 1 + l > len) break;
+        if (d[i + 1] == type) { *v = d + i + 2; *vlen = l - 1; return true; }
+        i += 1 + l;
+    }
+    return false;
+}
+
+static void ble_found(const esp_ble_gap_cb_param_t *p)
+{
+    const uint8_t *d = p->scan_rst.ble_adv, *v;
+    int len = p->scan_rst.adv_data_len + p->scan_rst.scan_rsp_len, vl;
+    bool hid = false;
+    if (adv_field(d, len, 0x19, &v, &vl) && vl >= 2) {           /* appearance: HID category 0x03C0.. */
+        int app = v[0] | v[1] << 8;
+        hid = app >= 0x03C0 && app <= 0x03FF;
+    }
+    for (uint8_t t = 0x02; t <= 0x03 && !hid; t++)              /* 16-bit services: 0x1812 HID */
+        if (adv_field(d, len, t, &v, &vl))
+            for (int i = 0; i + 1 < vl; i += 2) if ((v[i] | v[i + 1] << 8) == 0x1812) hid = true;
+    char name[48] = "";
+    if (adv_field(d, len, 0x09, &v, &vl) || adv_field(d, len, 0x08, &v, &vl))
+        snprintf(name, sizeof(name), "%.*s", vl, (const char *)v);
+    int n = s_nfound, k;
+    for (k = 0; k < n; k++) if (!memcmp(s_found[k].addr, p->scan_rst.bda, 6)) break;
+    if (k == n) {
+        if (!hid || n >= LX_BT_MAX_FOUND) return;               /* only controllers and the like */
+        memset(&s_found[k], 0, sizeof(s_found[k]));
+        memcpy(s_found[k].addr, p->scan_rst.bda, 6);
+        s_found[k].ble = true;
+        s_found[k].hid = true;
+        s_found[k].addr_type = (uint8_t)p->scan_rst.ble_addr_type;
+        s_nfound = n + 1;
+    } else if (!s_found[k].ble) {
+        return;                                                 /* found by the inquiry already */
+    }
+    if (name[0]) snprintf(s_found[k].name, sizeof(s_found[k].name), "%s", name);
+    s_found[k].rssi = (int8_t)p->scan_rst.rssi;
+}
+
+static void ble_gap_cb(esp_gap_ble_cb_event_t ev, esp_ble_gap_cb_param_t *p)
+{
+    if (!s_ble_scan) return;
+    switch (ev) {
+    case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
+        if (p->scan_param_cmpl.status == ESP_BT_STATUS_SUCCESS) esp_ble_gap_start_scanning(SCAN_S * 128 / 100);
+        else s_ble_scan = false;
+        break;
+    case ESP_GAP_BLE_SCAN_START_COMPLETE_EVT:
+        if (p->scan_start_cmpl.status != ESP_BT_STATUS_SUCCESS) s_ble_scan = false;
+        break;
+    case ESP_GAP_BLE_SCAN_RESULT_EVT:
+        if (p->scan_rst.search_evt == ESP_GAP_SEARCH_INQ_RES_EVT) ble_found(p);
+        else if (p->scan_rst.search_evt == ESP_GAP_SEARCH_INQ_CMPL_EVT) s_ble_scan = false;
+        break;
+    default:
+        break;
+    }
+}
+
+static void ble_scan_start(void)
+{
+    if (lx_bt_app_holds()) return;          /* an app's BLE scans are its own */
+    static esp_ble_scan_params_t sp = {
+        .scan_type = BLE_SCAN_TYPE_ACTIVE, .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
+        .scan_filter_policy = BLE_SCAN_FILTER_ALLOW_ALL, .scan_interval = 0x50, .scan_window = 0x30,
+        .scan_duplicate = BLE_SCAN_DUPLICATE_DISABLE,
+    };
+    s_ble_scan = true;
+    if (esp_ble_gap_set_scan_params(&sp) != ESP_OK) s_ble_scan = false;
 }
 
 static void scan_done_job(void *a)
 {
     (void)a;
+    if (s_ble_scan) {                       /* the inquiry ended first: the BLE half too */
+        esp_ble_gap_stop_scanning();
+        s_ble_scan = false;
+    }
     s_scanning = false;
     if (s_scan_hold) {
         s_scan_hold = false;
@@ -329,11 +475,12 @@ static void gap_cb(esp_bt_gap_cb_event_t ev, esp_bt_gap_cb_param_t *p)
         found(p);
         break;
     case ESP_BT_GAP_DISC_STATE_CHANGED_EVT:
+        s_inquiry = p->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STARTED;
         if (p->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STOPPED && s_scanning) lx_bt_post(scan_done_job, NULL);
         break;
     case ESP_BT_GAP_AUTH_CMPL_EVT:
-        if (p->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS) ESP_LOGI(TAG, "paired with %s", p->auth_cmpl.device_name);
-        else ESP_LOGW(TAG, "pairing failed: %d", p->auth_cmpl.stat);
+        if (p->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS) ESP_LOGI("lx_bt", "paired with %s", p->auth_cmpl.device_name);
+        else ESP_LOGW("lx_bt", "pairing failed: %d", p->auth_cmpl.stat);
         break;
     case ESP_BT_GAP_PIN_REQ_EVT: {
         esp_bt_pin_code_t pin = { '0', '0', '0', '0' };
@@ -367,7 +514,9 @@ void lx_bt_speaker_stack_up(void)
     esp_a2d_source_register_data_callback(a2d_data);
     esp_err_t e = esp_a2d_source_init();
     if (e != ESP_OK) ESP_LOGE(TAG, "A2DP source init: %s", esp_err_to_name(e));
-    esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
+    /* Connectable, so a speaker that reconnects by itself when switched on finds us; only the
+     * chosen speaker is kept (a2d_cb). Never discoverable. */
+    esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
     if (s_on && s_saved) lx_bt_post(connect_job, NULL);
 }
 
@@ -378,7 +527,7 @@ void lx_bt_speaker_stack_down(void)
     esp_a2d_source_deinit();
     s_linked = false;
     s_held = false;
-    s_scanning = s_scan_hold = false;
+    s_scanning = s_scan_hold = s_ble_scan = false;
     s_state = s_on && s_saved ? (lx_bt_usb_present() ? LX_BT_SPK_RETRY : LX_BT_SPK_NO_DONGLE) : LX_BT_SPK_OFF;
 }
 
@@ -388,13 +537,32 @@ void lx_bt_speaker_dongle(bool present)
     if (!present && s_on && s_saved) s_state = LX_BT_SPK_NO_DONGLE;
 }
 
+bool lx_bt_speaker_scanning(void) { return s_scanning; }
+
 void lx_bt_speaker_init(void)
 {
+    lx_bt_ble_handlers(LX_BT_BLE_SCAN, ble_gap_cb, NULL);
     cfg_load();
     s_state = s_on && s_saved ? LX_BT_SPK_NO_DONGLE : LX_BT_SPK_OFF;
     s_retry = xTimerCreate("bt_spk", pdMS_TO_TICKS(RETRY_MS), pdTRUE, NULL, retry_tick);
     if (s_retry) xTimerStart(s_retry, 0);
     if (s_saved) ESP_LOGI(TAG, "saved speaker %s (%s)", s_name, s_on ? "on" : "off");
+}
+
+/* A connect attempt pages the speaker for up to ~5 s; the dongle refuses an inquiry or another
+ * connection meanwhile ("Cmd Disallowed"). Waits for it to end (lx_bt task). */
+bool lx_bt_speaker_paging(void) { return s_state == LX_BT_SPK_CONNECTING && !s_linked; }
+
+void lx_bt_speaker_wait_page(void)
+{
+    for (int i = 0; i < 80 && s_state == LX_BT_SPK_CONNECTING && !s_linked; i++) vTaskDelay(pdMS_TO_TICKS(100));
+    for (int i = 0; i < 30 && s_inquiry; i++) vTaskDelay(pdMS_TO_TICKS(100));  /* a cancelled scan winding down */
+}
+
+void lx_bt_speaker_pause(bool on)
+{
+    if (on) s_paused++;
+    else if (s_paused > 0) s_paused--;
 }
 
 /* ── API (UI task) ──────────────────────────────────────────────────────── */
@@ -412,6 +580,9 @@ static void scan_job(void *a)
         s_held = true;
         s_scan_hold = true;
     }
+    lx_bt_speaker_wait_page();
+    lx_bt_pads_cancel_open();
+    ble_scan_start();
     if (esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, SCAN_S, 0) != ESP_OK) {
         set_err("scan failed");
         scan_done_job(NULL);
@@ -470,6 +641,7 @@ static void enable_job(void *a)
     cfg_save();
     if (on) {
         s_state = LX_BT_SPK_RETRY;
+        s_fails = s_wait = 0;
         connect_job(NULL);
     } else {
         s_state = LX_BT_SPK_OFF;

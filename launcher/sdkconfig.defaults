@@ -79,3 +79,8 @@ CONFIG_USB_HOST_EXT_PORT_RESET_RECOVERY_DELAY_MS=100
 # direct handler can re-arm its timer from the interrupt
 CONFIG_GPTIMER_ISR_CACHE_SAFE=y
 CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM=y
+
+# Launcher tables that need no speed (scan lists, folder list, diagnostics text) live in PSRAM
+# (EXT_RAM_BSS_ATTR): internal RAM before the scheduler starts is tight, esp_hosted's boot
+# constructor takes most of it, and FreeRTOS's timer task must still fit after it.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
