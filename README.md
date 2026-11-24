@@ -135,6 +135,11 @@ Two rules keep this portable: apps only see the ABI, and the launcher core only 
   e.g. CSR8510; Realtek dongles not yet): the launcher's and the apps' sound plays there instead of the board's
   speaker, with the usual Bluetooth delay (about 0.2 s). The board's Wi-Fi chip (C6) has only Bluetooth LE, which
   carries no audio. With a dongle plugged in, BLE apps use it too
+- Bluetooth gamepads on the same dongle (Settings → Speaker): DualShock 4, DualSense, Switch Pro and BLE pads,
+  remembered and reconnected, together with the speaker. An old Bluetooth 2.x/3.0 dongle runs Classic pads only;
+  a counterfeit CSR8510 runs a speaker or a pad well, not both
+- Guition 7" with the 2026 "New Panel" (label "V2" on the back) on a v1.x chip: the 7" image recognises the
+  panel at start-up
 - Apps can use the board's free header pins and hardware timers, with their interrupts on the core they choose
   (IRQ): each event handled in an app thread, or by the app's own code inside the interrupt (about 3 µs from
   the edge)
