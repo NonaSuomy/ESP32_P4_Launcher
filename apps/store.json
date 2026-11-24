@@ -13,6 +13,7 @@
  "emu.a26":         {"category": "emulators", "description": "Atari 2600 games (.a26, .bin) from /sd/roms/a26"},
  "emu.a78":         {"category": "emulators", "description": "Atari 7800 games (.a78) from /sd/roms/a78"},
  "emu.a800":        {"category": "emulators", "description": "Atari 800 and 5200 games, disks and tapes from /sd/roms/a800"},
+ "emu.c64": {"category": "emulators", "description": "Commodore 64 disk and tape games (.d64, .t64) from /sd/roms/c64"},
  "emu.col":         {"category": "emulators", "description": "ColecoVision games (.col) from /sd/roms/col; needs BIOS.col there too"},
  "emu.gb":          {"category": "emulators", "description": "Game Boy games (.gb) from /sd/roms/gb"},
  "emu.gba":         {"category": "emulators", "description": "Game Boy Advance games (.gba) from /sd/roms/gba (gpSP with a RISC-V JIT; optional gba_bios.bin there)"},
