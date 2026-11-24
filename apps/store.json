@@ -19,6 +19,7 @@
  "emu.gbc":         {"category": "emulators", "description": "Game Boy Color games (.gbc) from /sd/roms/gbc"},
  "emu.genesis":     {"category": "emulators", "description": "Sega Genesis / Mega Drive games (.md, .gen, .bin) from /sd/roms/gen"},
  "emu.gg":          {"category": "emulators", "description": "Sega Game Gear games (.gg) from /sd/roms/gg"},
+ "emu.gw": {"category": "emulators", "description": "Game & Watch LCD game images (.gw, .lcd) from /sd/roms/gw"},
  "emu.lynx":        {"category": "emulators", "description": "Atari Lynx games (.lnx) from /sd/roms/lynx"},
  "emu.neogeo":      {"category": "emulators", "description": "Neo Geo games (.zip) from /sd/roms/neogeo; needs the neogeo.zip BIOS"},
  "emu.nes":         {"category": "emulators", "description": "Nintendo NES games (.nes) from /sd/roms/nes"},
