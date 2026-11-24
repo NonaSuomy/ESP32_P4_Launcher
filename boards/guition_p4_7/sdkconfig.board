@@ -42,3 +42,6 @@ CONFIG_BT_GATT_MAX_SR_PROFILES=12
 CONFIG_BT_GATT_MAX_SR_ATTRIBUTES=300
 # Bluetooth gamepads: a failed encryption (a timeout at start-up) must not unpair a pad; lx_bt_pads.c decides
 # CONFIG_BT_BLE_SMP_REMOVE_BOND_ON_PAIR_FAIL_AS_CENTRAL is not set
+# 10 MHz SDIO to the C6: faster links put vertical streaks on the 2026 "New Panel", which some v1.x boards
+# have too (Guition's demo and EspControl use 10). esp_hosted fixes the clock before the panel is known.
+CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=10000

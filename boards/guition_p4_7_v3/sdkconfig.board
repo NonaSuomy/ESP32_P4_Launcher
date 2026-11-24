@@ -1,5 +1,5 @@
 # Guition JC1060P470C 7" with a rev v3.x chip — board-specific sdkconfig fragment
-# (builds guition_p4_7's sources; v3.x chip and the 2026 "New Panel", BOARD_PANEL_NEW)
+# (builds guition_p4_7's sources; v3.x chip, always the 2026 "New Panel")
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_HEX=y
 CONFIG_SPIRAM_SPEED_200M=y

@@ -191,7 +191,7 @@ from the same SD card. Which boards can be added, and how: [docs/BOARD_SUPPORT.m
 | Board id (`-DLX_BOARD=`) | `guition_p4_43` (default) | `guition_p4_7` | `m5stack_tab5` |
 | SoC | ESP32-P4, dual RISC-V at 360 MHz, chip revision v1.x (v3.x: board id `guition_p4_43_v3`) | same (v3.x: `guition_p4_7_v3`, 400 MHz) | same |
 | Memory | 32 MB hex PSRAM at 200 MHz, 16 MB flash | same | same |
-| Display | 480×800 ST7701 MIPI-DSI, used in landscape as 800×480 | 1024×600 JD9165 MIPI-DSI, landscape (v3.x boards: the 2026 "New Panel", its own setup) | 720×1280 MIPI-DSI (ILI9881C, ST7123 or ST7121, detected at start), used in landscape as 1280×720 |
+| Display | 480×800 ST7701 MIPI-DSI, used in landscape as 800×480 | 1024×600 JD9165 MIPI-DSI, landscape (the 2026 "New Panel" on v3.x boards and some v1.x ones: recognised at start-up) | 720×1280 MIPI-DSI (ILI9881C, ST7123 or ST7121, detected at start), used in landscape as 1280×720 |
 | Touch | GT911 capacitive | GT911 capacitive | GT911, or the touch built into the ST7123 / ST7121 panel |
 | Radio | ESP32-C6 over SDIO (Wi-Fi; BLE firmware present) | same, newer C6 firmware | ESP32-C6 over SDIO, M5Stack's C6 firmware |
 | Audio | ES8311 codec at a fixed 48 kHz | ES8311 codec at 48 kHz, NS4150 speaker amplifier | ES8388 codec at 48 kHz |
@@ -253,8 +253,8 @@ chip generation only, so these have their own image. On the ESP Tool page, the l
 shows the chip revision, for example "revision v1.0" or "revision v3.2"; `esptool.py --chip esp32p4
 -p COMx chip_id` shows it too. If you flashed the wrong one, the screen stays dark: flash the other
 file. After the first install, Settings → Update picks the right image by itself. The 7" v3 image also
-drives the 2026 "New Panel" these boards have (label "V2" on the back); a 7" with that panel and a v1.x
-chip is not supported.
+drives the 2026 "New Panel" these boards have (label "V2" on the back). A 7" with that panel and a v1.x
+chip runs the plain 7" image, which recognises the panel at start-up.
 
 ### 2. Build the launcher yourself (optional)
 
