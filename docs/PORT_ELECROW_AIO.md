@@ -21,7 +21,7 @@ cd launcher; idf.py -B build_elecrow_p4_aio -DLX_BOARD=elecrow_p4_aio -p COMx bu
 | Orientation | scan direction pins UPDN GPIO 32 = 0, SHLR GPIO 33 = 1 (Elecrow's levels) → `display_rot` 0. `BOARD_LCD_FLIP 1` in `board_pins.h` inverts both pins and turns touch to match |
 | Touch | GT911 on I2C0, SDA 18, SCL 19, reset 40, INT 41 (reset with INT low → 0x5D; 0x14 tried too) |
 | Audio | I2S0 BCLK 22, WS 21, DOUT 23 straight into an amplifier, no codec: volume is scaled in software. Amplifier enable GPIO 6, on when low (off from `bsp_init` until silent DMA runs) |
-| SD | SDMMC slot 0, 1-bit, CLK 43, CMD 44, D0 39, card supply LDO4 3.3 V; 40 MHz, retries at 20 MHz (Elecrow's speed) |
+| SD | SDMMC slot 0, 1-bit, CLK 43, CMD 44, D0 39, card supply LDO4 3.3 V; 20 MHz default. On timeout/CRC, CMD12 recovers a card stuck in DATA/RCV and failed multi-sector writes retry as single-sector writes. |
 | Buttons | resistor ladder on GPIO 16 (ADC1 channel 0): left, right, down ("middle" in Elecrow's code), up; diagonals below 1.6 V |
 | Wi-Fi / BLE | ESP32-C6 over SPI full duplex: MOSI 7, MISO 9, CLK 15, CS 14, data ready 10, handshake 11, reset GPIO 2 active high |
 | Flash / PSRAM | 16 MB QIO 80 MHz, 32 MB hex PSRAM at 200 MHz, chip rev v1.x (`ESP32P4_SELECTS_REV_LESS_V3`) |

@@ -78,8 +78,9 @@ esp_err_t bsp_sdcard_mount(const char *mount_point)
     for (int attempt = 1; attempt <= 3; attempt++) {
         sdmmc_host_t host = SDMMC_HOST_DEFAULT();
         host.slot = SDMMC_HOST_SLOT_0;
-        /* 40 MHz first; Elecrow runs the card at 20 MHz, the retries fall back to that */
-        host.max_freq_khz = attempt == 1 ? SDMMC_FREQ_HIGHSPEED : SDMMC_FREQ_DEFAULT;
+        /* The AIO routes only D0 and has shown write timeouts at high-speed clock. Keep the
+         * single-bit card at the default 20 MHz; a slower card bus is preferable to failed writes. */
+        host.max_freq_khz = SDMMC_FREQ_DEFAULT;
         host.pwr_ctrl_handle = pwr;
 
         sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
@@ -99,8 +100,9 @@ esp_err_t bsp_sdcard_mount(const char *mount_point)
         sdmmc_card_t *card = NULL;
         err = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot, &mount_cfg, &card);
         if (err == ESP_OK) {
-            ESP_LOGI(TAG, "SD mounted at %s (%s, %llu MB)", mount_point, card->cid.name,
-                     ((uint64_t)card->csd.capacity * card->csd.sector_size) >> 20);
+            ESP_LOGI(TAG, "SD mounted at %s (%s, %llu MB, %u MHz, %u-bit)", mount_point, card->cid.name,
+                     ((uint64_t)card->csd.capacity * card->csd.sector_size) >> 20,
+                     (unsigned)(host.max_freq_khz / 1000), (unsigned)slot.width);
             s_sd_mounted = true;
             board_set_cap(BSP_CAP_SDCARD);
             return ESP_OK;

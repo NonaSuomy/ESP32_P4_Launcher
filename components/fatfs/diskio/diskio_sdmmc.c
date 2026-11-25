@@ -15,7 +15,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-/* ESP-IDF's sdmmc component (sdmmc/sdmmc_common.h, not installed): used by the 1-bit fallback */
+/* ESP-IDF's sdmmc component (sdmmc/sdmmc_common.h, not installed): used by SD recovery */
 esp_err_t sdmmc_send_cmd(sdmmc_card_t* card, sdmmc_command_t* cmd);
 esp_err_t sdmmc_send_cmd_set_bus_width(sdmmc_card_t* card, int width);
 esp_err_t sdmmc_send_cmd_send_status(sdmmc_card_t* card, uint32_t* out_status);
@@ -26,30 +26,31 @@ static bool s_fell_back[FF_VOLUMES] = { };      /* launcher: now on the 1-bit bu
 
 static const char* TAG = "diskio_sdmmc";
 
-/* Launcher addition (README_LAUNCHER.md): a card whose 4-bit transfers fail is moved to the 1-bit bus,
- * which needs D0 only, and the transfer is repeated once; it stays 1-bit until the next boot.
- * Seen on a Guition 7" with a v3.2 chip (bad contact on D1-D3): after a multi-block write the card
- * does not answer the controller's automatic STOP, stays in the receive state, and every later write
- * times out. So: STOP by hand, wait for the transfer state, then ACMD6 + the host to 1 bit. No card
- * re-init (CMD0) and no controller reset: the controller is shared with the C6 on SDIO, a reset under
- * its running transfers hangs the board, and a re-init left the controller "hardware locked". */
-static bool ff_sdmmc_fall_back(BYTE pdrv, esp_err_t err)
+/* A multi-block transfer can time out after the card misses the host's automatic STOP. The card then
+ * remains in DATA/RCV and later operations also time out. Recover it by issuing CMD12 and waiting for
+ * TRAN/READY before retrying the failed operation. If the transfer used a 4-bit bus, also switch the
+ * card and host to 1-bit mode after recovery. Do not reset the card/controller: the P4 SDMMC controller
+ * is shared with the C6 SDIO host, and resetting it while SDIO is active can hang the board. */
+static bool ff_sdmmc_recover(BYTE pdrv, esp_err_t err)
 {
     sdmmc_card_t* card = s_cards[pdrv];
-    if (s_fell_back[pdrv] || card->log_bus_width == 0 || !card->is_mem || card->is_mmc ||
+    if (!card || !card->is_mem || card->is_mmc ||
         (card->host.flags & SDMMC_HOST_FLAG_SPI) ||
         (err != ESP_ERR_TIMEOUT && err != ESP_ERR_INVALID_CRC)) {
         return false;
     }
-    s_fell_back[pdrv] = true;
-    ESP_LOGW(TAG, "%d-bit transfer failed (0x%x): moving the card to the 1-bit bus",
+
+    const bool reduce_bus_width = card->log_bus_width != 0 && !s_fell_back[pdrv];
+    ESP_LOGW(TAG, "%d-bit SD transfer failed (0x%x): recovering card transfer state",
              1 << card->log_bus_width, err);
     uint32_t status = 0;
     int state = -1;
+    bool ready = false;
     for (int i = 0; i < 20; i++) {
         if (sdmmc_send_cmd_send_status(card, &status) == ESP_OK) {
             state = MMC_R1_CURRENT_STATE_STATUS(status);
             if (state == MMC_R1_CURRENT_STATE_TRAN && (status & MMC_R1_READY_FOR_DATA)) {
+                ready = true;
                 break;
             }
         }
@@ -65,10 +66,16 @@ static bool ff_sdmmc_fall_back(BYTE pdrv, esp_err_t err)
         vTaskDelay(pdMS_TO_TICKS(20));
         state = -1;
     }
-    if (state != MMC_R1_CURRENT_STATE_TRAN) {
+    if (!ready) {
         ESP_LOGE(TAG, "card not back in the transfer state (status 0x%" PRIx32 ")", status);
         return false;
     }
+
+    if (!reduce_bus_width) {
+        ESP_LOGW(TAG, "SD card recovered on its existing %d-bit bus", 1 << card->log_bus_width);
+        return true;
+    }
+
     esp_err_t e = sdmmc_send_cmd_set_bus_width(card, 1);
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "ACMD6 (1 bit) failed (0x%x)", e);
@@ -80,6 +87,7 @@ static bool ff_sdmmc_fall_back(BYTE pdrv, esp_err_t err)
         return false;
     }
     card->log_bus_width = 0;
+    s_fell_back[pdrv] = true;
     ESP_LOGW(TAG, "SD card on the 1-bit bus now (slower) until the next boot");
     return true;
 }
@@ -140,7 +148,7 @@ static DRESULT ff_sdmmc_read (BYTE pdrv, BYTE* buff, DWORD sector, UINT count)
     sdmmc_card_t* card = s_cards[pdrv];
     assert(card);
     esp_err_t err = sdmmc_read_sectors(card, buff, sector, count);
-    if (unlikely(err != ESP_OK) && ff_sdmmc_fall_back(pdrv, err)) {
+    if (unlikely(err != ESP_OK) && ff_sdmmc_recover(pdrv, err)) {
         err = sdmmc_read_sectors(card, buff, sector, count);
     }
     if (unlikely(err != ESP_OK)) {
@@ -155,8 +163,25 @@ static DRESULT ff_sdmmc_write (BYTE pdrv, const BYTE* buff, DWORD sector, UINT c
     sdmmc_card_t* card = s_cards[pdrv];
     assert(card);
     esp_err_t err = sdmmc_write_sectors(card, buff, sector, count);
-    if (unlikely(err != ESP_OK) && ff_sdmmc_fall_back(pdrv, err)) {
-        err = sdmmc_write_sectors(card, buff, sector, count);
+    if (unlikely(err != ESP_OK) && ff_sdmmc_recover(pdrv, err)) {
+        if (count == 1) {
+            err = sdmmc_write_sectors(card, buff, sector, 1);
+        } else {
+            /* A failed multi-block write may leave the card waiting for CMD12 again even
+             * after it reports TRAN. Retry as single-block CMD24 writes to avoid the
+             * multi-block stop/count path that caused the original timeout. Rewriting
+             * the full range is safe: sectors are idempotent and the first attempt's
+             * successful prefix is overwritten with the same data. */
+            for (UINT i = 0; i < count; i++) {
+                err = sdmmc_write_sectors(card, buff + (size_t)i * card->csd.sector_size,
+                                          sector + i, 1);
+                if (unlikely(err != ESP_OK)) {
+                    ESP_LOGE(TAG, "single-block retry failed at sector %" PRIu32 " (0x%x)",
+                             sector + i, err);
+                    break;
+                }
+            }
+        }
     }
     if (unlikely(err != ESP_OK)) {
         ESP_LOGE(TAG, "sdmmc_write_blocks failed (0x%x)", err);
