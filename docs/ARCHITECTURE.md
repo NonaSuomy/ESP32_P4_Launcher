@@ -398,8 +398,9 @@ it**: put an app on the SD card, run it, watch its logs, see the screen, press b
 reports, iterate. It replaces and extends the reference `PAPU`/`RUNR` serial protocol. It is always on
 in development builds and can be switched off in release builds.
 
-**Transport**: USB-Serial-JTAG (the same cable used for flashing; no extra hardware). Later the same
-protocol over TCP (Wi-Fi) — the framing is transport-independent.
+**Transport**: USB-Serial-JTAG on most boards. The Elecrow AIO selects UART0 for its CH340 bridge;
+when a host is connected, console logs are sent as DevLink frames so they cannot corrupt commands.
+The framing is transport-independent.
 
 **Framing** (binary, CRC-protected, so logs and data never get mixed up):
 
