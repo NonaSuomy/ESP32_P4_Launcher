@@ -764,10 +764,19 @@ static bool serial_setup(void)
            ser_ctrl(0x41, 0x07, 0x0300, i, NULL, 0);                        /* SET_MHS: DTR, RTS low */
 }
 
-/* Is it the ESP32 dongle? Its identify command (0xFC7E) answers "LXBT", protocol, firmware version,
- * baud, flags, links. A board that has just powered up prints its ROM banner at 115200 first and is
- * ready ~1 s later, so the first 1.2 s of input are dropped. The stream stops again afterwards and
- * starts with Bluedroid (open_stream). */
+/* RTS on or off (DTR stays off): on an ESP32 dev board RTS pulls EN low, a hardware reset */
+static bool ser_rts(bool on)
+{
+    if (s_d.serial == SER_CH34X) return ser_ctrl(0x40, 0xA4, on ? (uint16_t)~0x40 : 0xFFFF, 0, NULL, 0);
+    return ser_ctrl(0x41, 0x07, on ? 0x0302 : 0x0300, s_d.iface, NULL, 0);
+}
+
+/* Is it the ESP32 dongle? It is reset first (RTS pulse): a dongle that stayed powered while the board
+ * restarted still has its old links and keeps sending, and its stream would be joined mid-packet. After
+ * a reset the ROM prints its banner at 115200 and the controller is ready ~1 s later, so the first
+ * 1.2 s of input are dropped. Then the identify command (0xFC7E) answers "LXBT", protocol, firmware
+ * version, baud, flags, links. The stream stops again afterwards and starts with Bluedroid
+ * (open_stream). */
 static bool serial_identify(void)
 {
     s_h4 = 0;
@@ -776,6 +785,10 @@ static bool serial_identify(void)
     for (int i = 0; i < N_BULKIN; i++) {
         INF_INC();
         if (usb_host_transfer_submit(s_d.in[i]) != ESP_OK) INF_DEC();
+    }
+    if (ser_rts(true)) {
+        for (int i = 0; i < 10 && !s_d.gone; i++) usb_host_client_handle_events(s_client, pdMS_TO_TICKS(10));
+        ser_rts(false);
     }
     for (int i = 0; i < 120 && !s_d.gone; i++) usb_host_client_handle_events(s_client, pdMS_TO_TICKS(10));
     bool ok = false;
