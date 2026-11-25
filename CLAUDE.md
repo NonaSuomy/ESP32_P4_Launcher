@@ -46,7 +46,10 @@ components/lx_loader/     App Manager: loader, relocation, imports, services (SY
                           task, internal stack; users = app + speaker; controller = a USB Bluetooth dongle when plugged in and LE-capable,
                           else the C6 over esp_hosted VHCI (LE only; lx_bt.c fakes the C6's missing 0x1005/0x1004 replies); bonds in
                           Bluedroid's NVS store). lx_bt_usb.c = USB HCI transport (class E0/01/01: commands as control transfers,
-                          events on interrupt IN, ACL on bulk); a dongle without LE (Bluetooth 1.x-3.0) gets LE answered by the transport
+                          events on interrupt IN, ACL on bulk); also the project's own ESP32 dongle (giltal/ESP32_BT_Dongle,
+                          classic ESP32, controller-only, H4 on UART0) behind its CH34x/CP210x: 921600 8N1 set with the chip's
+                          vendor requests, DTR/RTS off, H4 over the bulk endpoints (h4_feed), taken only after identify 0xFC7E
+                          answers "LXBT" (other serial gadgets left alone); speaker + DualShock 4 together work; a dongle without LE (Bluetooth 1.x-3.0) gets LE answered by the transport
                           (Classic only; an old genuine CSR also gets its unknown start-up commands answered), answers features page 1
                           for counterfeit CSR8510s (0A12:0001, last page 0), board = master of every accepted link; the counterfeit
                           CSR8510 can't run a speaker + Classic pad together (an old genuine CSR does); Realtek dongles need a firmware
