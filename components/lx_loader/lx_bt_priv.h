@@ -52,6 +52,7 @@ bool lx_bt_pads_owns(const uint8_t *bda);           /* a pad's link (BLE): not t
 void lx_bt_pads_app(bool active);                   /* lx_bt task: an app takes / lets go of BLE */
 void lx_bt_pads_cancel_open(void);                  /* lx_bt task: a pending BLE pad request makes way (scan) */
 uint32_t lx_bt_speaker_taken(void);             /* audio frames Bluedroid took for the speaker (status) */
+bool lx_bt_usb_serial_stats(uint32_t *rx, uint32_t *skipped);  /* ESP32 dongle: H4 bytes in / skipped; false = not one */
 uint32_t lx_bt_usb_sent(void);                  /* ACL packets sent to the dongle (status) */
 uint32_t lx_bt_pads_still_ms(void);                /* since any connected pad's last input change (UINT32_MAX: none) */
 bool lx_bt_pads_stats(const uint8_t *addr, lx_hidpad_stats_t *out);   /* a connected pad's report timing */

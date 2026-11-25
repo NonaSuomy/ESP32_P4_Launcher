@@ -54,6 +54,7 @@ typedef struct {
     bool     cmd_busy[N_CMD], acl_busy[N_ACL];
     volatile int inflight;      /* transfers submitted, callback not yet run */
     volatile bool gone, failed;
+    volatile bool restarted;    /* serial: the ESP32 restarted by itself (junk on the line): reopen it */
     uint8_t  serial;            /* 0 = USB Bluetooth dongle, else the ESP32 dongle's chip: SER_CH34X / SER_CP210X */
     char     name[40];
 } dongle_t;
@@ -94,12 +95,13 @@ static int      s_acl_len;
 static uint8_t  s_h4;                   /* serial: 0 = waiting for a type byte, H4_EVT / H4_ACL = in that packet */
 static volatile bool s_discard;         /* serial: drop what comes in (the ESP32's boot banner) */
 static uint32_t s_resync;               /* serial: bytes skipped looking for a packet start */
+static uint32_t s_rx;                   /* serial: bytes received while streaming */
 
 /* ── Up: events and ACL data to Bluedroid ───────────────────────────────── */
 
 static void deliver(uint8_t *p, int len)
 {
-    if (s_host_cb && s_streaming) s_host_cb->notify_host_recv(p, (uint16_t)len);
+    if (s_host_cb && s_streaming && !s_d.restarted) s_host_cb->notify_host_recv(p, (uint16_t)len);
 }
 
 /* Counterfeit CSR8510 dongles (0A12:0001, HCI revision = LMP subversion 0x1d86) answer Read Local
@@ -301,10 +303,18 @@ static void acl_feed(const uint8_t *p, int n)
 static void h4_feed(const uint8_t *p, int n)
 {
     if (s_discard) return;
+    s_rx += n;
     while (n > 0) {
         if (!s_h4) {
             if (*p == H4_EVT || *p == H4_ACL) s_h4 = *p;
-            else s_resync++;
+            else {
+                /* Not a packet start: the dongle never sends that. The ESP32 restarted (a crash, or a
+                 * power dip): its ROM banner comes at 115200, junk at this rate, and its controller has
+                 * forgotten the links Bluedroid still counts on. From here nothing reaches Bluedroid
+                 * (junk that looks like a packet would be taken for one: it crashed the stack). */
+                s_resync++;
+                if (s_streaming) s_d.restarted = true;
+            }
             p++;
             n--;
             continue;
@@ -359,12 +369,23 @@ static void out_done(usb_transfer_t *t)
     if (s_host_cb && s_host_cb->notify_host_send_available) s_host_cb->notify_host_send_available();
 }
 
-/* The dongle is gone but Bluedroid still talks: every command is refused (Command Status
- * "command disallowed", no parameters to parse), so the stack can shut down without waiting */
-static void refuse(const uint8_t *cmd)
+/* The dongle is gone (unplugged, or the ESP32 restarted) but Bluedroid still talks: every command is
+ * refused (Command Status "command disallowed", no parameters to parse), so the stack can shut down
+ * without waiting. Except Disconnect: shutting down with links up, Bluedroid disconnects each and waits
+ * for Disconnection Complete, and its fallback timer fired after the stack was gone (a crash in
+ * bta_sys_event). So a Disconnect is done here: accepted, then the link is reported closed. */
+static void refuse(const uint8_t *cmd, int len)
 {
+    if (!s_host_cb) return;
+    if (len >= 6 && cmd[1] == 0x06 && cmd[2] == 0x04) {
+        uint8_t st[] = { H4_EVT, 0x0F, 4, 0x00, 1, 0x06, 0x04 };
+        uint8_t dc[] = { H4_EVT, 0x05, 4, 0x00, cmd[4], cmd[5], 0x16 };   /* reason: local host terminated */
+        s_host_cb->notify_host_recv(st, sizeof(st));
+        s_host_cb->notify_host_recv(dc, sizeof(dc));
+        return;
+    }
     uint8_t r[] = { H4_EVT, 0x0F, 4, 0x0C, 1, cmd[1], cmd[2] };
-    if (s_host_cb) s_host_cb->notify_host_recv(r, sizeof(r));
+    s_host_cb->notify_host_recv(r, sizeof(r));
 }
 
 static bool probe_p(uint16_t op, const uint8_t *par, int n, int ms);
@@ -373,9 +394,9 @@ static void usb_send(uint8_t *data, uint16_t len)
 {
     if (len < 1) return;
     uint8_t type = data[0];
-    bool live = s_present && s_streaming && !s_d.gone;
+    bool live = s_present && s_streaming && !s_d.gone && !s_d.restarted;
     if (!live) {
-        if (type == H4_CMD && len >= 4) refuse(data);
+        if (type == H4_CMD && len >= 4) refuse(data, len);
         return;
     }
     /* A Bluetooth 2.x/3.0 dongle (no LE): Bluedroid, built with BLE, asserts without it, so its LE
@@ -464,7 +485,7 @@ static void usb_send(uint8_t *data, uint16_t len)
 
 static bool usb_send_available(void)
 {
-    if (!(s_present && s_streaming && !s_d.gone)) return true;     /* refused at once */
+    if (!(s_present && s_streaming && !s_d.gone && !s_d.restarted)) return true;     /* refused at once */
     return uxSemaphoreGetCount(s_cmd_free) > 0 && uxSemaphoreGetCount(s_acl_free) > 0;
 }
 
@@ -482,6 +503,13 @@ static const esp_bluedroid_hci_driver_operations_t k_ops = {
 
 const esp_bluedroid_hci_driver_operations_t *lx_bt_usb_ops(void) { return &k_ops; }
 uint32_t lx_bt_usb_sent(void) { return s_sent; }
+bool lx_bt_usb_serial_stats(uint32_t *rx, uint32_t *skipped)
+{
+    if (!lx_bt_usb_present() || !s_d.serial) return false;
+    *rx = s_rx;
+    *skipped = s_resync;
+    return true;
+}
 bool lx_bt_usb_present(void) { return s_present && !s_d.gone; }
 const char *lx_bt_usb_name(void) { return s_d.name; }
 
@@ -811,6 +839,7 @@ static bool serial_identify(void)
         snprintf(s_d.name, sizeof(s_d.name), "ESP32 dongle %u.%u.%u (%s)", s_pev[12], s_pev[13], s_pev[14],
                  s_d.serial == SER_CH34X ? "CH34x" : "CP210x");
     s_streaming = false;
+    s_d.restarted = false;                  /* its own reset's banner doesn't count */
     usb_host_endpoint_halt(s_d.dev, s_d.ep_in);
     usb_host_endpoint_flush(s_d.dev, s_d.ep_in);
     for (int i = 0; i < 20 && s_d.inflight > 0; i++) usb_host_client_handle_events(s_client, pdMS_TO_TICKS(10));
@@ -919,6 +948,15 @@ static void client_task(void *arg)
         usb_host_client_handle_events(s_client, pdMS_TO_TICKS(50));
         while (s_nnew) open_dongle(s_new[--s_nnew]);
         if (s_present && s_d.gone && s_d.dev) close_dongle();
+        else if (s_present && s_d.restarted) {
+            /* As if unplugged and plugged in again: Bluedroid stops, the dongle is reset and
+             * identified again, the stack restarts on it and the speaker and pads reconnect */
+            uint8_t addr = s_d.addr;
+            ESP_LOGW(TAG, "%s restarted by itself: starting it again", s_d.name);
+            close_dongle();
+            for (int i = 0; i < 100 && lx_bt_running(); i++) vTaskDelay(pdMS_TO_TICKS(30));
+            open_dongle(addr);
+        }
         else if (s_present && s_d.failed) {
             /* A failed IN transfer halts its endpoint: clear it and go on */
             s_d.failed = false;
