@@ -87,7 +87,8 @@ components/lx_comp/       compositor: app surfaces → PPA scale/rotate → pane
                           present is async with 2 buffers (task "lx_present" scales + flips while the app runs;
                           present_ext copies the app's frame into the spare buffer first), synchronous with 1 buffer
 components/lx_audio/      audio engine: per-stream rings → resample → mix → BSP codec (fixed rate)
-components/lx_ui/         launcher-drawn screens for apps: content browser (pick_file) + message box; UI v4 wifi() = Wi-Fi picker
+components/lx_ui/         launcher-drawn screens for apps: content browser (pick_file; <root>/gamenames.txt "mslug=Metal Slug" = the
+                          names shown, sorted and searched: the Neo Geo set, SDcard/roms/neogeo) + message box; UI v4 wifi() = Wi-Fi picker
                           (scan list, password keyboard, joins with lx_net_connect = saved to wifi.txt; lx_net_restore on fail/cancel)
 components/lx_input/      input manager: USB HID gamepads/keyboards, XInput (Xbox 360) pads (lx_input_xinput) + board buttons (merged into P1) → players + event queue; HOME chord;
                           USB hubs (CONFIG_USB_HOST_HUBS_SUPPORTED, every board): no TT in IDF, so lx_input_usb.c wraps hcd_port_command
