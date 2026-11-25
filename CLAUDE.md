@@ -187,6 +187,8 @@ community/<dir>/          Community apps (PR with .papp + icon.png + app.json, n
                           (.github/workflows/community.yml on PRs); catalogue "community" list, Community folder, not in Install all
 SDcard/                   Starter card for new users (README.md): shareable game data, config/gamepads.txt, ROM folders.
                           Its .gitignore is an allow-list: ROMs, BIOS, saves and commercial data put there stay local
+mechanical/               3D prints: 70° screw-on desk legs for the 7" board (M2.5 standoffs): .f3d, STEP, STL +
+                          fusion_build_legs.py (Fusion script that builds them)
 tests/host/test_reloc.py  Host relocation equivalence test
 tests/board/smoke.py      Board regression: relocation test, test apps, crash record
 ```
