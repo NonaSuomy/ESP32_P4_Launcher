@@ -390,7 +390,7 @@ own and are read as they are.
 | Quake | `id1/pak0.pak` to `/sd/roms/quake/id1/` | `pak0.pak`, the shareware episode |
 | Duke Nukem 3D | `DUKE3D.GRP` to `/sd/roms/duke3d/duke3d.grp` | not included (commercial); tested with the Atomic Edition file |
 | Game Boy Advance | the games to `/sd/roms/gba/`; optional BIOS `gba_bios.bin` there (a built-in replacement runs most games) | not included |
-| Neo Geo | `neogeo.zip` (BIOS) and the games to `/sd/roms/neogeo/` | `gngeo_data.zip`, the emulator's own data; the BIOS is not included |
+| Neo Geo | `neogeo.zip` (BIOS) and the games to `/sd/roms/neogeo/` | `gngeo_data.zip`, the emulator's own data, and `gamenames.txt`, the full game names the list shows; the BIOS is not included |
 
 Doom's `prboom.wad` is built into the app; you don't need to copy it.
 
