@@ -141,6 +141,13 @@ static void backlight_init(void)
  * (Read Display ID times out); the V1 panel keeps answering. A v1.x-chip board can have either; the
  * v3.x-chip boards (BOARD_CHIP_V3) all have the new one.
  */
+static bool s_is_y;
+
+bool board_is_y(void)
+{
+    return s_is_y;
+}
+
 static const panel_t *detect_panel(esp_lcd_panel_io_handle_t io)
 {
 #ifdef BOARD_CHIP_V3
@@ -201,6 +208,7 @@ esp_err_t bsp_display_init(void)
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_dbi(bus, &dbi_cfg, &io), TAG, "DBI io");
 
     const panel_t *pn = detect_panel(io);
+    s_is_y = pn == &k_panel_new;
     esp_lcd_dpi_panel_config_t dpi_cfg = {
         .dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT,
         .dpi_clock_freq_mhz = pn->pclk_mhz,

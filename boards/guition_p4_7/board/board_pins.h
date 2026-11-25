@@ -20,8 +20,11 @@
 #define BOARD_I2S_BCLK      12
 #define BOARD_I2S_WS        10
 #define BOARD_I2S_DOUT      9
-#define BOARD_I2S_DIN       11
-#define BOARD_AUDIO_PA      20      /* NS4150 enable */
+/* NS4150 enable (high = on): GPIO 20 on the JC1060P470C_I_W, GPIO 11 on the newer JC1060P470C_I_W_Y
+ * (Guition's _Y BSP: there GPIO 20 is USB D+ and the microphone input moved from 11 to 48). Every board
+ * with the new panel is a _Y one (board_is_y). */
+#define BOARD_AUDIO_PA_I_W  20
+#define BOARD_AUDIO_PA_Y    11
 
 #define BOARD_SD_CLK        43
 #define BOARD_SD_CMD        44

@@ -19,7 +19,7 @@ boards/<id>/board/        BSP implementation (component "board", pins esp_hosted
                           rev v3.x chips, BOARD_CHIP_V3 picks the id), guition_p4_7 (7" 1024x600; guition_p4_7_v3 = v3.x chip, which comes with
                           the 2026 "New Panel" (rear label V2; some v1.x boards have it too: guition_p4_7 detects it at a power-on, kept in RTC memory
                           over restarts): other JD9165 table/timing (Guition's V2 demo: RGB565, 52 MHz) + COLMOD 0x55 (without it faint
-                          vertical lines), reset GPIO 0,
+                          vertical lines), reset GPIO 0; such boards are the newer JC1060P470C_I_W_Y: speaker amp on GPIO 11, not 20 (board_is_y),
                           C6 SDIO 10 MHz on both 7" images), m5stack_tab5 (720x1280,
                           power rails on two PI4IOE5V6408 I2C expanders, esp_hosted 2.12.13 (Tab5 preset, C6 reset active high;
                           runs M5Stack's 1.4.1 C6 firmware too, Settings > Update offers 2.12.13, #48); INA226 battery + charging (board_power.c,
