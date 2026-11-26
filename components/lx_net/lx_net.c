@@ -2,6 +2,7 @@
 #include "esp_attr.h"     /* EXT_RAM_BSS_ATTR */
 #include "lx_c6.h"
 #include "bsp.h"
+#include "lx_common.h"
 
 #include <errno.h>
 #include <stdarg.h>
@@ -131,18 +132,18 @@ static bool file_load(void)
 
 static bool file_save(void)
 {
+    if (!lx_sd_write_try_lock()) return false;
     mkdir(WIFI_DIR, 0775);
     FILE *f = fopen(WIFI_FILE ".tmp", "w");
-    if (!f) return false;
+    if (!f) { lx_sd_write_unlock(); return false; }
     fprintf(f, "# Wi-Fi network of the launcher (Settings -> Wi-Fi). Copy this file to another card to\n"
                "# set up a board, or delete it to forget the network.\n"
                "ssid=%s\npassword=%s\n", s_ssid, s_pass);
     bool ok = fclose(f) == 0;
-    if (ok) {
-        remove(WIFI_FILE);                      /* FAT rename doesn't replace */
-        ok = rename(WIFI_FILE ".tmp", WIFI_FILE) == 0;
-    }
+    if (ok) ok = lx_sd_replace_file(WIFI_FILE ".tmp", WIFI_FILE) == 0;
+    if (!ok) remove(WIFI_FILE ".tmp");
     if (!ok) ESP_LOGW(TAG, "could not write %s", WIFI_FILE);
+    lx_sd_write_unlock();
     return ok;
 }
 
@@ -180,7 +181,17 @@ static void creds_save(bool keep)
     if (keep) {
         if (file_save()) nvs_creds_erase();
     } else {
-        remove(WIFI_FILE);
+        if (!lx_sd_write_try_lock()) {
+            ESP_LOGW(TAG, "could not forget %s: another SD write is in progress", WIFI_FILE);
+            return;
+        }
+        int result = remove(WIFI_FILE);
+        int saved_errno = errno;
+        lx_sd_write_unlock();
+        if (result != 0 && saved_errno != ENOENT) {
+            ESP_LOGW(TAG, "could not forget %s (errno %d)", WIFI_FILE, saved_errno);
+            return;
+        }
         nvs_creds_erase();
     }
 }

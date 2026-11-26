@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "lx_bt_priv.h"
+#include "lx_common.h"
 #include "lx_input.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -114,14 +115,26 @@ static const char *addr_str(const uint8_t *a)
 
 static void cfg_save(void)
 {
-    if (!s_nsaved) { remove(CFG_FILE); return; }
-    FILE *f = fopen(CFG_FILE, "w");
-    if (!f) { ESP_LOGW(TAG, "cannot write " CFG_FILE); return; }
+    if (!lx_sd_write_try_lock()) { ESP_LOGW(TAG, "cannot save Bluetooth pad settings: SD card is busy"); return; }
+    if (!s_nsaved) {
+        remove(CFG_FILE);
+        lx_sd_write_unlock();
+        return;
+    }
+    FILE *f = fopen(CFG_FILE ".tmp", "w");
+    if (!f) { lx_sd_write_unlock(); ESP_LOGW(TAG, "cannot write " CFG_FILE); return; }
     for (int i = 0; i < s_nsaved; i++) {
         if (s_saved[i].ble) fprintf(f, "%s le%u %s\n", addr_str(s_saved[i].addr), s_saved[i].atype, s_saved[i].name);
         else fprintf(f, "%s %s\n", addr_str(s_saved[i].addr), s_saved[i].name);
     }
-    fclose(f);
+    bool ok = ferror(f) == 0;
+    if (fclose(f) != 0) ok = false;
+    if (ok) ok = lx_sd_replace_file(CFG_FILE ".tmp", CFG_FILE) == 0;
+    if (!ok) {
+        remove(CFG_FILE ".tmp");
+        ESP_LOGW(TAG, "could not finish writing " CFG_FILE);
+    }
+    lx_sd_write_unlock();
 }
 
 static void cfg_load(void)

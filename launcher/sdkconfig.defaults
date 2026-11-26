@@ -21,6 +21,8 @@ CONFIG_SPIRAM_USE_MALLOC=y
 # FATFS long file names
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255
+# Prevent concurrent tasks from opening/removing/renaming the same SD objects.
+CONFIG_FATFS_FS_LOCK=32
 # Seeks in big files (ROMs paged from the card) without walking the cluster chain
 CONFIG_FATFS_USE_FASTSEEK=y
 

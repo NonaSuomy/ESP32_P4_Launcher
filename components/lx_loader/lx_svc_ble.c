@@ -11,6 +11,7 @@
  */
 #include "sdkconfig.h"
 #include "lx_services.h"
+#include "lx_common.h"
 
 #if CONFIG_BT_NIMBLE_ENABLED && CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE
 
@@ -295,6 +296,13 @@ static void bonds_save(void)
 {
     if (!s_bonds_lock) return;
     xSemaphoreTake(s_bonds_lock, portMAX_DELAY);
+    if (!lx_sd_write_try_lock()) {
+        taskENTER_CRITICAL(&s_bonds_mux);
+        s_bonds_dirty = true;
+        taskEXIT_CRITICAL(&s_bonds_mux);
+        xSemaphoreGive(s_bonds_lock);
+        return;
+    }
     s_bonds_dirty = false;
     mkdir("/sd/config", 0775);
     FILE *f = fopen(BONDS_FILE ".part", "wb");
@@ -311,11 +319,12 @@ static void bonds_save(void)
         ok &= fclose(f) == 0;
     }
     if (ok) {
-        remove(BONDS_FILE);                        /* FAT's rename does not replace */
-        ok = rename(BONDS_FILE ".part", BONDS_FILE) == 0;
+        ok = lx_sd_replace_file(BONDS_FILE ".part", BONDS_FILE) == 0;
     }
+    if (!ok) remove(BONDS_FILE ".part");
     if (ok) ESP_LOGI(TAG, "bonds: %d entries saved to the card", n);
     else ESP_LOGW(TAG, "bonds: could not write " BONDS_FILE);
+    lx_sd_write_unlock();
     xSemaphoreGive(s_bonds_lock);
 }
 

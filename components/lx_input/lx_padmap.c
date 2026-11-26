@@ -13,6 +13,7 @@
  */
 #include "lx_input.h"
 #include "lx_input_priv.h"
+#include "lx_common.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -91,6 +92,10 @@ esp_err_t lx_padmap_save(uint16_t vid, uint16_t pid, const char *name, const uin
 {
     char *old = heap_caps_calloc(1, FILE_MAX, MALLOC_CAP_SPIRAM);
     if (!old) return ESP_ERR_NO_MEM;
+    if (!lx_sd_write_try_lock()) {
+        free(old);
+        return ESP_ERR_INVALID_STATE;
+    }
     size_t n = 0;
     FILE *f = fopen(MINE_FILE, "r");
     if (f) {
@@ -101,6 +106,7 @@ esp_err_t lx_padmap_save(uint16_t vid, uint16_t pid, const char *name, const uin
     f = fopen(MINE_FILE ".tmp", "w");
     if (!f) {
         free(old);
+        lx_sd_write_unlock();
         return ESP_FAIL;
     }
     if (!n) fputs("# Your controller mappings (Settings -> Map controller). To share one, add its line to\n"
@@ -120,10 +126,9 @@ esp_err_t lx_padmap_save(uint16_t vid, uint16_t pid, const char *name, const uin
     }
     free(old);
     bool ok = fclose(f) == 0;
-    if (ok) {
-        remove(MINE_FILE);                  /* FAT rename doesn't replace */
-        ok = rename(MINE_FILE ".tmp", MINE_FILE) == 0;
-    }
+    if (ok) ok = lx_sd_replace_file(MINE_FILE ".tmp", MINE_FILE) == 0;
+    if (!ok) remove(MINE_FILE ".tmp");
     if (!ok) ESP_LOGW(TAG, "could not write %s", MINE_FILE);
+    lx_sd_write_unlock();
     return ok ? ESP_OK : ESP_FAIL;
 }

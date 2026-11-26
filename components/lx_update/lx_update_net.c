@@ -15,6 +15,7 @@
  */
 #include "lx_update.h"
 #include "lx_http.h"
+#include "lx_common.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -113,6 +114,11 @@ static void check_task(void *arg)
 /* arg != NULL: the Wi-Fi chip firmware instead of the launcher */
 static void download_task(void *arg)
 {
+    if (!lx_sd_write_try_lock()) {
+        fail("Another SD card write is in progress.");
+        vTaskDelete(NULL);
+        return;
+    }
     bool c6 = arg != NULL;
     const char *url = c6 ? s_c6_url : s_url, *want = c6 ? s_c6_sha : s_sha;
     const char *dest = c6 ? LX_UPDATE_C6_FILE : LX_UPDATE_FILE;
@@ -138,7 +144,10 @@ static void download_task(void *arg)
     uint8_t hash[32];
     mbedtls_sha256_finish(&sha, hash);
     mbedtls_sha256_free(&sha);
-    if (f) fclose(f);
+    if (f && fclose(f) != 0) {
+        ok = false;
+        snprintf(s_why, sizeof(s_why), "SD card flush failed");
+    }
     free(buf);
     if (c) {
         esp_http_client_close(c);
@@ -152,11 +161,13 @@ static void download_task(void *arg)
     } else if (strcasecmp(hex, want) != 0) {
         remove(TMP_FILE);
         fail("The download is damaged (SHA-256 mismatch).");
+    } else if (lx_sd_replace_file(TMP_FILE, dest) != 0) {
+        remove(TMP_FILE);
+        fail("Could not commit the update file to the SD card.");
     } else {
-        remove(dest);
-        rename(TMP_FILE, dest);
         s_state = c6 ? LX_ONLINE_C6_READY : LX_ONLINE_READY;
     }
+    lx_sd_write_unlock();
     vTaskDelete(NULL);
 }
 

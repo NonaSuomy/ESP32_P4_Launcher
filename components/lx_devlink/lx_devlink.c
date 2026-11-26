@@ -30,6 +30,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_system.h"
+#include "esp_random.h"
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
 #include "ff.h"
@@ -60,6 +61,8 @@ static char             *s_tx;        /* response scratch */
 /* PUT state */
 static FILE    *s_put_f;
 static char     s_put_path[160];
+static char     s_put_tmp[192];
+static bool     s_put_locked;
 static uint32_t s_put_size, s_put_crc, s_put_done, s_put_crc_run;
 
 /* ── Framing ────────────────────────────────────────────────────────────── */
@@ -319,13 +322,12 @@ static void h_stat(uint16_t seq, const char *path)
 
 static void put_abort(void)
 {
-    if (s_put_f) {
-        fclose(s_put_f);
-        s_put_f = NULL;
-        char part[170];
-        snprintf(part, sizeof(part), "%s.part", s_put_path);
-        remove(part);
-    }
+    if (s_put_f) fclose(s_put_f);
+    s_put_f = NULL;
+    if (s_put_tmp[0]) remove(s_put_tmp);
+    s_put_tmp[0] = 0;
+    if (s_put_locked) lx_sd_write_unlock();
+    s_put_locked = false;
 }
 
 /* Changes to /sd/apps made over DevLink: the home screen rescans when this moves */
@@ -345,15 +347,36 @@ static void h_put_begin(uint16_t seq, const uint8_t *p, uint32_t len)
 {
     put_abort();
     if (len < 9) { reply_err(DL_PUT_BEGIN, seq, "bad request"); return; }
+    if (!lx_sd_write_try_lock()) {
+        reply_err(DL_PUT_BEGIN, seq, "another SD write is in progress");
+        return;
+    }
+    s_put_locked = true;
     memcpy(&s_put_size, p, 4);
     memcpy(&s_put_crc, p + 4, 4);
-    strlcpy(s_put_path, (const char *)p + 8, sizeof(s_put_path));
+    size_t path_len = strnlen((const char *)p + 8, len - 8);
+    if (!path_len || path_len >= sizeof(s_put_path) || path_len == len - 8) {
+        put_abort();
+        reply_err(DL_PUT_BEGIN, seq, "invalid or too-long destination path");
+        return;
+    }
+    memcpy(s_put_path, p + 8, path_len + 1);
+    int tmp_len = snprintf(s_put_tmp, sizeof(s_put_tmp), "%s.dl-%08lx.part", s_put_path,
+                           (unsigned long)esp_random());
+    if (tmp_len < 0 || (size_t)tmp_len >= sizeof(s_put_tmp)) {
+        put_abort();
+        reply_err(DL_PUT_BEGIN, seq, "path is too long");
+        return;
+    }
     mkdirs(s_put_path, false);
 
-    char part[170];
-    snprintf(part, sizeof(part), "%s.part", s_put_path);
-    s_put_f = fopen(part, "wb");
-    if (!s_put_f) { reply_err(DL_PUT_BEGIN, seq, "cannot create %s (errno %d)", part, errno); return; }
+    s_put_f = fopen(s_put_tmp, "wb");
+    if (!s_put_f) {
+        int saved_errno = errno;
+        put_abort();
+        reply_err(DL_PUT_BEGIN, seq, "cannot create upload temporary file (errno %d)", saved_errno);
+        return;
+    }
     setvbuf(s_put_f, NULL, _IOFBF, 8192);
     s_put_done = 0;
     s_put_crc_run = 0;
@@ -384,15 +407,23 @@ static void h_put_end(uint16_t seq)
                   (unsigned long)s_put_size, (unsigned long)s_put_crc);
         return;
     }
-    fclose(s_put_f);
+    bool close_ok = fclose(s_put_f) == 0;
     s_put_f = NULL;
-    char part[170];
-    snprintf(part, sizeof(part), "%s.part", s_put_path);
-    remove(s_put_path);
-    if (rename(part, s_put_path) != 0) {
-        reply_err(DL_PUT_END, seq, "rename failed (errno %d)", errno);
+    if (!close_ok) {
+        int saved_errno = errno;
+        put_abort();
+        reply_err(DL_PUT_END, seq, "flush/close failed (errno %d)", saved_errno);
         return;
     }
+    if (lx_sd_replace_file(s_put_tmp, s_put_path) != 0) {
+        int saved_errno = errno;
+        put_abort();
+        reply_err(DL_PUT_END, seq, "cannot commit upload (errno %d)", saved_errno);
+        return;
+    }
+    s_put_tmp[0] = 0;
+    if (s_put_locked) lx_sd_write_unlock();
+    s_put_locked = false;
     ESP_LOGI(TAG, "received %s (%lu bytes)", s_put_path, (unsigned long)s_put_size);
     note_change(s_put_path);
     reply_str(DL_PUT_END, seq, "ok");
@@ -617,22 +648,43 @@ static void dispatch(uint8_t type, uint16_t seq, uint8_t *p, uint32_t len)
     case DL_LS:     h_ls(seq, len ? str : "/sd"); break;
     case DL_STAT:   h_stat(seq, str); break;
     case DL_MKDIR:
-        mkdirs(str, true);
-        note_change(str);
-        reply_str(type, seq, "ok");
+        if (!lx_sd_write_try_lock()) {
+            reply_err(type, seq, "another SD write is in progress");
+        } else {
+            mkdirs(str, true);
+            lx_sd_write_unlock();
+            note_change(str);
+            reply_str(type, seq, "ok");
+        }
         break;
     case DL_RM:
-        if (remove(str) == 0 || rmdir(str) == 0) { note_change(str); reply_str(type, seq, "ok"); }
-        else reply_err(type, seq, "cannot remove %s (errno %d)", str, errno);
+        if (!lx_sd_write_try_lock()) {
+            reply_err(type, seq, "another SD write is in progress");
+        } else {
+            int result = remove(str);
+            if (result != 0) result = rmdir(str);
+            int saved_errno = errno;
+            lx_sd_write_unlock();
+            if (result == 0) { note_change(str); reply_str(type, seq, "ok"); }
+            else reply_err(type, seq, "cannot remove %s (errno %d)", str, saved_errno);
+        }
         break;
     case DL_RENAME: {
         const char *to = str + strlen(str) + 1;
-        if ((const uint8_t *)to < p + len && rename(str, to) == 0) {
-            note_change(str);
-            note_change(to);
-            reply_str(type, seq, "ok");
+        if ((const uint8_t *)to >= p + len) {
+            reply_err(type, seq, "bad rename request");
+        } else if (!lx_sd_write_try_lock()) {
+            reply_err(type, seq, "another SD write is in progress");
+        } else {
+            int result = rename(str, to);
+            int saved_errno = errno;
+            lx_sd_write_unlock();
+            if (result == 0) {
+                note_change(str);
+                note_change(to);
+                reply_str(type, seq, "ok");
+            } else reply_err(type, seq, "rename failed (errno %d)", saved_errno);
         }
-        else reply_err(type, seq, "rename failed (errno %d)", errno);
         break;
     }
     case DL_PUT_BEGIN: h_put_begin(seq, p, len); break;

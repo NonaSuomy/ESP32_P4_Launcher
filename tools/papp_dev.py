@@ -235,7 +235,12 @@ class DevLink:
         self.request(PUT_BEGIN, struct.pack("<II", len(data), crc) + remote.encode() + b"\0")
         t0 = time.time()
         for off in range(0, len(data), CHUNK):
-            self.request(PUT_DATA, data[off:off + CHUNK], timeout=10.0)
+            # On SD cards that time out during a multi-block write, the launcher
+            # recovers the card and retries the chunk as single-sector writes.
+            # That recovery can outlast 10 seconds, especially over the 115200
+            # baud CH340 link, so allow the device to finish before abandoning
+            # the atomic upload.
+            self.request(PUT_DATA, data[off:off + CHUNK], timeout=30.0)
             if progress:
                 pct = min(100, (off + CHUNK) * 100 // max(1, len(data)))
                 print(f"\r  {remote}: {pct:3d}%", end="", file=sys.stderr, flush=True)

@@ -20,6 +20,7 @@
 #include "lx_appstore.h"
 #include "esp_attr.h"     /* EXT_RAM_BSS_ATTR */
 #include "lx_http.h"
+#include "lx_common.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -254,6 +255,10 @@ static void make_dirs(const char *path)
 /* Downloads url to path through path.tmp; sha (hex) and size are checked when given */
 static bool download(const char *url, const char *path, const char *sha, long size, bool progress)
 {
+    if (!lx_sd_write_try_lock()) {
+        snprintf(s_why, sizeof(s_why), "another SD card write is in progress");
+        return false;
+    }
     char tmp[168];
     snprintf(tmp, sizeof(tmp), "%s.tmp", path);
     make_dirs(path);
@@ -285,7 +290,10 @@ static bool download(const char *url, const char *path, const char *sha, long si
     uint8_t hash[32];
     mbedtls_sha256_finish(&ctx, hash);
     mbedtls_sha256_free(&ctx);
-    if (f) fclose(f);
+    if (f && fclose(f) != 0) {
+        ok = false;
+        snprintf(s_why, sizeof(s_why), "SD card flush failed");
+    }
     free(buf);
     if (c) {
         esp_http_client_close(c);
@@ -302,10 +310,17 @@ static bool download(const char *url, const char *path, const char *sha, long si
     }
     if (!ok) {
         remove(tmp);
+        lx_sd_write_unlock();
         return false;
     }
-    remove(path);                       /* FAT rename doesn't replace */
-    return rename(tmp, path) == 0;
+    if (lx_sd_replace_file(tmp, path) != 0) {
+        snprintf(s_why, sizeof(s_why), "could not commit the SD card file");
+        remove(tmp);
+        lx_sd_write_unlock();
+        return false;
+    }
+    lx_sd_write_unlock();
+    return true;
 }
 
 static const char *folder_icon_url(const char *folder)

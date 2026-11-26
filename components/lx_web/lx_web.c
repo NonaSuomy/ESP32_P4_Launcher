@@ -16,6 +16,7 @@
 #include "esp_log.h"
 #include "esp_random.h"
 #include "lwip/sockets.h"
+#include "lx_common.h"
 
 static const char *TAG = "lx_web";
 
@@ -109,6 +110,12 @@ static bool get_path(httpd_req_t *r, char *path)
     return true;
 }
 
+static esp_err_t sd_busy(httpd_req_t *r)
+{
+    httpd_resp_set_status(r, "503 Service Unavailable");
+    return httpd_resp_sendstr(r, "Another SD write is in progress");
+}
+
 static esp_err_t api_ls(httpd_req_t *r)
 {
     char path[PATH_MAX_LEN], full[PATH_MAX_LEN + 260], esc[520];
@@ -161,12 +168,19 @@ static esp_err_t api_get(httpd_req_t *r)
     return err;
 }
 
-/* Written to a .part file first, so a broken upload never replaces a good file */
+/* Uploads use unique staging names and a shared lock so they cannot collide
+ * with DevLink or another mutation while the file is being committed. */
 static esp_err_t api_put(httpd_req_t *r)
 {
-    char path[PATH_MAX_LEN], tmp[PATH_MAX_LEN + 8];
+    char path[PATH_MAX_LEN], tmp[PATH_MAX_LEN + 32];
     if (!get_path(r, path)) return ESP_OK;
-    snprintf(tmp, sizeof(tmp), "%s.part", path);
+    if (!lx_sd_write_try_lock()) return sd_busy(r);
+    int tmp_len = snprintf(tmp, sizeof(tmp), "%s.web-%08lx.part", path,
+                           (unsigned long)esp_random());
+    if (tmp_len < 0 || (size_t)tmp_len >= sizeof(tmp)) {
+        lx_sd_write_unlock();
+        return httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "File path is too long");
+    }
     FILE *f = fopen(tmp, "wb");
     char *buf = malloc(CHUNK);
     bool ok = f && buf;
@@ -177,18 +191,19 @@ static esp_err_t api_put(httpd_req_t *r)
         ok = n > 0 && fwrite(buf, 1, n, f) == (size_t)n;
         if (ok) left -= n;
     }
-    if (f) fclose(f);
+    if (f && fclose(f) != 0) ok = false;
     free(buf);
     if (ok) {
-        remove(path);
-        ok = rename(tmp, path) == 0;
+        ok = lx_sd_replace_file(tmp, path) == 0;
     }
     if (!ok) {
         remove(tmp);
+        lx_sd_write_unlock();
         return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "Upload failed");
     }
     ESP_LOGI(TAG, "received %s", path);
     s_changes++;
+    lx_sd_write_unlock();
     return httpd_resp_sendstr(r, "ok");
 }
 
@@ -196,7 +211,10 @@ static esp_err_t api_mkdir(httpd_req_t *r)
 {
     char path[PATH_MAX_LEN];
     if (!get_path(r, path)) return ESP_OK;
-    if (mkdir(path, 0775) != 0) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "Cannot create it");
+    if (!lx_sd_write_try_lock()) return sd_busy(r);
+    int result = mkdir(path, 0775);
+    lx_sd_write_unlock();
+    if (result != 0) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "Cannot create it");
     s_changes++;
     return httpd_resp_sendstr(r, "ok");
 }
@@ -205,7 +223,11 @@ static esp_err_t api_rm(httpd_req_t *r)
 {
     char path[PATH_MAX_LEN];
     if (!get_path(r, path)) return ESP_OK;
-    if (strcmp(path, "/sd") == 0 || (remove(path) != 0 && rmdir(path) != 0))
+    if (!lx_sd_write_try_lock()) return sd_busy(r);
+    int result = strcmp(path, "/sd") == 0 ? -1 : remove(path);
+    if (result != 0 && strcmp(path, "/sd") != 0) result = rmdir(path);
+    lx_sd_write_unlock();
+    if (result != 0)
         return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "Cannot delete it (a folder must be empty)");
     ESP_LOGI(TAG, "deleted %s", path);
     s_changes++;

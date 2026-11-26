@@ -158,29 +158,41 @@ static DRESULT ff_sdmmc_read (BYTE pdrv, BYTE* buff, DWORD sector, UINT count)
     return RES_OK;
 }
 
+static esp_err_t ff_sdmmc_write_single_blocks(BYTE pdrv, const BYTE *buff, DWORD sector, UINT count)
+{
+    sdmmc_card_t* card = s_cards[pdrv];
+    assert(card);
+    for (UINT i = 0; i < count; i++) {
+        const BYTE *src = buff + (size_t)i * card->csd.sector_size;
+        esp_err_t err = sdmmc_write_sectors(card, src, sector + i, 1);
+        if (unlikely(err != ESP_OK) && ff_sdmmc_recover(pdrv, err))
+            err = sdmmc_write_sectors(card, src, sector + i, 1);
+        if (unlikely(err != ESP_OK)) {
+            ESP_LOGE(TAG, "single-block write failed at sector %" PRIu32 " (0x%x)",
+                     sector + i, err);
+            return err;
+        }
+    }
+    return ESP_OK;
+}
+
 static DRESULT ff_sdmmc_write (BYTE pdrv, const BYTE* buff, DWORD sector, UINT count)
 {
     sdmmc_card_t* card = s_cards[pdrv];
     assert(card);
-    esp_err_t err = sdmmc_write_sectors(card, buff, sector, count);
-    if (unlikely(err != ESP_OK) && ff_sdmmc_recover(pdrv, err)) {
-        if (count == 1) {
-            err = sdmmc_write_sectors(card, buff, sector, 1);
-        } else {
-            /* A failed multi-block write may leave the card waiting for CMD12 again even
-             * after it reports TRAN. Retry as single-block CMD24 writes to avoid the
-             * multi-block stop/count path that caused the original timeout. Rewriting
-             * the full range is safe: sectors are idempotent and the first attempt's
-             * successful prefix is overwritten with the same data. */
-            for (UINT i = 0; i < count; i++) {
-                err = sdmmc_write_sectors(card, buff + (size_t)i * card->csd.sector_size,
-                                          sector + i, 1);
-                if (unlikely(err != ESP_OK)) {
-                    ESP_LOGE(TAG, "single-block retry failed at sector %" PRIu32 " (0x%x)",
-                             sector + i, err);
-                    break;
-                }
-            }
+
+    esp_err_t err;
+    if (card->log_bus_width == 0 && count > 1) {
+        /* On the AIO's native one-bit bus, CMD25 multi-block writes repeatedly leave
+         * the card in RCV until a 5-second timeout. Use CMD24 directly instead of
+         * timing out and recovering every stdio buffer. */
+        err = ff_sdmmc_write_single_blocks(pdrv, buff, sector, count);
+    } else {
+        err = sdmmc_write_sectors(card, buff, sector, count);
+        if (unlikely(err != ESP_OK) && ff_sdmmc_recover(pdrv, err)) {
+            /* Rewriting the full range is safe: sectors are idempotent and this also
+             * avoids repeating the multi-block stop/count path after recovery. */
+            err = ff_sdmmc_write_single_blocks(pdrv, buff, sector, count);
         }
     }
     if (unlikely(err != ESP_OK)) {

@@ -1,5 +1,7 @@
 #include "lx_update.h"
+#include "lx_common.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -105,8 +107,14 @@ esp_err_t lx_update_install(void (*progress)(int percent))
     }
     if (err == ESP_OK) err = esp_ota_set_boot_partition(part);
     if (err == ESP_OK) {
-        remove(LX_UPDATE_DONE);
-        rename(LX_UPDATE_FILE, LX_UPDATE_DONE);
+        if (lx_sd_write_try_lock()) {
+            remove(LX_UPDATE_DONE);
+            if (rename(LX_UPDATE_FILE, LX_UPDATE_DONE) != 0)
+                ESP_LOGW(TAG, "could not archive update file (errno %d)", errno);
+            lx_sd_write_unlock();
+        } else {
+            ESP_LOGW(TAG, "SD card busy; leaving the installed update file in place");
+        }
         ESP_LOGI(TAG, "installed to %s", part->label);
     } else {
         ESP_LOGE(TAG, "install failed: %s", esp_err_to_name(err));

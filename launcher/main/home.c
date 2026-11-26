@@ -277,9 +277,10 @@ static void embedded_file(const char *path, const uint8_t *start, const uint8_t 
     struct stat st;
     if (stat(path, &st) == 0 && (keep_any || st.st_size == end - start)) return;
     FILE *f = fopen(path, "wb");
-    if (!f) return;
-    fwrite(start, 1, end - start, f);
-    fclose(f);
+    if (f) {
+        fwrite(start, 1, end - start, f);
+        fclose(f);
+    }
 }
 
 static void community_folder(void)
@@ -288,13 +289,18 @@ static void community_folder(void)
     struct stat st;
     if (done) return;
     if (stat(APPS_DIR, &st) != 0) return;                   /* no card (yet) */
+    if (!lx_sd_write_try_lock()) return;
     done = true;
     mkdir("/sd/launcher", 0775);
     embedded_file(STORE_ICON, store_png_start, store_png_end, false);
     const char *dir = APPS_DIR "/" LX_APPSTORE_COMMUNITY;
-    if (stat(dir, &st) != 0 && mkdir(dir, 0775) != 0) return;
+    if (stat(dir, &st) != 0 && mkdir(dir, 0775) != 0) {
+        lx_sd_write_unlock();
+        return;
+    }
     embedded_file(APPS_DIR "/" LX_APPSTORE_COMMUNITY "/icon.png", folder_community_png_start,
                   folder_community_png_end, true);
+    lx_sd_write_unlock();
 }
 
 static void scan_apps(void)
@@ -327,12 +333,14 @@ static void scan_apps(void)
 
 static void remember_last(const char *path)
 {
+    if (!lx_sd_write_try_lock()) return;
     mkdir("/sd/launcher", 0775);
     FILE *f = fopen(LAST_APP_FILE, "w");
     if (f) {
         fprintf(f, "%s\n", path);
         fclose(f);
     }
+    lx_sd_write_unlock();
     snprintf(s_last, sizeof(s_last), "%s", path);
 }
 
@@ -1990,8 +1998,12 @@ static void move_app(const char *path, const char *folder)
     if (folder[0]) snprintf(dst, sizeof(dst), APPS_DIR "/%s/%s", folder, base);
     else snprintf(dst, sizeof(dst), APPS_DIR "/%s", base);
     struct stat st;
-    bool ok = stat(dst, &st) != 0 && rename(dir, dst) == 0;
-    if (ok) autostart_moved(dir, dst);
+    bool ok = lx_sd_write_try_lock();
+    if (ok) {
+        ok = stat(dst, &st) != 0 && rename(dir, dst) == 0;
+        if (ok) autostart_moved(dir, dst);
+        lx_sd_write_unlock();
+    }
     home_view(NULL);
     if (!ok) folder_message("Cannot move the app", "An app with the same directory name is already there.");
 }
@@ -2002,6 +2014,10 @@ static void folder_delete(const char *name)
 {
     char dir[64], src[128], dst[128];
     snprintf(dir, sizeof(dir), APPS_DIR "/%s", name);
+    if (!lx_sd_write_try_lock()) {
+        folder_message("SD card busy", "Wait for the current file transfer or update to finish, then try again.");
+        return;
+    }
     for (;;) {
         DIR *d = opendir(dir);
         if (!d) break;
@@ -2017,6 +2033,7 @@ static void folder_delete(const char *name)
         if (!src[0]) break;
         struct stat st;
         if (stat(dst, &st) == 0 || rename(src, dst) != 0) {
+            lx_sd_write_unlock();
             home_view(dir);
             folder_message("Cannot delete the folder", "An app inside has the same directory name as one on the main page.");
             return;
@@ -2025,6 +2042,7 @@ static void folder_delete(const char *name)
     snprintf(src, sizeof(src), "%s/icon.png", dir);   /* the folder's own icon goes with it */
     remove(src);
     bool ok = rmdir(dir) == 0;
+    lx_sd_write_unlock();
     home_view(NULL);
     if (!ok) folder_message("Folder kept", "Its apps are back on the main page, but it still holds other files. Use the Files app to see them.");
 }
@@ -2048,14 +2066,23 @@ static void folder_name_done(const char *text)
         return;
     }
     if (s_pw_mode == PW_RENAME) {
-        if (rename(s_target, path) != 0) folder_message("Cannot rename", "The SD card refused the new name.");
-        else home_view(path);
-    } else if (mkdir(path, 0775) != 0) {
-        folder_message("Cannot create the folder", "The SD card refused it.");
-    } else if (s_name_move) {
-        move_app(s_target, name);
+        if (!lx_sd_write_try_lock()) folder_message("SD card busy", "Wait for the current file transfer or update to finish, then try again.");
+        else {
+            bool ok = rename(s_target, path) == 0;
+            lx_sd_write_unlock();
+            if (!ok) folder_message("Cannot rename", "The SD card refused the new name.");
+            else home_view(path);
+        }
     } else {
-        home_view(path);
+        if (!lx_sd_write_try_lock()) {
+            folder_message("SD card busy", "Wait for the current file transfer or update to finish, then try again.");
+            return;
+        }
+        bool created = mkdir(path, 0775) == 0;
+        lx_sd_write_unlock();
+        if (!created) folder_message("Cannot create the folder", "The SD card refused it.");
+        else if (s_name_move) move_app(s_target, name);
+        else home_view(path);
     }
 }
 
@@ -2873,6 +2900,10 @@ static void autostart_show(void)
 /* The search screen's choice ("" = None): saved, and back to Settings */
 static void autostart_pick(const char *path)
 {
+    if (!lx_sd_write_try_lock()) {
+        folder_message("SD card busy", "Wait for the current file transfer or update to finish, then try again.");
+        return;
+    }
     snprintf(s_auto, sizeof(s_auto), "%s", path);
     mkdir("/sd/config", 0775);
     if (!s_auto[0]) {
@@ -2881,6 +2912,7 @@ static void autostart_pick(const char *path)
         FILE *f = fopen(AUTOSTART_FILE, "w");
         if (f) { fprintf(f, "%s\n", s_auto); fclose(f); }
     }
+    lx_sd_write_unlock();
     ESP_LOGI(TAG, "at boot: %s", s_auto[0] ? s_auto : "nothing");
     autostart_show();
     find_close();                       /* pick mode: back to Settings */

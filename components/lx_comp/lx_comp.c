@@ -7,6 +7,7 @@
  * PPA rotates the pixels on the way.
  */
 #include "lx_comp.h"
+#include "lx_common.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -596,6 +597,7 @@ void lx_comp_copy_visible(uint16_t *dst)
 
 esp_err_t lx_comp_screenshot(char *path, size_t len)
 {
+    if (!lx_sd_write_try_lock()) return ESP_ERR_INVALID_STATE;
     const bsp_info_t *b = bsp_info();
     int pw = b->display_w, ph = b->display_h, rot = b->display_rot;
     int w = rot == 90 || rot == 270 ? ph : pw, h = rot == 90 || rot == 270 ? pw : ph;
@@ -608,9 +610,12 @@ esp_err_t lx_comp_screenshot(char *path, size_t len)
         if (stat(name, &st) != 0) break;
     }
     uint16_t *row = heap_caps_calloc(1, stride, MALLOC_CAP_SPIRAM);
-    FILE *f = row ? fopen(name, "wb") : NULL;
+    char tmp[56];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", name);
+    FILE *f = row ? fopen(tmp, "wb") : NULL;
     if (!f) {
         free(row);
+        lx_sd_write_unlock();
         return ESP_FAIL;
     }
     uint32_t hdr[16] = { 0 };           /* from byte 2: the 2-byte magic comes first */
@@ -626,19 +631,26 @@ esp_err_t lx_comp_screenshot(char *path, size_t len)
     hdr[13] = 0xF800;
     hdr[14] = 0x07E0;
     hdr[15] = 0x001F;
-    fwrite("BM", 1, 2, f);
-    fwrite(hdr, 4, 16, f);
+    bool ok = fwrite("BM", 1, 2, f) == 2 && fwrite(hdr, 4, 16, f) == 16;
     const uint16_t *px = bsp_display_fb(bsp_display_visible());
-    for (int y = h - 1; y >= 0; y--) {
+    for (int y = h - 1; ok && y >= 0; y--) {
         for (int x = 0; x < w; x++) {
             row[x] = rot == 270 ? px[x * pw + (h - 1 - y)] : rot == 90 ? px[(w - 1 - x) * pw + y] : px[y * pw + x];
         }
-        fwrite(row, 1, stride, f);
+        ok = fwrite(row, 1, stride, f) == (size_t)stride;
     }
-    fclose(f);
+    if (ferror(f)) ok = false;
+    if (fclose(f) != 0) ok = false;
     free(row);
+    if (ok) ok = lx_sd_replace_file(tmp, name) == 0;
+    if (!ok) {
+        remove(tmp);
+        lx_sd_write_unlock();
+        return ESP_FAIL;
+    }
     ESP_LOGI(TAG, "saved %s", name);
     if (path) snprintf(path, len, "%s", name);
+    lx_sd_write_unlock();
     return ESP_OK;
 }
 

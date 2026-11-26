@@ -19,6 +19,7 @@
 #include "lx_appstore.h"
 #include "lx_input.h"
 #include "lx_net.h"
+#include "lx_common.h"
 
 #include <dirent.h>
 #include <stdio.h>
@@ -626,14 +627,18 @@ static void on_remove_yes(lv_event_t *ev)
     }
     char name[32];
     snprintf(name, sizeof(name), "%s", it->name);
-    bool ok = rm_tree(dir, 0);
+    bool ok = lx_sd_write_try_lock();
+    if (ok) {
+        ok = rm_tree(dir, 0);
+        lx_sd_write_unlock();
+    }
     ESP_LOGI(TAG, "removed %s: %s", dir, ok ? "ok" : "failed");
     s_changed = true;
-    snprintf(s_status_text, sizeof(s_status_text), ok ? "%s removed" : "%s: some files could not be removed", name);
+    snprintf(s_status_text, sizeof(s_status_text), ok ? "%s removed" : "%s: SD card is busy or some files could not be removed", name);
     items_refresh();
     if (item_by_id(s_detail_id)) detail_show();     /* still in the catalogue */
     else list_show();
-    if (!ok) ui_message("Remove", "Some of its files could not be removed. Use the Files app to see what is left.");
+    if (!ok) ui_message("Remove", "The SD card is busy or some files could not be removed. Try again when other SD activity finishes.");
 }
 
 static void on_remove_no(lv_event_t *ev)

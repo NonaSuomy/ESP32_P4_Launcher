@@ -242,23 +242,22 @@ void *lx_zip_unpack_mem(const char *zip, const lx_zip_member_t *m)
 
 int lx_zip_unpack_file(const char *zip, const lx_zip_member_t *m, const char *out)
 {
+    if (!lx_sd_write_try_lock()) return -1;
     char part[300];
     snprintf(part, sizeof(part), "%s.part", out);
     void *zbuf;
     FILE *f = zopen(zip, &zbuf);
-    if (!f) return -1;
+    if (!f) { lx_sd_write_unlock(); return -1; }
     FILE *dst = fopen(part, "wb");
-    if (!dst) { zclose(f, zbuf); return -1; }
+    if (!dst) { zclose(f, zbuf); lx_sd_write_unlock(); return -1; }
     void *vbuf = ps_alloc(CHUNK);               /* the window's short stretches go out in big DMA blocks */
     if (vbuf) setvbuf(dst, vbuf, _IOFBF, CHUNK);
     bool ok = unpack(f, m, NULL, dst);
     zclose(f, zbuf);
     if (fclose(dst) != 0) ok = false;
     heap_caps_free(vbuf);
-    if (ok) {
-        remove(out);
-        ok = rename(part, out) == 0;
-    }
+    if (ok) ok = lx_sd_replace_file(part, out) == 0;
     if (!ok) remove(part);
+    lx_sd_write_unlock();
     return ok ? 0 : -1;
 }

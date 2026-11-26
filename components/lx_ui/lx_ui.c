@@ -14,6 +14,7 @@
 #include "nvs.h"
 #include "bsp.h"
 #include "lx_zip.h"
+#include "lx_common.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -155,9 +156,21 @@ static int lines_find(const lines_t *l, const char *s)
 /* Rewrites `path` as: [first] + every line of l except `drop`, at most max lines. */
 static void lines_write(const lines_t *l, const char *path, const char *first, const char *drop, int max)
 {
+    if (!lx_sd_write_try_lock()) {
+        ESP_LOGW(TAG, "could not update %s: another SD write is in progress", path);
+        return;
+    }
+    char tmp[192];
+    int tmp_len = snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    if (tmp_len < 0 || (size_t)tmp_len >= sizeof(tmp)) {
+        lx_sd_write_unlock();
+        ESP_LOGW(TAG, "path is too long: %s", path);
+        return;
+    }
     mkdir(DATA_DIR, 0775);
-    FILE *f = fopen(path, "wb");
+    FILE *f = fopen(tmp, "wb");
     if (!f) {
+        lx_sd_write_unlock();
         ESP_LOGW(TAG, "cannot write %s", path);
         return;
     }
@@ -168,7 +181,14 @@ static void lines_write(const lines_t *l, const char *path, const char *first, c
         fprintf(f, "%s\n", l->line[i]);
         n++;
     }
-    fclose(f);
+    bool ok = ferror(f) == 0;
+    if (fclose(f) != 0) ok = false;
+    if (ok) ok = lx_sd_replace_file(tmp, path) == 0;
+    if (!ok) {
+        remove(tmp);
+        ESP_LOGW(TAG, "could not finish writing %s", path);
+    }
+    lx_sd_write_unlock();
 }
 
 /* ── Browser state ─────────────────────────────────────────────────────── */
@@ -1191,8 +1211,13 @@ static int rom_menu(ent_t *e, volatile bool *abort)
                 guard_in();
                 if (!rom_name(rom, name, sizeof(name))) snprintf(name, sizeof(name), "%s", rom);
                 save_path(name, sv, sizeof(sv));
-                remove(sv);
-                e->flags &= ~(E_SAVE | E_SAVE_KNOWN);
+                if (lx_sd_write_try_lock()) {
+                    remove(sv);
+                    lx_sd_write_unlock();
+                    e->flags &= ~(E_SAVE | E_SAVE_KNOWN);
+                } else {
+                    ESP_LOGW(TAG, "cannot delete save %s: SD card is busy", sv);
+                }
                 guard_out();
             }
             break;

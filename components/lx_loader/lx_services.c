@@ -8,6 +8,7 @@
  * app is never killed while it holds a launcher/driver lock (heap, VFS, ...).
  */
 #include "lx_services.h"
+#include "lx_common.h"
 #include "lx_usbd.h"
 
 #include <stdio.h>
@@ -126,6 +127,7 @@ static bool track_remove(void *ptr)
 #define MAX_FILES 32
 static FILE *s_files[MAX_FILES];
 static void *s_file_bufs[MAX_FILES];
+static bool s_file_writable[MAX_FILES];
 
 /* SD reads into a buffer that isn't DMA-aligned go one sector at a time through
  * a bounce buffer (1.5 MB/s instead of 15), and stdio's own buffer isn't aligned.
@@ -140,10 +142,15 @@ void *lx_file_fast_io(FILE *f)
     return buf;
 }
 
-static bool file_track(FILE *f, bool fast_io)
+static bool file_track(FILE *f, bool fast_io, bool writable)
 {
     for (int i = 0; i < MAX_FILES; i++)
-        if (!s_files[i]) { s_files[i] = f; s_file_bufs[i] = fast_io ? lx_file_fast_io(f) : NULL; return true; }
+        if (!s_files[i]) {
+            s_files[i] = f;
+            s_file_bufs[i] = fast_io ? lx_file_fast_io(f) : NULL;
+            s_file_writable[i] = writable;
+            return true;
+        }
     return false;
 }
 
@@ -511,16 +518,21 @@ static bool zip_to_cache(const char *path, const char *zip, const lx_zip_member_
     if (s) { if (!fgets(have, sizeof(have), s)) have[0] = 0; fclose(s); }
     if (strcmp(want, have) == 0 && stat(out, &cs) == 0 && cs.st_size == (off_t)m->usize) return true;
 
+    if (!lx_sd_write_try_lock()) return false;
     mkdir("/sd/launcher", 0775);
     mkdir(ZIP_CACHE, 0775);
+    lx_sd_write_unlock();
     DIR *d = opendir(ZIP_CACHE);                /* only the latest ROM stays */
     if (d) {
         struct dirent *de;
         char p[300];
-        while ((de = readdir(d))) {
-            if (de->d_name[0] == '.') continue;
-            snprintf(p, sizeof(p), ZIP_CACHE "/%s", de->d_name);
-            remove(p);
+        if (lx_sd_write_try_lock()) {
+            while ((de = readdir(d))) {
+                if (de->d_name[0] == '.') continue;
+                snprintf(p, sizeof(p), ZIP_CACHE "/%s", de->d_name);
+                remove(p);
+            }
+            lx_sd_write_unlock();
         }
         closedir(d);
     }
@@ -528,8 +540,16 @@ static bool zip_to_cache(const char *path, const char *zip, const lx_zip_member_
     if (lx_zip_unpack_file(zip, m, out) != 0) return false;
     ESP_LOGI(TAG, "%s: %lu bytes unpacked to the card in %lld ms", m->name, (unsigned long)m->usize,
              (esp_timer_get_time() - t0) / 1000);
-    s = fopen(ZIP_CACHE_SRC, "w");
-    if (s) { fputs(want, s); fclose(s); }
+    if (lx_sd_write_try_lock()) {
+        s = fopen(ZIP_CACHE_SRC ".tmp", "w");
+        if (s) {
+            bool ok = fputs(want, s) >= 0;
+            if (fclose(s) != 0) ok = false;
+            if (ok) ok = lx_sd_replace_file(ZIP_CACHE_SRC ".tmp", ZIP_CACHE_SRC) == 0;
+            if (!ok) remove(ZIP_CACHE_SRC ".tmp");
+        }
+        lx_sd_write_unlock();
+    }
     return true;
 }
 
@@ -581,14 +601,17 @@ static bool read_only(const char *mode)
 static papp_file_t *fs_open(const char *path, const char *mode)
 {
     SVC_ENTER();
+    bool writable = !read_only(mode);
+    if (writable) lx_sd_write_lock();
     FILE *f = fopen(path, mode);
     bool fast_io = true;
     if (!f && read_only(mode)) f = zip_open(path, &fast_io);
-    if (f && !file_track(f, fast_io)) {
+    if (f && !file_track(f, fast_io, writable)) {
         fclose(f);
         f = NULL;
         ESP_LOGE(TAG, "too many open files");
     }
+    if (writable) lx_sd_write_unlock();
     SVC_LEAVE();
     return (papp_file_t *)f;
 }
@@ -600,10 +623,14 @@ static int fs_close(papp_file_t *f)
     int r = -1;
     for (int i = 0; i < MAX_FILES; i++) {
         if (s_files[i] != (FILE *)f) continue;
+        bool writable = s_file_writable[i];
+        if (writable) lx_sd_write_lock();
         r = fclose((FILE *)f);
         heap_caps_free(s_file_bufs[i]);
         s_files[i] = NULL;
         s_file_bufs[i] = NULL;
+        s_file_writable[i] = false;
+        if (writable) lx_sd_write_unlock();
         break;
     }
     SVC_LEAVE();
@@ -621,7 +648,9 @@ static size_t fs_read(papp_file_t *f, void *buf, size_t len)
 static size_t fs_write(papp_file_t *f, const void *buf, size_t len)
 {
     SVC_ENTER();
+    lx_sd_write_lock();
     size_t n = fwrite(buf, 1, len, (FILE *)f);
+    lx_sd_write_unlock();
     SVC_LEAVE();
     return n;
 }
@@ -659,7 +688,9 @@ static long fs_size(const char *path)
 static int fs_remove(const char *path)
 {
     SVC_ENTER();
+    lx_sd_write_lock();
     int r = remove(path);
+    lx_sd_write_unlock();
     SVC_LEAVE();
     return r;
 }
@@ -667,7 +698,9 @@ static int fs_remove(const char *path)
 static int fs_mkdir(const char *path)
 {
     SVC_ENTER();
+    lx_sd_write_lock();
     int r = mkdir(path, 0775);
+    lx_sd_write_unlock();
     SVC_LEAVE();
     return r;
 }
@@ -694,7 +727,9 @@ static int fs_stat(const char *path, papp_stat_t *out)
 static int fs_rename(const char *from, const char *to)
 {
     SVC_ENTER();
+    lx_sd_write_lock();
     int r = rename(from, to);
+    lx_sd_write_unlock();
     SVC_LEAVE();
     return r == 0 ? 0 : -1;
 }
@@ -702,7 +737,9 @@ static int fs_rename(const char *from, const char *to)
 static int fs_rmdir(const char *path)
 {
     SVC_ENTER();
+    lx_sd_write_lock();
     int r = rmdir(path);
+    lx_sd_write_unlock();
     SVC_LEAVE();
     return r == 0 ? 0 : -1;
 }
@@ -854,10 +891,13 @@ void lx_svc_end_run(uint32_t *leaked_allocs, uint32_t *leaked_bytes, uint32_t *l
         if (s_dirs[i]) { closedir(s_dirs[i]); s_dirs[i] = NULL; nf++; }
     for (int i = 0; i < MAX_FILES; i++) {
         if (s_files[i]) {
+            if (s_file_writable[i]) lx_sd_write_lock();
             fclose(s_files[i]);
+            if (s_file_writable[i]) lx_sd_write_unlock();
             heap_caps_free(s_file_bufs[i]);
             s_files[i] = NULL;
             s_file_bufs[i] = NULL;
+            s_file_writable[i] = false;
             nf++;
         }
     }
