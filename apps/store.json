@@ -25,6 +25,8 @@
  "emu.pce":         {"category": "emulators", "description": "PC Engine / TurboGrafx-16 games (.pce) from /sd/roms/pce"},
  "emu.sms":         {"category": "emulators", "description": "Sega Master System games (.sms) from /sd/roms/sms"},
  "emu.snes":        {"category": "emulators", "description": "Super Nintendo games (.smc, .sfc) from /sd/roms/snes"},
+ "emu.scummvm_agi": {"category": "emulators", "description": "ScummVM AGI adventures such as King’s Quest and Space Quest; game files from /sd/roms/scummvm"},
+ "emu.scummvm_sci": {"category": "emulators", "description": "ScummVM SCI and SCI32 adventures such as Quest for Glory; game files from /sd/roms/scummvm"},
  "emu.spectrum":    {"category": "emulators", "description": "ZX Spectrum snapshots (.z80, .sna) from /sd/roms/spectrum"},
  "game.doom":       {"category": "games", "description": "The classic shooter (PrBoom). Needs a WAD in /sd/roms/doom, e.g. the shareware doom1.wad"},
  "game.duke3d":     {"category": "games", "description": "Duke Nukem 3D (Chocolate Duke3D). Needs DUKE3D.GRP in /sd/roms/duke3d"},
