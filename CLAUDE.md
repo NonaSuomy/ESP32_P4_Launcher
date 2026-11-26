@@ -10,12 +10,17 @@ Design: `docs/ARCHITECTURE.md`. Plan + status: `docs/WORKPLAN.md`. Which boards 
 
 ```
 launcher/                 ESP-IDF project (factory app; main.c + home.c = LVGL home screen + app folders + app search
-                          (any folder, USB keyboard letter opens it) + red dot on the gear when an online update waits (quiet check, 12 h); store.c = the Store,
+                          (any folder, USB keyboard letter opens it) + red dot on the gear when an online update waits (quiet check, 12 h)
+                          + start at boot (Settings "At boot" = search screen in pick mode, /sd/config/autostart.txt; 2.5 s
+                          "Starting" screen, held touch/button/key = Quit or Start box; skipped after a crash or panic/WDT reset); store.c = the Store,
                           first home tile: categories, app pages, install/update/remove; home_ui.h = what it uses from home.c). Board: -DLX_BOARD=<id> (default guition_p4_43)
 boards/<id>/board/        BSP implementation (component "board", pins esp_hosted for its C6); boards/<id>/sdkconfig.board.
                           guition_p4_43 (4.3" 480x800, image "launcher"; guition_p4_43_v3 = same sources built for
                           rev v3.x chips, BOARD_CHIP_V3 picks the id), guition_p4_7 (7" 1024x600; guition_p4_7_v3 = v3.x chip, which comes with
-                          the 2026 "New Panel": BOARD_PANEL_NEW = other JD9165 table/timing, reset GPIO 0, C6 SDIO 10 MHz), m5stack_tab5 (720x1280,
+                          the 2026 "New Panel" (rear label V2; some v1.x boards have it too: guition_p4_7 detects it at a power-on, kept in RTC memory
+                          over restarts): other JD9165 table/timing (Guition's V2 demo: RGB565, 52 MHz) + COLMOD 0x55 (without it faint
+                          vertical lines), reset GPIO 0; such boards are the newer JC1060P470C_I_W_Y: speaker amp on GPIO 11, not 20 (board_is_y),
+                          C6 SDIO 10 MHz on both 7" images), m5stack_tab5 (720x1280,
                           power rails on two PI4IOE5V6408 I2C expanders, esp_hosted 2.12.13 (Tab5 preset, C6 reset active high;
                           runs M5Stack's 1.4.1 C6 firmware too, Settings > Update offers 2.12.13, #48); INA226 battery + charging (board_power.c,
                           PWR interface); clip-on Tab5 Keyboard at 0x6D on I2C port 0, G0/G1 (board_keyboard.c, BSP_CAP_KEYBOARD);
@@ -36,16 +41,38 @@ components/lx_loader/     App Manager: loader, relocation, imports, services (SY
                           task's stack), kept as private heaps for MEM v3 PAPP_MEM_LPRAM only (#38); never FAST memory or a stack;
                           NET (lx_svc_net.c) = Wi-Fi, sockets, TLS, HTTP(S) for apps: the first call holds the radio
                           for the run (lx_net_app_hold), every wait gives up on exit, teardown closes sockets and rejoins the saved network;
-                          BLE (lx_svc_ble.c) = NimBLE on the P4, controller on the C6 over esp_hosted (VHCI): the host
-                          starts on the first call (gatt_register restarts it with the app's table) and stops at teardown;
-                          Guition boards, Tab5 and waveshare_p4_rpi_dsi (CONFIG_BT_* in their sdkconfig.board; a C6 on 1.x firmware
-                          (stock Tab5) runs its controller from boot: lx_svc_ble.c skips the 2.x controller calls for it; waveshare_p4_rpi_dsi needs
-                          the release's C6 firmware), the slot is NULL on the Waveshare 3.5"; BLE v2 = pairing: bonds in RAM
-                          (NVS persist off everywhere), kept in /sd/config/ble_bonds.bin (loaded after the host syncs, saved after changes);
+                          BLE = Bluedroid (dual mode) on the Guition boards, Tab5, Elecrow and waveshare_p4_rpi_dsi (CONFIG_BT_* in their
+                          sdkconfig.board): lx_svc_ble_bd.c on the shared core lx_bt.c (stack started/stopped as jobs on the "lx_bt"
+                          task, internal stack; users = app + speaker; controller = a USB Bluetooth dongle when plugged in and LE-capable,
+                          else the C6 over esp_hosted VHCI (LE only; lx_bt.c fakes the C6's missing 0x1005/0x1004 replies); bonds in
+                          Bluedroid's NVS store). lx_bt_usb.c = USB HCI transport (class E0/01/01: commands as control transfers,
+                          events on interrupt IN, ACL on bulk); also the project's own ESP32 dongle (giltal/ESP32_BT_Dongle,
+                          classic ESP32, controller-only, H4 on UART0) behind its CH34x/CP210x: 921600 8N1 set with the chip's
+                          vendor requests, DTR/RTS off, H4 over the bulk endpoints (h4_feed), taken only after identify 0xFC7E
+                          answers "LXBT" (other serial gadgets left alone); speaker + DualShock 4 together work; a dongle without LE (Bluetooth 1.x-3.0) gets LE answered by the transport
+                          (Classic only; an old genuine CSR also gets its unknown start-up commands answered), answers features page 1
+                          for counterfeit CSR8510s (0A12:0001, last page 0), board = master of every accepted link; the counterfeit
+                          CSR8510 can't run a speaker + Classic pad together (an old genuine CSR does); Realtek dongles need a firmware
+                          download that isn't done. lx_bt_pads.c = Bluetooth gamepads on the dongle: Classic HID host +
+                          own HID-over-GATT client for BLE pads (/sd/config/bt_pads.txt; same Settings screen); lx_bt.c fans
+                          Bluedroid's single GAP BLE / GATTC callbacks out to slots. DevLink `bt` (papp_dev.py bt status|scan|
+                          pair|speaker..) = test aid; -DLX_BT_TESTPAD=1 build = board poses as a BLE pad (lx_bt_testpad.c).
+                          lx_bt_speaker.c = A2DP source to a speaker/headphones: home Settings "Speaker"
+                          screen (scan, pick, connect, forget), /sd/config/bt_speaker.txt, calls after 10/20/40 s then every 60 s
+                          (with a pad connected: 2.5 s pages every 30/60/120 s, only after 20 s without pad input: a page
+                          stops all LE data on the CSR; pads are never cut off); lx_audio_set_tap sends the
+                          mixer's output there (resampled 48 kHz -> A2DP rate, master volume in software) and silence to the codec.
+                          NimBLE (lx_svc_ble.c) remains for boards that pick it: host starts on the first call and stops at teardown,
+                          a C6 on 1.x firmware (stock Tab5) runs its controller from boot; bonds in /sd/config/ble_bonds.bin.
+                          The slot is NULL on the Waveshare 3.5"; BLE v2 = pairing;
                           FS v2 = stat/rename/rmdir/opendir (closed at teardown); SYS v5 = random; USBH (lx_svc_usbh.c) = raw USB host
                           client; PWR (lx_svc_pwr.c) = battery, charging back on at teardown; HIDD (components/lx_usbd, TinyUSB pinned) =
                           USB-C as the app's HID device: DevLink paused, the FS OTG takes PHY 0; a boot after a crash with it taken
-                          resets the USB units (RTC mark)
+                          resets the USB units (RTC mark); IRQ (lx_svc_irq.c) = free header pins (bsp_app_gpio_mask per board) +
+                          gptimers, interrupts on the app's core: GPIO line 1 = core 0, line 2 = core 1 (IDF's ISR service has line 0),
+                          allocated/freed on a task pinned to the core; deferred (event ring, wait) or direct (app's PAPP_FAST code in
+                          the ISR, FAST must be in SRAM); PAPP_IRQ_AWAKE = priority-1 spinner on the core (an idle core on a v1.x chip takes
+                          ~17 us longer to enter an ISR; not on v3.x); ARCHITECTURE §7.9
 components/fatfs/         copy of IDF 5.5.6's fatfs with exFAT on (FF_FS_EXFAT 1, + FF_USE_LABEL fix): overrides IDF's;
                           diskio_sdmmc.c: a 4-bit SD transfer that times out moves the card to 1-bit (CMD12 + ACMD6, no
                           re-init or controller reset: the C6 shares it) until reboot (v3.2 7" with bad D1-D3);
@@ -63,7 +90,8 @@ components/lx_comp/       compositor: app surfaces → PPA scale/rotate → pane
                           present is async with 2 buffers (task "lx_present" scales + flips while the app runs;
                           present_ext copies the app's frame into the spare buffer first), synchronous with 1 buffer
 components/lx_audio/      audio engine: per-stream rings → resample → mix → BSP codec (fixed rate)
-components/lx_ui/         launcher-drawn screens for apps: content browser (pick_file) + message box; UI v4 wifi() = Wi-Fi picker
+components/lx_ui/         launcher-drawn screens for apps: content browser (pick_file; <root>/gamenames.txt "mslug=Metal Slug" = the
+                          names shown, sorted and searched: the Neo Geo set, SDcard/roms/neogeo, downloaded by the Store) + message box; UI v4 wifi() = Wi-Fi picker
                           (scan list, password keyboard, joins with lx_net_connect = saved to wifi.txt; lx_net_restore on fail/cancel)
 components/lx_input/      input manager: USB HID gamepads/keyboards, XInput (Xbox 360) pads (lx_input_xinput) + board buttons (merged into P1) → players + event queue; HOME chord;
                           USB hubs (CONFIG_USB_HOST_HUBS_SUPPORTED, every board): no TT in IDF, so lx_input_usb.c wraps hcd_port_command
@@ -89,7 +117,9 @@ apps/                     Test/demo apps (hello, libc_test, gfx_demo: DISP test,
                           net_test: NET test (--libc), args all|serve|ap|hang|join ssid pass [url]|fetch url [method] [body];
                           ble_test: BLE test (--libc), args periph [secs]|scan [secs]|central [name] [secs]|hang;
                           periph = "gution-p4" for ESP32P4_Gution4_7project/tools/ble_client.py;
-                          ppa_test: DISP v4 blit/fill self-check against a CPU model (--libc), exit code = failures — all test apps are
+                          ppa_test: DISP v4 blit/fill self-check against a CPU model (--libc), exit code = failures;
+                          irq_test: IRQ test (--libc), args all|leave|hang [pin]: toggles a free pin (no wiring, it sees its own
+                          edges) — all test apps are
                           PAPP_MF_HIDDEN: shown on the home screen only with Settings → Show developer apps)
 apps/education/<app>/     Education apps for students (ids edu.*): `python apps/education/build.py` (build_all runs it too)
                           builds them into build/education and copies .papp + icon to SDcard/apps/Education/<app>/ (committed;
@@ -161,6 +191,8 @@ community/<dir>/          Community apps (PR with .papp + icon.png + app.json, n
                           (.github/workflows/community.yml on PRs); catalogue "community" list, Community folder, not in Install all
 SDcard/                   Starter card for new users (README.md): shareable game data, config/gamepads.txt, ROM folders.
                           Its .gitignore is an allow-list: ROMs, BIOS, saves and commercial data put there stay local
+mechanical/               3D prints: 70° screw-on desk legs for the 7" board (M2.5 standoffs): .f3d, STEP, STL +
+                          fusion_build_legs.py (Fusion script that builds them)
 tests/host/test_reloc.py  Host relocation equivalence test
 tests/board/smoke.py      Board regression: relocation test, test apps, crash record
 ```

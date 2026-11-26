@@ -1030,6 +1030,97 @@ typedef struct {
     int     (*state)(void);                          /* PAPP_HIDD_* bits                     */
 } papp_if_hidd_t;
 
+/* ── IRQ interface ──────────────────────────────────────────────────────── */
+/* GPIO pins and hardware timers, with their interrupts on the core the app picks. Only the pins the board
+ * leaves free (gpio_mask(): header and Grove pins; never the display, SD card, Wi-Fi chip or audio) can be
+ * used. Everything is undone when the app ends, however it ends: interrupts freed, timers deleted, pins back
+ * to inputs without pulls.
+ *
+ * An interrupt is handled in one of two ways (papp_irq_cfg_t.isr):
+ *   deferred (isr NULL): the launcher's interrupt handler, on cfg.core, queues an event; a thread of the app
+ *     takes it with wait() (papp_irq_thread() makes one that calls a function per event). The thread can do
+ *     anything; it starts some 10-50 us after the edge.
+ *   direct (isr set): the app's function runs inside the interrupt itself, on cfg.core. It must be tagged
+ *     PAPP_FAST and the app's FAST region must be in internal SRAM (attach answers PAPP_E_UNSUPPORTED
+ *     otherwise), because it also runs while the caches are off (flash writes, code_alloc). Inside it:
+ *     no service calls and no papp_* SDK calls (they are in PSRAM), no floating point, under 1 KB of stack,
+ *     only data tagged PAPP_FAST_DATA / PAPP_FAST_BSS or on its stack, and only what ctx offers: read and
+ *     write pins, queue an event for wait() on any of its handles (signal), re-arm a timer. Keep it to a few microseconds.
+ * Level interrupts (PAPP_IRQ_LOW / HIGH) fire once and stay off until enable(h, true): the level would
+ * otherwise interrupt again at once. */
+
+#define PAPP_IF_IRQ       PAPP_FOURCC('I', 'R', 'Q', ' ')
+#define PAPP_IF_IRQ_VER   1
+
+#define PAPP_IRQ_MAX_PINS    8               /* pins with an interrupt, per app              */
+#define PAPP_IRQ_MAX_TIMERS  2               /* hardware timers, per app                     */
+
+enum { PAPP_GPIO_INPUT = 0, PAPP_GPIO_OUTPUT = 1, PAPP_GPIO_OPEN_DRAIN = 2 };   /* gpio_config mode */
+enum { PAPP_GPIO_PULL_NONE = 0, PAPP_GPIO_PULL_UP = 1, PAPP_GPIO_PULL_DOWN = 2 };
+enum {                                       /* gpio_attach trigger                           */
+    PAPP_IRQ_RISING = 1, PAPP_IRQ_FALLING = 2, PAPP_IRQ_ANY_EDGE = 3,
+    PAPP_IRQ_LOW = 4, PAPP_IRQ_HIGH = 5,
+};
+
+/* On v1.x chips an interrupt that finds its core idle (no task of the app's or the launcher's running there)
+ * starts some 17 us late: a pin edge reaches the handler in ~20 us (up to ~70) on an idle core, ~3 us on a
+ * busy one (v3.x chips: ~3 us either way).
+ * PAPP_IRQ_AWAKE keeps the core busy while this interrupt is attached (a launcher task spinning there at
+ * the lowest priority, below every app thread): ~3 us always, for that core's idle time and power. */
+#define PAPP_IRQ_AWAKE  (1u << 0)
+
+typedef struct papp_irq papp_irq_t;
+
+typedef struct {
+    int64_t  time_us;                        /* papp_time_us() clock, taken in the interrupt   */
+    uint32_t count;                          /* interrupts of this handle so far (1 = first)   */
+    uint16_t dropped;                        /* events lost before this one (queue was full)   */
+    uint8_t  pin;                            /* the GPIO, or 0xFF for a timer                  */
+    uint8_t  level;                          /* the pin's level read in the interrupt          */
+} papp_irq_event_t;
+
+/* What a direct handler may use (in internal RAM, valid during the call). */
+typedef struct {
+    const papp_irq_event_t *ev;              /* this interrupt                                 */
+    papp_irq_t *self;
+    void (*gpio_write)(int pin, int level);  /* pins the app set up as outputs                 */
+    int  (*gpio_read)(int pin);
+    void (*signal)(papp_irq_t *h, const papp_irq_event_t *ev);   /* queue ev for wait() on h   */
+    void (*timer_arm)(papp_irq_t *timer, uint32_t us);   /* (re)start a one-shot timer in us   */
+} papp_irq_ctx_t;
+
+typedef void (*papp_irq_isr_t)(void *arg, const papp_irq_ctx_t *ctx);
+
+typedef struct {
+    int8_t          core;                    /* 0 or 1: where the interrupt runs; -1 = 1     */
+    uint8_t         priority;                /* 1..3 (3 = highest); 0 = 1                     */
+    uint8_t         queue;                   /* events kept for wait(); 0 = 16, at most 64    */
+    uint8_t         flags;                   /* PAPP_IRQ_AWAKE                                */
+    papp_irq_isr_t  isr;                     /* NULL = deferred; else direct (PAPP_FAST)      */
+    void           *isr_arg;
+} papp_irq_cfg_t;
+
+typedef struct {
+    papp_iface_hdr_t hdr;
+    uint64_t (*gpio_mask)(void);             /* bit n = GPIO n is free for apps on this board  */
+    int  (*gpio_config)(int pin, int mode, int pull);    /* PAPP_E_OK, ARG (not a free pin)    */
+    int  (*gpio_write)(int pin, int level);
+    int  (*gpio_read)(int pin);              /* 0/1, or PAPP_E_ARG                             */
+    /* An interrupt on a pin set up with gpio_config (an output pin works too: it sees its own edges).
+     * Starts enabled. PAPP_E_LIMIT: PAPP_IRQ_MAX_PINS reached or the pin has one already. */
+    int  (*gpio_attach)(int pin, int trigger, const papp_irq_cfg_t *cfg, papp_irq_t **out);
+    /* A hardware timer with 1 us resolution, stopped until timer_start. PAPP_E_LIMIT: none free. */
+    int  (*timer_attach)(const papp_irq_cfg_t *cfg, papp_irq_t **out);
+    int  (*timer_start)(papp_irq_t *t, uint32_t us, bool periodic);   /* first interrupt in us  */
+    int  (*timer_stop)(papp_irq_t *t);
+    int  (*enable)(papp_irq_t *h, bool on);  /* a pin's interrupt; a timer: same as stop/start  */
+    /* The next queued event: 1 = *ev filled, PAPP_E_TIMEOUT, PAPP_E_EXIT (the app is asked to
+     * exit, or h was detached). */
+    int  (*wait)(papp_irq_t *h, papp_irq_event_t *ev, uint32_t timeout_ms);
+    void (*detach)(papp_irq_t *h);           /* interrupt off and freed; a waiter gets E_EXIT  */
+    int  (*core)(papp_irq_t *h);             /* the core its interrupt runs on                 */
+} papp_if_irq_t;
+
 /* ── Entry point ────────────────────────────────────────────────────────── */
 
 /* Provided by the SDK runtime (crt0), located at entry_off. */

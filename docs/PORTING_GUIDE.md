@@ -139,4 +139,5 @@ A board sold with either chip generation gets one board id per generation, becau
 only (the ROM and memory map differ, and the bootloader checks the revision range). `boards/guition_p4_43_v3`
 is the pattern: an `sdkconfig.board` with the v3 lines, and a `board/CMakeLists.txt` that builds
 `guition_p4_43`'s sources with `BOARD_CHIP_V3` defined, which `board.c` turns into the other id and name. `boards/guition_p4_7_v3` does the same; there
-`BOARD_CHIP_V3` also selects the panel those boards ship with (`BOARD_PANEL_NEW` in `board_pins.h`).
+`BOARD_CHIP_V3` also skips the panel detection (`detect_panel` in `board_display.c`): those boards all have the 2026 "New Panel",
+which v1.x boards may have too.

@@ -1396,7 +1396,7 @@ int lx_svc_ble_end_run(void)
 
 bool lx_svc_ble_present(void) { return true; }
 
-#else   /* no BLE on this board */
+#elif !(CONFIG_BT_BLUEDROID_ENABLED && CONFIG_ESP_HOSTED_ENABLE_BT_BLUEDROID)   /* no BLE (Bluedroid: lx_svc_ble_bd.c) */
 
 void lx_svc_ble_init(void) {}
 int  lx_svc_ble_end_run(void) { return 0; }

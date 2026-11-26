@@ -49,6 +49,12 @@ extern const papp_if_usbh_t lx_if_usbh;
 int  lx_svc_usbh_end_run(void);             /* -> devices the app left open */
 extern const papp_if_pwr_t lx_if_pwr;
 void lx_svc_pwr_end_run(void);              /* lx_svc_pwr.c: charging back on */
+extern const papp_if_irq_t lx_if_irq;
+void lx_svc_irq_init(void);                 /* lx_svc_irq.c: GPIO pins and timers for apps */
+void lx_svc_irq_begin_run(void);
+int  lx_svc_irq_end_run(void);              /* -> interrupts the app left attached */
+/* The running app's FAST region when it is in internal SRAM (lx_app.c): false if none or in PSRAM */
+bool lx_app_fast_sram(uintptr_t *base, size_t *size);
 
 /* NET bookkeeping (lx_svc_net.c) */
 void lx_svc_net_init(void);

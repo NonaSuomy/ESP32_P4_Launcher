@@ -4,6 +4,7 @@
  * No I/O expanders: the AXP2101 PMIC comes up with every rail on.
  */
 #include "board_internal.h"
+#include "esp_bit_defs.h"
 #include "board_pins.h"
 
 #include "esp_log.h"
@@ -118,4 +119,11 @@ esp_err_t bsp_sdcard_mount(const char *mount_point)
 bool bsp_sdcard_mounted(void)
 {
     return s_sd_mounted;
+}
+
+/* Pins for apps (IRQ interface): the 2x16 header J6 (Waveshare's schematic). 34/35/36 are on it too but
+ * are strapping pins (35 = BOOT): left out. */
+uint64_t bsp_app_gpio_mask(void)
+{
+    return BIT64(2) | BIT64(3) | BIT64(4) | BIT64(5) | BIT64(30) | BIT64(31) | BIT64(32) | BIT64(33) | BIT64(46) | BIT64(47) | BIT64(48) | BIT64(51) | BIT64(52);
 }
