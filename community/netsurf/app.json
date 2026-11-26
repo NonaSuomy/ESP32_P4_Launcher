@@ -1,0 +1,10 @@
+{
+  "author": "NetSurf Developers",
+  "description": "NetSurf browser with CSS, JavaScript, inline audio and video",
+  "license": "GPL-2.0",
+  "category": "tools",
+  "source": "https://www.netsurf-browser.org/",
+  "url": "https://raw.githubusercontent.com/NonaSuomy/ESP32_P4_Launcher/work/netsurf-papp2/artifacts/netsurf/0.4.0/netsurf.papp",
+  "sha256": "0e653e9838e5d821f0b4485bc3dc7ef30e824115b68b03fbdd7ea9b9db6a9ed0",
+  "size": 5436784
+}
