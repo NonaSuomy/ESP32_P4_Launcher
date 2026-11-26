@@ -1,0 +1,10 @@
+{
+  "author": "Tulip CC / PAX port",
+  "description": "MicroPython synth and creative workstation with AMY audio, touch UI, Wi-Fi, and USB MIDI.",
+  "license": "MIT",
+  "source": "https://github.com/NonaSuomy/tulipcc/tree/4469977fb87b6abfe8bc8ae7646e17d7eeb5c9fa/tulip/shared",
+  "category": "tools",
+  "url": "https://raw.githubusercontent.com/NonaSuomy/ESP32_P4_Launcher/WORKTREE/papp-assets/tulip.papp",
+  "sha256": "29dec8db501d14b78bb6173a833fdb3465f677cbe8c0ba13785cd92ccbcd776d",
+  "size": 4624828
+}
