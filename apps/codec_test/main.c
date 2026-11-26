@@ -6,7 +6,7 @@
  * chroma and scales smoothly). Colours are allowed a small difference (the PPA's conversion is fixed point).
  * The last frame (a scaled colour test card) stays on screen for `secs` seconds (arg 1, default 3).
  *
- *   python papp-sdk/tools/papp_build.py --name codec_test --src apps/codec_test/main.c --libc
+ *   python papp-sdk/tools/papp_build.py --name codec_test --src apps/codec_test/main.c apps/codec_test/dec_tests.c --libc
  *   python tools/papp_dev.py --port COM6 deploy build/apps/codec_test/codec_test.papp --timeout 60
  */
 #include <stdio.h>
