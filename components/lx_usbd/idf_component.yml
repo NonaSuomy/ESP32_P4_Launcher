@@ -1,0 +1,2 @@
+dependencies:
+  espressif/tinyusb: "0.21.0~6"        # exact, like every managed component (a self-built launcher matches the release)

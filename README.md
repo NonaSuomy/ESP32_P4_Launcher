@@ -20,7 +20,7 @@ copy the `SDcard` folder to a card and get the apps from the Store, see [Getting
 
 | Launcher version | App ABI | Toolchain | Boards |
 |---|---|---|---|
-| 0.29.3 | 2.0-preview | ESP-IDF v5.5.6 | Guition ESP32-P4 4.3" (480×800; chip v1.x, or v3.x with its own image), Guition JC1060P470C 7" (1024×600), M5Stack Tab5 (720×1280), Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (320×480, contributed), Waveshare ESP32-P4 dev kit + Raspberry Pi DSI display (800×480, contributed) |
+| 0.33.0 | 2.0-preview | ESP-IDF v5.5.6 | Guition ESP32-P4 4.3" (480×800; chip v1.x, or v3.x with its own image), Guition JC1060P470C 7" (1024×600; chip v1.x, or v3.x with the 2026 panel and its own image), M5Stack Tab5 (720×1280), Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (320×480, contributed), Elecrow All-in-one Starter Kit for ESP32-P4 (1024×600, not tested yet: [docs/PORT_ELECROW_AIO.md](docs/PORT_ELECROW_AIO.md)). Which boards qualify: [docs/BOARD_SUPPORT.md](docs/BOARD_SUPPORT.md) |
 
 > **Status: active development.** The ABI is a preview and may still change. Everything below describes
 > what exists in the code today; the plan for what comes next is in [docs/WORKPLAN.md](docs/WORKPLAN.md).
@@ -120,6 +120,32 @@ Two rules keep this portable: apps only see the ABI, and the launcher core only 
 
 - LVGL home screen with app icons, folders (with their own icons), clock, SD status and settings, laid out
   for the board's screen size
+- App search: finds an app in any folder by a part of its name, from the home screen's search field or by
+  typing on a USB keyboard; a red dot on the Settings gear when a launcher update is waiting
+- Start an app at boot (Settings → At boot, chosen with the app search): touch and hold the screen
+  while it says "Starting ..." (or press any button or key) to choose between the launcher and the app
+- SD card bus shown on the home screen ("SD Card (4-bit)"); a card whose 4-bit transfers time out (a bad
+  contact on D1-D3) moves to 1-bit and keeps working, shown in orange
+- Apps can ask for the chip revision (`papp_chip_rev`), so SIMD code picks the right encoding: v1.x and v3.x
+  chips encode the P4's PIE instructions differently. The e3d 3D games use it: one .papp, SIMD on both
+- Apps can list folders, rename and delete them (FS v2), get hardware random bytes, talk to USB devices on the
+  host port (USBH), act as a USB keyboard or mouse on the board's USB-C (HIDD), and pair over BLE with bonds
+  kept on the SD card
+- Bluetooth speaker or headphones (Settings → Speaker) through a USB Bluetooth dongle (Bluetooth 4.0 or newer,
+  e.g. CSR8510; Realtek dongles not yet): the launcher's and the apps' sound plays there instead of the board's
+  speaker, with the usual Bluetooth delay (about 0.2 s). The board's Wi-Fi chip (C6) has only Bluetooth LE, which
+  carries no audio. With a dongle plugged in, BLE apps use it too
+- Bluetooth gamepads on the same dongle (Settings → Speaker): DualShock 4, DualSense, Switch Pro and BLE pads,
+  remembered and reconnected, together with the speaker. An old Bluetooth 2.x/3.0 dongle runs Classic pads only;
+  a counterfeit CSR8510 runs a speaker or a pad well, not both
+- Guition 7" with the 2026 "New Panel" (label "V2" on the back) on a v1.x chip: the 7" image recognises the
+  panel at start-up
+- Apps can use the board's free header pins and hardware timers, with their interrupts on the core they choose
+  (IRQ): each event handled in an app thread, or by the app's own code inside the interrupt (about 3 µs from
+  the edge)
+- M5Stack Tab5: the battery charges and shows in the status bar, the clip-on Tab5 Keyboard works as a launcher
+  keyboard, and Settings → Update offers the Wi-Fi chip's 2.12.13 firmware (needed for BLE on a C6 that an
+  Arduino updater moved to 2.x)
 - More than one board from one source tree: each board is a package under `boards/`, and apps never change
 - Compositor: an app draws a surface of any size, and the launcher scales and rotates it with the PPA, tear-free
 - Audio engine: up to 8 streams at any rate from 4 to 192 kHz, resampled and mixed
@@ -162,15 +188,15 @@ The test apps (`hello`, `gfx_demo`, `audio_test`, `input_test`, `thread_test`, `
 
 ## Hardware
 
-Three boards are supported. All run the same apps from the same SD card. Adding a board:
-[docs/PORTING_GUIDE.md](docs/PORTING_GUIDE.md).
+Three boards are supported and tested before each release; community boards follow below. All run the same apps
+from the same SD card. Which boards can be added, and how: [docs/BOARD_SUPPORT.md](docs/BOARD_SUPPORT.md).
 
 | Part | Guition ESP32-P4 4.3" | Guition JC1060P470C 7" | M5Stack Tab5 |
 |---|---|---|---|
 | Board id (`-DLX_BOARD=`) | `guition_p4_43` (default) | `guition_p4_7` | `m5stack_tab5` |
-| SoC | ESP32-P4, dual RISC-V at 360 MHz, chip revision v1.x (v3.x: board id `guition_p4_43_v3`) | same | same |
+| SoC | ESP32-P4, dual RISC-V at 360 MHz, chip revision v1.x (v3.x: board id `guition_p4_43_v3`) | same (v3.x: `guition_p4_7_v3`, 400 MHz) | same |
 | Memory | 32 MB hex PSRAM at 200 MHz, 16 MB flash | same | same |
-| Display | 480×800 ST7701 MIPI-DSI, used in landscape as 800×480 | 1024×600 JD9165 MIPI-DSI, landscape | 720×1280 MIPI-DSI (ILI9881C, ST7123 or ST7121, detected at start), used in landscape as 1280×720 |
+| Display | 480×800 ST7701 MIPI-DSI, used in landscape as 800×480 | 1024×600 JD9165 MIPI-DSI, landscape (the 2026 "New Panel" on v3.x boards and some v1.x ones: recognised at start-up) | 720×1280 MIPI-DSI (ILI9881C, ST7123 or ST7121, detected at start), used in landscape as 1280×720 |
 | Touch | GT911 capacitive | GT911 capacitive | GT911, or the touch built into the ST7123 / ST7121 panel |
 | Radio | ESP32-C6 over SDIO (Wi-Fi; BLE firmware present) | same, newer C6 firmware | ESP32-C6 over SDIO, M5Stack's C6 firmware |
 | Audio | ES8311 codec at a fixed 48 kHz | ES8311 codec at 48 kHz, NS4150 speaker amplifier | ES8388 codec at 48 kHz |
@@ -178,10 +204,12 @@ Three boards are supported. All run the same apps from the same SD card. Adding 
 | Storage | microSD | microSD | microSD |
 | Input | USB host for gamepads and keyboards, optional GPIO button pad, battery pin | USB host for gamepads and keyboards | USB host for gamepads and keyboards |
 
-Contributed, tested by their authors: the Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (`waveshare_p4_35`), and the
-Waveshare ESP32-P4 Module dev kit with a Raspberry Pi Touch Display (V1) or a compatible one, tested with a
-Cuqi 5" (`waveshare_p4_rpi_dsi`: 800×480 at about 47 Hz, FT5x06 touch, ES8311, no real-time clock; USB
-gamepads on the lower USB-A port only; notes in [docs/PORT_WAVESHARE_P4.md](docs/PORT_WAVESHARE_P4.md)).
+Community boards, tested by their owners: the Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (`waveshare_p4_35`), and the
+Elecrow All-in-one Starter Kit for ESP32-P4 (`elecrow_p4_aio`, not tested yet: [docs/PORT_ELECROW_AIO.md](docs/PORT_ELECROW_AIO.md)).
+
+Retired: the Waveshare ESP32-P4 Module dev kit with a Raspberry Pi Touch Display (V1) or a compatible one
+(`waveshare_p4_rpi_dsi`). A dev kit takes many DSI panels and one image can't know which is connected, so 0.30.0
+is its last release image. Its source stays as an example port: [docs/PORT_WAVESHARE_P4.md](docs/PORT_WAVESHARE_P4.md).
 
 ## Getting started
 
@@ -200,8 +228,10 @@ have) and a USB cable for the board's USB-Serial-JTAG port.
    | Guition ESP32-P4 4.3" | `launcher_guition_p4_43_full.bin` |
    | Guition ESP32-P4 4.3" with a v3.x chip (see below) | `launcher_guition_p4_43_v3_full.bin` |
    | Guition JC1060P470C 7" | `launcher_guition_p4_7_full.bin` |
+   | Guition JC1060P470C 7" with a v3.x chip, e.g. JC1060P470C-I-W-Y (see below) | `launcher_guition_p4_7_v3_full.bin` |
    | M5Stack Tab5 | `launcher_m5stack_tab5_full.bin` |
    | Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 | `launcher_waveshare_p4_35_full.bin` |
+   | Elecrow All-in-one Starter Kit for ESP32-P4 (not tested yet) | `launcher_elecrow_p4_aio_full.bin` |
 
    A full image holds the bootloader, partition table and launcher, so it goes to address 0. The files
    without `_full` are only the launcher, for Settings → Update.
@@ -215,7 +245,7 @@ have) and a USB cable for the board's USB-Serial-JTAG port.
 6. Press RESET on the board, or unplug and reconnect it. The home screen appears.
 
 Then [prepare an SD card](#preparing-the-sd-card): copy the `SDcard` folder of this repository to an empty
-FAT32 card, connect to Wi-Fi in Settings and install apps from the Store (step 4 below).
+FAT32 or exFAT card (exFAT: launcher 0.29.4 and later), connect to Wi-Fi in Settings and install apps from the Store (step 4 below).
 
 The same in a terminal, if you have esptool:
 
@@ -223,11 +253,13 @@ The same in a terminal, if you have esptool:
 esptool.py --chip esp32p4 -p COMx write_flash 0x0 launcher_guition_p4_43_full.bin
 ```
 
-**Which 4.3" chip do I have?** Newer Guition 4.3" boards carry a rev v3.x ESP32-P4. An image runs on one
+**Which chip do I have?** Newer Guition 4.3" and 7" boards carry a rev v3.x ESP32-P4. An image runs on one
 chip generation only, so these have their own image. On the ESP Tool page, the log after **Connect**
 shows the chip revision, for example "revision v1.0" or "revision v3.2"; `esptool.py --chip esp32p4
 -p COMx chip_id` shows it too. If you flashed the wrong one, the screen stays dark: flash the other
-file. After the first install, Settings → Update picks the right image by itself.
+file. After the first install, Settings → Update picks the right image by itself. The 7" v3 image also
+drives the 2026 "New Panel" these boards have (label "V2" on the back). A 7" with that panel and a v1.x
+chip runs the plain 7" image, which recognises the panel at start-up.
 
 ### 2. Build the launcher yourself (optional)
 
@@ -245,24 +277,31 @@ unless `IDF_PATH` is already set:
 . .\tools\idf_env.ps1
 ```
 
-Connect the board's USB-Serial-JTAG port, and use your own COM port below.
+Connect the board's DevLink port and use its COM port below. Most boards use USB-Serial-JTAG;
+the Elecrow AIO uses the CH340 UART bridge (`--transport auto` detects it, e.g. `/dev/ttyUSB0`).
 
 ```powershell
 cd launcher
 idf.py -p COM9 build flash                                                    # Guition 4.3" (default board)
 idf.py -B build_guition_p4_43_v3 -DLX_BOARD=guition_p4_43_v3 -p COMx build flash  # Guition 4.3" with a v3.x chip
 idf.py -B build_guition_p4_7 -DLX_BOARD=guition_p4_7 -p COM10 build flash     # Guition 7"
+idf.py -B build_guition_p4_7_v3 -DLX_BOARD=guition_p4_7_v3 -p COMx build flash    # Guition 7" with a v3.x chip
 idf.py -B build_m5stack_tab5 -DLX_BOARD=m5stack_tab5 -p COM15 build flash     # M5Stack Tab5
-idf.py -B build_waveshare_p4_rpi_dsi -DLX_BOARD=waveshare_p4_rpi_dsi -p COMxx build flash   # Waveshare + RPi display
+idf.py -B build_waveshare_p4_rpi_dsi -DLX_BOARD=waveshare_p4_rpi_dsi -p COMxx build flash   # Waveshare + RPi display (retired, example port)
 cd ..
 ```
 
 Each board builds in its own folder. The boards use different versions of the ESP32-C6 driver, so when you
 switch to the other board, add `reconfigure` once: `idf.py -B <folder> -DLX_BOARD=<id> reconfigure build`.
-The 4.3" with a v3.x chip has its own board id, `guition_p4_43_v3` (same board code, built for v3 silicon).
+The boards with a v3.x chip have their own board ids, `guition_p4_43_v3` and `guition_p4_7_v3` (same board code,
+built for v3 silicon; the 7" one also sets up the 2026 panel and runs the C6 link at 10 MHz).
 
-> On Windows, `papp_dev.py` needs the same COM port, so close any serial monitor first. Text logs go to
-> UART0. USB-Serial-JTAG belongs to DevLink.
+> On Windows, `papp_dev.py` needs the same COM port, so close any serial monitor first. The AIO's
+> CH340 carries DevLink and UART0 console output; while DevLink is connected, logs are framed so
+> they don't interfere with commands.
+
+On Linux, the Elecrow AIO can be addressed directly with `python tools/papp_dev.py --port /dev/ttyUSB0 info`.
+The tool uses reset-safe DTR/RTS handling when it opens the CH340 port.
 
 ### 3. Build the apps (optional)
 
@@ -307,8 +346,10 @@ Wi-Fi library (esp_hosted). The Wi-Fi screen shows both. When they differ, Setti
 **Update the Wi-Fi chip** after the launcher is up to date: it downloads the release's `c6_<version>.bin`
 (or takes `/sd/update/c6.bin` from the card), sends it to the chip in about 15 seconds and restarts the
 board. It only installs esp_hosted firmware for an ESP32-C6 at the launcher's version, and if anything
-fails the chip keeps its old firmware. The Guition boards support it; the Tab5 and the Waveshare
-(esp_hosted 1.4, their makers' firmware) don't. To build the image: `python tools/build_c6_fw.py`.
+fails the chip keeps its old firmware. The Guition boards and the Tab5 support it (a Tab5 from 0.34 on
+works with M5Stack's original C6 firmware too, but needs the update for BLE if an Arduino updater moved its C6
+to 2.x); the Waveshare 3.5" (esp_hosted 1.4, its maker's firmware) doesn't. To build the image:
+`python tools/build_c6_fw.py`.
 
 ## Folders
 
@@ -322,7 +363,7 @@ A folder can have its own icon: put an `icon.png` (best 88x88) in its directory,
 
 ## Preparing the SD card
 
-The [`SDcard`](SDcard) folder is a ready start: copy its contents to the root of an empty FAT32 card, then on
+The [`SDcard`](SDcard) folder is a ready start: copy its contents to the root of an empty FAT32 or exFAT card, then on
 Wi-Fi open the **Store** and choose **Install all**. It already holds the freely shareable game data: Tyrian 2.1
 (freeware), the Doom and Quake shareware episodes and gngeo's data file. It also has the controller database and
 an empty folder for each system's ROMs. Its [README](SDcard/README.md) explains each folder.
@@ -341,6 +382,12 @@ an empty folder for each system's ROMs. Its [README](SDcard/README.md) explains 
 
 No ROMs, BIOS files or commercial game data are included. You need to supply your own legally obtained files.
 
+ROMs can stay zipped (launcher 0.30 and later): `Zelda.zip` in `/sd/roms/nes/` shows up in the NES list, and the
+emulator gets the first file inside whose extension it takes. Its saves are named as if the ROM were `Zelda.nes`. A
+`.zip` is unpacked into memory when the game starts (stored or deflate, no passwords). Game Boy Advance ROMs are
+unpacked once into `/sd/launcher/zipcache/` instead, which keeps only the last one. Neo Geo games are zips of their
+own and are read as they are.
+
 | Game | Copy | In the `SDcard` folder |
 |---|---|---|
 | Doom | one IWAD to `/sd/roms/doom/`: `doom.wad`, `doom2.wad`, `plutonia.wad`, `tnt.wad`, `doom1.wad` or `freedoom.wad` (the first one found, in that order) | `doom1.wad`, the shareware episode. [Freedoom](https://freedoom.github.io/) also works (rename `freedoom1.wad` to `freedoom.wad`) |
@@ -348,7 +395,7 @@ No ROMs, BIOS files or commercial game data are included. You need to supply you
 | Quake | `id1/pak0.pak` to `/sd/roms/quake/id1/` | `pak0.pak`, the shareware episode |
 | Duke Nukem 3D | `DUKE3D.GRP` to `/sd/roms/duke3d/duke3d.grp` | not included (commercial); tested with the Atomic Edition file |
 | Game Boy Advance | the games to `/sd/roms/gba/`; optional BIOS `gba_bios.bin` there (a built-in replacement runs most games) | not included |
-| Neo Geo | `neogeo.zip` (BIOS) and the games to `/sd/roms/neogeo/` | `gngeo_data.zip`, the emulator's own data; the BIOS is not included |
+| Neo Geo | `neogeo.zip` (BIOS) and the games to `/sd/roms/neogeo/` | `gngeo_data.zip`, the emulator's own data, and `gamenames.txt`, the full game names the list shows; the BIOS is not included |
 
 Doom's `prboom.wad` is built into the app; you don't need to copy it.
 
@@ -406,6 +453,15 @@ still work and are copied to your file the first time the pad connects.
 
 The database already covers the Sony DualShock 3 and DualShock 4, the 8BitDo Ultimate 2C Wired and generic
 USB NES pads (VID 0079, PID 0011).
+
+### USB hubs
+
+Several pads can share the board's USB port through a hub (launcher 0.31 and later). The
+port then runs at full speed, which pads and keyboards use anyway. What to know:
+
+- Full-speed pads (tested: DualShock 4) and low-speed devices (tested: a keyboard and a cheap USB pad) work
+  through a hub, several at once.
+- Plugging a hub in while the board runs can restart the board on a weak USB supply; a powered hub avoids it.
 
 ### Wi-Fi network
 
@@ -597,14 +653,20 @@ Include only `papp/papp.h`. The full API, with examples, is in
 
 | Interface | Version | What it gives you | Example calls |
 |---|---|---|---|
-| `SYS` | 3 | Logging, time, local time, UTC time, exit, board id | `papp_log`, `papp_time_us`, `papp_local_time`, `papp_utc_time`, `papp_exit` |
-| `MEM` | 1 | Tracked allocation from PSRAM, internal or DMA memory | `papp_alloc`, `papp_free` |
-| `FS` | 1 | Files, also reachable through stdio with `--libc` | `papp_fs()` |
-| `DISP` | 3 | Surfaces, scaling, tear-free present, zero-copy present, touch | `papp_disp_surface_create`, `papp_disp_present`, `papp_disp_present_ext` |
+| `SYS` | 5 | Logging, time, local time, UTC time, exit, board id, chip revision (v4: picks SIMD code, PIE on v1.x chips, xespv on v3.x), hardware random bytes (v5, also `getentropy`) | `papp_log`, `papp_time_us`, `papp_utc_time`, `papp_exit`, `papp_chip_rev`, `papp_random` |
+| `MEM` | 3 | Tracked allocation from PSRAM, internal or DMA memory; executable code memory for JITs (v2); the slow LP SRAM (v3) | `papp_alloc`, `papp_free`, `papp_code_alloc` |
+| `FS` | 2 | Files, also reachable through stdio with `--libc`; `stat`, `rename`, `rmdir` and folder listing (v2: `opendir`/`readdir`) | `papp_fs()`, `stat`, `opendir` |
+| `DISP` | 4 | Surfaces, scaling, tear-free present, zero-copy present, touch, PPA blits and fills (v4) | `papp_disp_surface_create`, `papp_disp_present`, `papp_disp_blit` |
 | `AUDI` | 1 | Push audio streams at any rate, mixed by the launcher | `papp_audio_open`, `papp_audio_write` |
-| `INPT` | 2 | Gamepads, keyboard, events, analog inputs | `papp_input_gamepad`, `papp_input_poll_event` |
+| `INPT` | 3 | Gamepads, keyboard, events, analog inputs, whether a keyboard is attached (v3) | `papp_input_gamepad`, `papp_input_poll_event`, `papp_input_keyboard` |
 | `THRD` | 1 | Up to 16 threads, plus mutexes, semaphores and queues | `papp_thread_create`, `papp_queue_send` |
-| `UI` | 3 | Content browser, message box, menu, volume overlay | `papp_ui_pick_file`, `papp_ui_menu`, `papp_ui_volume` |
+| `UI` | 4 | Content browser, message box, menu, volume overlay, Wi-Fi picker | `papp_ui_pick_file`, `papp_ui_menu`, `papp_ui_wifi` |
+| `NET` | 1 | Wi-Fi, sockets, TLS, HTTP(S) | `papp_net()` |
+| `BLE` | 2 | Bluetooth LE central and peripheral; pairing with bonds kept on the SD card, encrypted characteristics, descriptors (v2) | `papp_ble()` |
+| `USBH` | 1 | Raw USB host access: control, bulk and interrupt transfers to devices the launcher's pad drivers don't hold | `papp_usbh()` |
+| `PWR` | 1 | Battery voltage, current and charge; pause charging (Tab5) | `papp_pwr()` |
+| `HIDD` | 1 | The board's USB-C as the app's own USB HID device (keyboard, mouse); DevLink is away meanwhile | `papp_hidd()` |
+| `IRQ` | 1 | The board's free header pins and hardware timers, with interrupts on the core you choose: handled in a thread, or by your own `PAPP_FAST` function inside the interrupt | `papp_irq()`, `papp_irq_thread` |
 
 Interfaces are versioned independently. New functions are only ever appended and the version bumped, and a
 breaking change gets a new id, so older apps keep working. Interfaces can be required or optional: when an
@@ -740,14 +802,15 @@ Declare your panel's rotation and the compositor and touch code adapt. Copy
 [boards/guition_p4_43](boards/guition_p4_43) as a start, then build with `idf.py -DLX_BOARD=<id> build`.
 
 Existing `.papp` files run unchanged: the Guition 7" and the M5Stack Tab5 run the same SD card with no app
-rebuilt. [docs/PORTING_GUIDE.md](docs/PORTING_GUIDE.md) is the checklist from that port.
+rebuilt. [docs/PORTING_GUIDE.md](docs/PORTING_GUIDE.md) is the checklist from that port. Before you start, check
+the board qualifies and open an issue: [docs/BOARD_SUPPORT.md](docs/BOARD_SUPPORT.md).
 
 ## Repository layout
 
 ```
 launcher/              ESP-IDF project: main.c + home.c (LVGL home screen)
 boards/<id>/           board packages: guition_p4_43 (4.3"), guition_p4_43_v3 (the 4.3" with a v3.x chip),
-                       guition_p4_7 (7"), m5stack_tab5,
+                       guition_p4_7 (7"), guition_p4_7_v3 (the 7" with a v3.x chip and the 2026 panel), m5stack_tab5,
                        waveshare_p4_35 (Waveshare 3.5" SPI, needs ESP-IDF >= 5.5.5),
                        waveshare_p4_rpi_dsi (Waveshare dev kit + RPi DSI display)
 components/

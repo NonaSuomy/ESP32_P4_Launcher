@@ -1,0 +1,47 @@
+# Guition JC1060P470C 7" with a rev v3.x chip — board-specific sdkconfig fragment
+# (builds guition_p4_7's sources; v3.x chip, always the 2026 "New Panel")
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+# Rev v3.x silicon. v3.2 needs ESP-IDF >= 5.5.5 (Espressif advisory AR2026-004).
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=n
+CONFIG_ESP32P4_REV_MIN_300=y
+# The CPU runs at 400 MHz: the v3 default, 360 is a pre-v3 choice
+# ESP32-C6 on SDIO with the Function EV board wiring: CLK 18, CMD 19, D0-D3 14-17, reset 54
+CONFIG_ESP_HOSTED_P4_DEV_BOARD_FUNC_BOARD=y
+# 10 MHz SDIO: faster links put vertical streaks on the New Panel (Guition's demo and EspControl use 10)
+CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=10000
+# esp_hosted 2.12 takes its SDIO buffer pools from internal RAM; keep them small
+CONFIG_ESP_HOSTED_SDIO_TX_Q_SIZE=12
+CONFIG_ESP_HOSTED_SDIO_RX_Q_SIZE=12
+# The speaker amp's current peaks dip the 3.3 V rail on weak USB supplies
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_5=y
+
+# Bluetooth: Bluedroid (dual mode) on the P4. BLE for apps (BLE interface) with the controller on the C6
+# over esp_hosted (VHCI); Classic (A2DP to speakers) needs a USB Bluetooth dongle (the C6 is LE only).
+# The stack only runs while it is used; its memory comes from PSRAM first.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_CONTROLLER_DISABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=y
+CONFIG_ESP_HOSTED_ENABLE_BT_BLUEDROID=y
+CONFIG_ESP_HOSTED_BLUEDROID_HCI_VHCI=y
+CONFIG_BT_CLASSIC_ENABLED=y
+CONFIG_BT_A2DP_ENABLE=y
+CONFIG_BT_HID_ENABLED=y
+CONFIG_BT_HID_HOST_ENABLED=y
+CONFIG_BT_BLE_ENABLED=y
+CONFIG_BT_GATTS_ENABLE=y
+CONFIG_BT_GATTC_ENABLE=y
+CONFIG_BT_BLE_SMP_ENABLE=y
+CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
+CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n
+CONFIG_BT_BLUEDROID_ESP_COEX_VSC=n
+CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=y
+CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY=y
+CONFIG_BT_GATT_MAX_SR_PROFILES=12
+CONFIG_BT_GATT_MAX_SR_ATTRIBUTES=300
+# Bluetooth gamepads: a failed encryption (a timeout at start-up) must not unpair a pad; lx_bt_pads.c decides
+# CONFIG_BT_BLE_SMP_REMOVE_BOND_ON_PAIR_FAIL_AS_CENTRAL is not set

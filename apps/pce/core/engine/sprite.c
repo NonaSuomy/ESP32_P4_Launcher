@@ -471,4 +471,63 @@ extern int vheight;
 extern char *sbuf[];
 int sprite_usespbg = 0;
 
+/* Rows of the visible area. pce_row_clr: painted with the backdrop (Pal[0]) in the chunk
+ * being rendered, because a sprite behind the background is drawn there; RefreshLine leaves
+ * see-through pixels alone on those rows and paints them on all others. pce_spm_dirty: the
+ * sprite mask row holds values from such a sprite (cleared when a later chunk starts on it).
+ * Without this, see-through pixels show the frame drawn two frames ago (the buffers
+ * alternate) and a stale mask hides sprites. Clearing only these rows instead of whole
+ * chunks: Neutopia drew 60 fps again (one chunk of 166 rows cost it 2-3 ms per frame). */
+#define PCE_ROWS 512
+uchar pce_row_clr[PCE_ROWS];
+static uchar pce_spm_dirty[PCE_ROWS];
+
+static int pce_row_span(int *x0)
+{
+    int w = io.screen_w + 16;
+    *x0 = -8;
+    if (*x0 + w > XBUF_WIDTH - 32) w = XBUF_WIDTH - 32 - *x0;
+    return w;
+}
+
+/* A chunk of rows y1..y2-1 starts: nothing painted yet, stale mask rows cleared */
+void pce_rows_begin(int y1, int y2)
+{
+    int x0, w = pce_row_span(&x0);
+    if (y1 < 0) y1 = 0;
+    if (y2 > PCE_ROWS) y2 = PCE_ROWS;
+    for (int y = y1; y < y2; y++) {
+        pce_row_clr[y] = 0;
+        if (pce_spm_dirty[y]) {
+            if (y < 240) memset(SPM + y * XBUF_WIDTH + x0, 0, w);
+            pce_spm_dirty[y] = 0;
+        }
+    }
+}
+
+/* Before a sprite behind the background is drawn on rows y1..y2-1 */
+void pce_clear_rows(int y1, int y2)
+{
+    int x0, w = pce_row_span(&x0);
+    if (y1 < 0) y1 = 0;
+    if (y2 > 240) y2 = 240;
+    for (int y = y1; y < y2; y++) {
+        if (!pce_row_clr[y]) {
+            memset(osd_gfx_buffer + y * XBUF_WIDTH + x0, Pal[0], w);
+            pce_row_clr[y] = 1;
+        }
+        pce_spm_dirty[y] = 1;
+    }
+}
+
+/* No background on rows y1..y2-1: they are the backdrop, except rows already painted */
+void pce_fill_rows(int y1, int y2)
+{
+    int x0, w = pce_row_span(&x0);
+    if (y1 < 0) y1 = 0;
+    if (y2 > 240) y2 = 240;
+    for (int y = y1; y < y2; y++)
+        if (!pce_row_clr[y]) memset(osd_gfx_buffer + y * XBUF_WIDTH + x0, Pal[0], w);
+}
+
 

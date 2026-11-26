@@ -3,6 +3,7 @@
     
     if (!skipNextFrame)
     if (!UCount) { /* Either we're in frameskip = 0 or we're in the frame to draw */
+        pce_rows_begin(last_display_counter, display_counter + 1);
         if (SpriteON && SPONSwitch)
         {
 #ifdef MY_INLINE_SPRITE

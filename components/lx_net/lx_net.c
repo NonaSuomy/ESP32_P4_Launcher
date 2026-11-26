@@ -1,4 +1,5 @@
 #include "lx_net.h"
+#include "esp_attr.h"     /* EXT_RAM_BSS_ATTR */
 #include "lx_c6.h"
 #include "bsp.h"
 
@@ -59,6 +60,7 @@ static volatile lx_net_state_t s_state = LX_NET_OFF;
 static bool s_started, s_paused, s_want, s_save, s_sntp;
 static int s_retries, s_tz, s_drops, s_last_reason;
 static volatile int64_t s_joined_us;   /* when the link came up without an address yet, 0 = not waiting */
+static volatile int s_sta_chan;        /* channel of the network joined (0: none), for lx_net_channel */
 static char s_ssid[33], s_pass[65], s_ip[16];
 static lx_net_ap_t s_aps[LX_NET_MAX_APS];
 static volatile int s_ap_count = -1;
@@ -197,8 +199,10 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         const wifi_event_sta_connected_t *ev = data;
         ESP_LOGI(TAG, "joined " MACSTR " on channel %d, waiting for an address", MAC2STR(ev->bssid), ev->channel);
         s_joined_us = esp_timer_get_time();
+        s_sta_chan = ev->channel;
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         s_ip[0] = 0;
+        s_sta_chan = 0;
         s_joined_us = 0;
         const wifi_event_sta_disconnected_t *dis = data;
         ESP_LOGW(TAG, "disconnected, reason %d, rssi %d", dis->reason, dis->rssi);
@@ -274,16 +278,27 @@ static void on_sta_start_stop(void *arg, esp_event_base_t base, int32_t id, void
     s_sta_up = true;
 }
 
+static void join(void);
+
 static bool radio_start(void)
 {
     if (s_started) return true;
     esp_netif_init();
     esp_event_loop_create_default();
-    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_START, on_sta_start_stop, NULL);
-    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_STOP, on_sta_start_stop, NULL);
-    s_sta = esp_netif_create_default_wifi_sta();
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    esp_err_t e = esp_wifi_init(&cfg);
+    /* A failed start (no answer from the C6) is retried by the next scan or join: the interface and
+     * the driver are made only once, esp_netif_create_default_wifi_sta asserts on a second STA. */
+    static bool s_wifi_inited;
+    esp_err_t e = ESP_OK;
+    if (!s_sta) {
+        esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_START, on_sta_start_stop, NULL);
+        esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_STOP, on_sta_start_stop, NULL);
+        s_sta = esp_netif_create_default_wifi_sta();
+    }
+    if (!s_wifi_inited) {
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        e = esp_wifi_init(&cfg);
+        s_wifi_inited = e == ESP_OK;
+    }
     if (e == ESP_OK) {
         esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_event, NULL);
         esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_event, NULL);
@@ -297,7 +312,14 @@ static bool radio_start(void)
         return false;
     }
     s_started = true;
-    if (s_state == LX_NET_OFF) s_state = LX_NET_IDLE;
+    if (s_state == LX_NET_NO_RADIO && s_want && s_ssid[0]) {
+        /* a start that worked on a later try: the join the first one couldn't make */
+        s_retries = 0;
+        s_state = LX_NET_CONNECTING;
+        join();
+    } else if (s_state == LX_NET_OFF || s_state == LX_NET_NO_RADIO) {
+        s_state = LX_NET_IDLE;
+    }
     lx_c6_query();
     return true;
 }
@@ -684,6 +706,11 @@ esp_err_t lx_net_ap_start(const char *ssid, const char *password, uint8_t channe
 
 void lx_net_ap_stop(void) { call(CMD_AP_STOP, NULL); }
 
+int lx_net_channel(void)
+{
+    return s_started && !s_paused && s_state == LX_NET_CONNECTED ? s_sta_chan : 0;
+}
+
 void lx_net_info(lx_net_info_t *o)
 {
     memset(o, 0, sizeof(*o));
@@ -735,7 +762,7 @@ void lx_net_tz_set(int index)
 
 /* ── Diagnostic (DevLink "net") ──────────────────────────────── */
 
-static char s_diag[1536];
+static EXT_RAM_BSS_ATTR char s_diag[1536];
 static volatile bool s_diag_busy;
 
 static void diag(const char *fmt, ...)

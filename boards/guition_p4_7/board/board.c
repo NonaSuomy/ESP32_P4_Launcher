@@ -4,6 +4,7 @@
  * their own files. Capability bits are set as each device comes up.
  */
 #include "board_internal.h"
+#include "esp_bit_defs.h"
 #include "board_pins.h"
 
 #include "esp_log.h"
@@ -16,9 +17,18 @@
 
 static const char *TAG = "bsp";
 
+/* boards/guition_p4_7_v3 builds these sources for a rev v3.x chip, under its own id */
+#ifdef BOARD_CHIP_V3
+#define BOARD_ID   "guition_p4_7_v3"
+#define BOARD_NAME "Guition ESP32-P4 7\" 1024x600 (chip v3)"
+#else
+#define BOARD_ID   "guition_p4_7"
+#define BOARD_NAME "Guition ESP32-P4 7\" 1024x600"
+#endif
+
 static bsp_info_t s_info = {
-    .id        = "guition_p4_7",
-    .name      = "Guition ESP32-P4 7\" 1024x600",
+    .id        = BOARD_ID,
+    .name      = BOARD_NAME,
     .caps      = BSP_CAP_USB_HOST,      /* USB OTG HS port; the rest is set at init */
     .display_w = BOARD_LCD_H_RES,
     .display_h = BOARD_LCD_V_RES,
@@ -118,4 +128,11 @@ esp_err_t bsp_sdcard_mount(const char *mount_point)
 bool bsp_sdcard_mounted(void)
 {
     return s_sd_mounted;
+}
+
+/* Pins for apps (IRQ interface): the 2x13 "Expand IO" header JP1 (Guition schematic V1.0; each one driven
+ * and read back on a board). GPIO 20 is on the header too but is the NS4150 amplifier enable. */
+uint64_t bsp_app_gpio_mask(void)
+{
+    return BIT64(1) | BIT64(2) | BIT64(3) | BIT64(4) | BIT64(5) | BIT64(32) | BIT64(33) | BIT64(45) | BIT64(46) | BIT64(47);
 }

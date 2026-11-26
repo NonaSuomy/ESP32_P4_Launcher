@@ -20,6 +20,7 @@
  * and removes apps; its tile shows how many updates are waiting.
  */
 #include "home.h"
+#include "esp_attr.h"     /* EXT_RAM_BSS_ATTR */
 #include "home_ui.h"
 #include "store.h"
 #include "bsp.h"
@@ -31,8 +32,10 @@
 #include "lx_update.h"
 #include "lx_appstore.h"
 #include "lx_net.h"
+#include "lx_bt.h"
 #include "lx_c6.h"
 #include "lx_web.h"
+#include "lx_devlink.h"
 #include "esp_system.h"
 
 #include <ctype.h>
@@ -50,6 +53,8 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_vfs_fat.h"
+#include "ff.h"
+#include "diskio_sdmmc.h"
 #include "driver/temperature_sensor.h"
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
@@ -61,7 +66,7 @@ static const char *TAG = "home";
 #pragma GCC diagnostic ignored "-Wformat-truncation"
 
 #define LAST_APP_FILE "/sd/launcher/last_app.txt"
-#define MAX_APPS      64           /* apps + folders */
+#define APPS_STEP     64           /* the table grows by this many entries (apps + folders) */
 #define MAX_NAME      24           /* folder name */
 #define ICON          88
 
@@ -78,8 +83,9 @@ typedef struct {
     bool is_folder;
 } app_entry_t;
 
-static app_entry_t *s_apps;     /* MAX_APPS, in PSRAM: internal RAM is short at boot (7" board) */
+static app_entry_t *s_apps;     /* in PSRAM: internal RAM is short at boot (7" board) */
 static int s_napps;             /* entries in s_apps */
+static int s_apps_cap;          /* entries allocated; grows by APPS_STEP */
 static int s_ninstalled;        /* of them, apps */
 static char s_folder[MAX_NAME + 8];     /* folder on screen, "" = main page */
 static char s_files_app[160];   /* the Files app: opened by the SD card panel, not a tile */
@@ -91,6 +97,7 @@ static lv_obj_t *s_home, *s_settings;
 static lv_obj_t *s_clk_area;            /* home clock: opens the clock setup (RTC boards) */
 static void on_clk_open(lv_event_t *ev);
 static lv_obj_t *s_clock, *s_date, *s_sd_free, *s_sd_apps, *s_grid, *s_count, *s_title;
+static lv_obj_t *s_sd_title;     /* "SD Card (4-bit)"; orange "(1-bit)" = 4-bit failed (D1-D3 contact) */
 static lv_obj_t *s_sys_cpu, *s_sys_sram, *s_sys_psram, *s_sys_temp, *s_sys_pads, *s_sys_state;
 static lv_obj_t *s_vol_slider, *s_bri_slider, *s_vol_val, *s_bri_val, *s_info;
 static temperature_sensor_handle_t s_tsens;
@@ -98,11 +105,16 @@ static char s_launch[160];      /* set by a click; launched by the task loop */
 static int s_volume = 60, s_brightness = 100;
 static bool s_show_dev;          /* show PAPP_MF_HIDDEN apps */
 static lv_obj_t *s_dev_switch;
+static lv_obj_t *s_auto_btn, *s_auto_val;     /* Settings: the app started at boot */
+static void on_auto_click(lv_event_t *ev);
+static void autostart_show(void);
+static void autostart_load(void);
+static void autostart_moved(const char *from_dir, const char *to_dir);
 
 /* ── Focus (gamepad / keyboard): nearest item in the pressed direction ──── */
 
 #define MAX_FOCUS 160            /* the Store: apps + categories + buttons */
-static lv_obj_t *s_focusable[MAX_FOCUS];
+static EXT_RAM_BSS_ATTR lv_obj_t *s_focusable[MAX_FOCUS];
 static int s_nfocus;
 static lv_obj_t *s_focused;
 
@@ -179,13 +191,28 @@ static size_t app_file_suffix_len(const char *name)
 }
 
 /* Adds the app in dir; false if there is no recognized PAPP2 container */
+/* Makes room for one more entry; false when PSRAM is out (logged once) */
+static bool apps_room(void)
+{
+    if (s_napps < s_apps_cap) return true;
+    app_entry_t *n = heap_caps_realloc(s_apps, (s_apps_cap + APPS_STEP) * sizeof(app_entry_t), MALLOC_CAP_SPIRAM);
+    if (!n) {
+        ESP_LOGW(TAG, "no memory for more than %d apps and folders", s_apps_cap);
+        return false;
+    }
+    s_apps = n;
+    s_apps_cap += APPS_STEP;
+    return true;
+}
+
+/* Adds the app in dir; false if there is no .papp in it */
 static bool scan_app(const char *dir, const char *parent)
 {
     bool found = false;
     DIR *sd = opendir(dir);
     if (!sd) return true;
     struct dirent *fe;
-    while (s_napps < MAX_APPS && (fe = readdir(sd))) {
+    while (apps_room() && (fe = readdir(sd))) {
         size_t n = strlen(fe->d_name);
         size_t suffix_len = app_file_suffix_len(fe->d_name);
         if (!suffix_len) continue;
@@ -227,11 +254,11 @@ static void scan_dir(const char *base, const char *parent)
     DIR *d = opendir(base);
     if (!d) return;
     struct dirent *de;
-    while (s_napps < MAX_APPS && (de = readdir(d))) {
+    while (apps_room() && (de = readdir(d))) {
         if (de->d_name[0] == '.' || de->d_type != DT_DIR) continue;
         char dir[128];
         snprintf(dir, sizeof(dir), "%s/%s", base, de->d_name);
-        if (scan_app(dir, parent) || parent[0] || s_napps >= MAX_APPS) continue;
+        if (scan_app(dir, parent) || parent[0] || !apps_room()) continue;
         app_entry_t *e = &s_apps[s_napps++];        /* no app in it: a folder */
         memset(e, 0, sizeof(*e));
         e->is_folder = true;
@@ -286,8 +313,7 @@ static void scan_apps(void)
     community_folder();
     s_napps = s_ninstalled = 0;
     s_files_app[0] = 0;
-    if (!s_apps) s_apps = heap_caps_calloc(MAX_APPS, sizeof(app_entry_t), MALLOC_CAP_SPIRAM);
-    if (!s_apps) return;
+    if (!apps_room()) return;
     scan_dir(APPS_DIR, "");
     bool here = false;
     for (int i = 0; i < s_napps; i++) here |= s_apps[i].is_folder && strcmp(s_apps[i].name, s_folder) == 0;
@@ -376,10 +402,14 @@ static bool s_long_press;        /* the click ending a long press is not a click
 static void folder_enter(const char *name);
 static void tile_menu(const app_entry_t *e);
 
+static bool s_find_pick;         /* the search screen chooses the app started at boot */
+static void autostart_pick(const char *path);
+
 static void on_tile_click(lv_event_t *ev)
 {
     const app_entry_t *e = lv_event_get_user_data(ev);
     if (s_long_press) s_long_press = false;
+    else if (s_find_pick) autostart_pick(e->path);
     else if (e == &s_store_tile) store_open(NULL);
     else if (e->is_folder) folder_enter(e->name);
     else snprintf(s_launch, sizeof(s_launch), "%s", e->path);
@@ -444,6 +474,51 @@ static void badge_update(void)
     else lv_obj_add_flag(s_store_badge, LV_OBJ_FLAG_HIDDEN);
 }
 
+/* A small red dot at the top-right corner of o (hidden until shown) */
+static lv_obj_t *red_dot(lv_obj_t *o, int size)
+{
+    lv_obj_t *d = lv_obj_create(o);
+    lv_obj_remove_style_all(d);
+    lv_obj_remove_flag(d, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(d, LV_OBJ_FLAG_IGNORE_LAYOUT | LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_size(d, size, size);
+    lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(d, C_RED, 0);
+    lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(d, 2, 0);
+    lv_obj_set_style_border_color(d, C_BG_TOP, 0);
+    /* aligned to the content area: undo the padding to reach the corner */
+    lv_obj_align(d, LV_ALIGN_TOP_RIGHT, lv_obj_get_style_pad_right(o, 0) - 3,
+                 3 - lv_obj_get_style_pad_top(o, 0));
+    return d;
+}
+
+/* An app's tile: icon + name; a click starts it (or opens the folder / Store) */
+static lv_obj_t *app_tile(lv_obj_t *parent, app_entry_t *e, bool menu)
+{
+    lv_obj_t *t = lv_obj_create(parent);
+    lv_obj_remove_style_all(t);
+    lv_obj_set_size(t, 118, 128);
+    lv_obj_remove_flag(t, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(t, LV_OBJ_FLAG_CLICKABLE);
+    focus_style(t, 18);
+    lv_obj_set_style_bg_opa(t, LV_OPA_COVER, LV_STATE_FOCUSED);
+    lv_obj_set_style_bg_color(t, C_FOCUS, LV_STATE_FOCUSED);
+    lv_obj_set_style_bg_opa(t, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(t, C_FOCUS, LV_STATE_PRESSED);
+    lv_obj_t *ic = make_icon(t, e, ICON);
+    lv_obj_align(ic, LV_ALIGN_TOP_MID, 0, 6);
+    lv_obj_t *l = label(t, &lv_font_montserrat_16, C_TEXT, e->name);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(l, 112);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(l, LV_ALIGN_BOTTOM_MID, 0, -6);
+    lv_obj_set_user_data(t, e);
+    lv_obj_add_event_cb(t, on_tile_click, LV_EVENT_CLICKED, e);
+    if (menu) lv_obj_add_event_cb(t, on_tile_long, LV_EVENT_LONG_PRESSED, e);
+    return t;
+}
+
 static void build_grid(void)
 {
     lv_obj_clean(s_grid);
@@ -453,26 +528,7 @@ static void build_grid(void)
         app_entry_t *e = i < 0 ? &s_store_tile : &s_apps[i];
         if (i < 0 ? s_folder[0] != 0 : strcmp(e->parent, s_folder) != 0) continue;
         shown += i >= 0;
-        lv_obj_t *t = lv_obj_create(s_grid);
-        lv_obj_remove_style_all(t);
-        lv_obj_set_size(t, 118, 128);
-        lv_obj_remove_flag(t, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(t, LV_OBJ_FLAG_CLICKABLE);
-        focus_style(t, 18);
-        lv_obj_set_style_bg_opa(t, LV_OPA_COVER, LV_STATE_FOCUSED);
-        lv_obj_set_style_bg_color(t, C_FOCUS, LV_STATE_FOCUSED);
-        lv_obj_set_style_bg_opa(t, LV_OPA_COVER, LV_STATE_PRESSED);
-        lv_obj_set_style_bg_color(t, C_FOCUS, LV_STATE_PRESSED);
-        lv_obj_t *ic = make_icon(t, e, ICON);
-        lv_obj_align(ic, LV_ALIGN_TOP_MID, 0, 6);
-        lv_obj_t *l = label(t, &lv_font_montserrat_16, C_TEXT, e->name);
-        lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
-        lv_obj_set_width(l, 112);
-        lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(l, LV_ALIGN_BOTTOM_MID, 0, -6);
-        lv_obj_set_user_data(t, e);
-        lv_obj_add_event_cb(t, on_tile_click, LV_EVENT_CLICKED, e);
-        lv_obj_add_event_cb(t, on_tile_long, LV_EVENT_LONG_PRESSED, e);
+        lv_obj_t *t = app_tile(s_grid, e, true);
         if (i < 0) {
             s_store_badge = label(t, &lv_font_montserrat_16, C_TEXT, "");
             lv_obj_set_style_bg_opa(s_store_badge, LV_OPA_COVER, 0);
@@ -505,7 +561,8 @@ static void build_grid(void)
     }
 }
 
-static lv_obj_t *s_gear, *s_sd;
+static lv_obj_t *s_gear, *s_sd, *s_find_btn;
+static lv_obj_t *s_gear_dot, *s_upd_dot;      /* a launcher update is waiting */
 
 static void home_focus_list(void)
 {
@@ -514,6 +571,7 @@ static void home_focus_list(void)
     lv_obj_remove_state(s_gear, LV_STATE_FOCUSED);      /* s_focused may have been reset */
     lv_obj_remove_state(s_count, LV_STATE_FOCUSED);
     lv_obj_remove_state(s_sd, LV_STATE_FOCUSED);
+    lv_obj_remove_state(s_find_btn, LV_STATE_FOCUSED);
     if (s_clk_area) lv_obj_remove_state(s_clk_area, LV_STATE_FOCUSED);
     for (uint32_t i = 0; i < lv_obj_get_child_count(s_grid); i++) {
         lv_obj_t *c = lv_obj_get_child(s_grid, i);
@@ -522,6 +580,7 @@ static void home_focus_list(void)
     focus_add(s_gear);
     focus_add(s_sd);
     focus_add(s_count);
+    focus_add(s_find_btn);
     if (s_clk_area) focus_add(s_clk_area);
     bool still_there = false;
     for (int i = 0; i < s_nfocus; i++) still_there |= s_focusable[i] == keep;
@@ -555,6 +614,7 @@ static void home_view(const char *focus)
 }
 
 static void on_count_click(lv_event_t *ev);
+static void on_find_click(lv_event_t *ev);
 static void on_sd_click(lv_event_t *ev);
 
 static void build_home(void)
@@ -596,8 +656,8 @@ static void build_home(void)
     lv_obj_add_event_cb(sd, on_sd_click, LV_EVENT_CLICKED, NULL);
     lv_obj_t *sdi = label(sd, &lv_font_montserrat_28, C_GREEN, LV_SYMBOL_SD_CARD);
     lv_obj_set_pos(sdi, 14, 20);
-    lv_obj_t *sdt = label(sd, &lv_font_montserrat_16, C_TEXT, "SD Card");
-    lv_obj_set_pos(sdt, 52, 6);
+    s_sd_title = label(sd, &lv_font_montserrat_16, C_TEXT, "SD Card");
+    lv_obj_set_pos(s_sd_title, 52, 6);
     s_sd_free = label(sd, &lv_font_montserrat_16, C_GREEN, "");
     lv_obj_set_pos(s_sd_free, 52, 28);
     s_sd_apps = label(sd, &lv_font_montserrat_14, C_DIM, "");
@@ -616,10 +676,45 @@ static void build_home(void)
     lv_obj_t *gi = label(s_gear, &lv_font_montserrat_28, C_TEXT, LV_SYMBOL_SETTINGS);
     lv_obj_center(gi);
     lv_obj_add_event_cb(s_gear, on_gear_click, LV_EVENT_CLICKED, NULL);
+    s_gear_dot = red_dot(s_gear, 16);
 
     /* Applications */
     s_title = label(s_home, &lv_font_montserrat_20, C_TEXT, "Applications");
     lv_obj_set_pos(s_title, 20, 100);
+    lv_label_set_long_mode(s_title, LV_LABEL_LONG_DOT);    /* a long folder name stops before Search */
+    lv_obj_set_width(s_title, 270 + s_dx / 2);
+
+    s_find_btn = lv_obj_create(s_home);                    /* Search: a field-like pill */
+    lv_obj_remove_style_all(s_find_btn);
+    lv_obj_remove_flag(s_find_btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_pos(s_find_btn, 300 + s_dx / 2, 95);
+    lv_obj_set_size(s_find_btn, 200, 30);
+    lv_obj_add_flag(s_find_btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(s_find_btn, 4);
+    lv_obj_set_style_bg_opa(s_find_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_find_btn, lv_color_hex(0x16243D), 0);
+    lv_obj_set_style_bg_color(s_find_btn, C_FOCUS, LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(s_find_btn, 1, 0);
+    lv_obj_set_style_border_color(s_find_btn, C_BORDER, 0);
+    focus_style(s_find_btn, LV_RADIUS_CIRCLE);
+    lv_obj_t *lens = lv_obj_create(s_find_btn);            /* magnifier: a ring and a handle */
+    lv_obj_remove_style_all(lens);
+    lv_obj_remove_flag(lens, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_pos(lens, 13, 6);
+    lv_obj_set_size(lens, 13, 13);
+    lv_obj_set_style_radius(lens, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(lens, 2, 0);
+    lv_obj_set_style_border_color(lens, C_DIM, 0);
+    static const lv_point_precise_t handle[] = { { 0, 0 }, { 5, 5 } };
+    lv_obj_t *hl = lv_line_create(s_find_btn);
+    lv_line_set_points(hl, handle, 2);
+    lv_obj_set_pos(hl, 23, 17);
+    lv_obj_set_style_line_width(hl, 3, 0);
+    lv_obj_set_style_line_rounded(hl, true, 0);
+    lv_obj_set_style_line_color(hl, C_DIM, 0);
+    lv_obj_t *ft = label(s_find_btn, &lv_font_montserrat_16, C_DIM, "Search apps");
+    lv_obj_set_pos(ft, 40, 5);
+    lv_obj_add_event_cb(s_find_btn, on_find_click, LV_EVENT_CLICKED, NULL);
     s_count = label(s_home, &lv_font_montserrat_16, lv_color_hex(0x6F8FC0), "");
     lv_obj_align(s_count, LV_ALIGN_TOP_RIGHT, -22, 103);
     lv_obj_add_flag(s_count, LV_OBJ_FLAG_CLICKABLE);
@@ -633,7 +728,8 @@ static void build_home(void)
     lv_obj_set_size(s_grid, 780 + s_dx, 292 + s_dy);
     lv_obj_set_flex_flow(s_grid, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_style_pad_all(s_grid, 6, 0);
-    lv_obj_set_style_pad_column(s_grid, 8, 0);
+    /* Fit all eight 118px touch tiles on 1024px boards without shrinking them. */
+    lv_obj_set_style_pad_column(s_grid, 4, 0);
     lv_obj_set_style_pad_row(s_grid, 6, 0);
     lv_obj_set_scroll_dir(s_grid, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_grid, LV_SCROLLBAR_MODE_ACTIVE);
@@ -881,12 +977,13 @@ static void on_dev_switch(lv_event_t *ev)
 
 static lv_obj_t *s_wifi_btn, *s_wifi_scr, *s_wifi_status, *s_wifi_list, *s_wifi_tz, *s_wifi_chip;
 static lv_obj_t *s_wifi_scan, *s_wifi_forget, *s_wifi_back, *s_pw_scr, *s_pw_title, *s_pw_text;
+static lv_obj_t *s_pw_kb, *s_find_kb;   /* the on-screen keyboards (onscreen_keyboards) */
 static lv_obj_t *s_web_btn, *s_web_info;
 static bool s_wifi_scanning;
 enum { PW_WIFI, PW_NEW_FOLDER, PW_RENAME };     /* s_pw_scr also asks for folder names */
 static int s_pw_mode;
 static void folder_name_done(const char *name);
-static lx_net_ap_t s_wifi_aps[LX_NET_MAX_APS];
+static EXT_RAM_BSS_ATTR lx_net_ap_t s_wifi_aps[LX_NET_MAX_APS];
 static int s_wifi_sel;
 
 static void wifi_focus(void)
@@ -1060,7 +1157,7 @@ static void build_wifi_screens(void)
     lv_textarea_set_one_line(s_pw_text, true);
     lv_textarea_set_password_mode(s_pw_text, true);
     lv_textarea_set_max_length(s_pw_text, 63);
-    lv_obj_t *kb = lv_keyboard_create(s_pw_scr);
+    lv_obj_t *kb = s_pw_kb = lv_keyboard_create(s_pw_scr);
     lv_obj_set_size(kb, 800 + s_dx, 360);
     lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_text_font(kb, &lv_font_montserrat_28, LV_PART_ITEMS);    /* the default is tiny on keys this big */
@@ -1309,6 +1406,169 @@ static void wifi_tick(void)
     wifi_focus();
 }
 
+/* ── Bluetooth: speaker and gamepads (Bluedroid boards with a USB Bluetooth dongle) ─────
+ * The launcher's sound goes to the speaker while it is connected (lx_bt_speaker.c); paired
+ * gamepads are players like USB ones (lx_bt_pads.c). One scan for both: a peripheral picked
+ * from the list pairs as a controller, anything else as the speaker. */
+
+static lv_obj_t *s_bt_btn, *s_bt_scr, *s_bt_status, *s_bt_pads, *s_bt_list, *s_bt_note;
+static lv_obj_t *s_bt_back, *s_bt_scan, *s_bt_onoff, *s_bt_forget, *s_bt_padforget;
+static bool s_bt_scanning;
+static EXT_RAM_BSS_ATTR lx_bt_found_t s_bt_found[LX_BT_MAX_FOUND];
+
+static void bt_focus(void)
+{
+    lv_obj_t *keep = s_focused;
+    bool fixed = keep == s_bt_back || keep == s_bt_scan || keep == s_bt_onoff || keep == s_bt_forget ||
+                 keep == s_bt_padforget;
+    if (fixed) lv_obj_remove_state(keep, LV_STATE_FOCUSED);
+    focus_clear_list();
+    focus_add(s_bt_back);
+    focus_add(s_bt_scan);
+    focus_add(s_bt_onoff);
+    focus_add(s_bt_forget);
+    focus_add(s_bt_padforget);
+    for (uint32_t i = 0; i < lv_obj_get_child_count(s_bt_list); i++)
+        focus_add(lv_obj_get_child(s_bt_list, i));
+    s_focused = NULL;
+    focus_set(fixed && lv_screen_active() == s_bt_scr ? keep : s_bt_scan);
+}
+
+static void on_bt_scan(lv_event_t *ev)
+{
+    lv_obj_clean(s_bt_list);
+    if (lx_bt_speaker_scan()) {
+        s_bt_scanning = true;
+        lv_list_add_text(s_bt_list, "Searching... (put the speaker or controller in pairing mode)");
+    } else {
+        lv_list_add_text(s_bt_list, "Plug a USB Bluetooth dongle into the board first");
+    }
+    bt_focus();
+}
+
+static void on_bt_open(lv_event_t *ev)
+{
+    lv_screen_load(s_bt_scr);
+    lv_obj_clean(s_bt_list);
+    bt_focus();
+    lx_bt_pad_t pads[1];
+    if (!lx_bt_speaker_name()[0] && !lx_bt_pads_list(pads, 1) && lx_bt_dongle_present()) on_bt_scan(NULL);
+}
+
+static void on_bt_back(lv_event_t *ev) { show_settings(); }
+
+static void on_bt_onoff(lv_event_t *ev)
+{
+    if (lx_bt_speaker_name()[0]) lx_bt_speaker_enable(!lx_bt_speaker_enabled());
+}
+
+static void on_bt_forget(lv_event_t *ev) { lx_bt_speaker_forget(); }
+static void on_bt_padforget(lv_event_t *ev) { lx_bt_pads_forget_all(); }
+
+static void on_bt_pick(lv_event_t *ev)
+{
+    int i = (int)(intptr_t)lv_event_get_user_data(ev);
+    if (s_bt_found[i].hid) lx_bt_pads_pair(&s_bt_found[i]);
+    else lx_bt_speaker_pick(s_bt_found[i].addr, s_bt_found[i].name);
+}
+
+static void build_bt_screen(void)
+{
+    s_bt_scr = lv_obj_create(NULL);
+    lv_obj_remove_flag(s_bt_scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(s_bt_scr, C_BG_TOP, 0);
+    lv_obj_set_style_bg_grad_color(s_bt_scr, C_BG_BOTTOM, 0);
+    lv_obj_set_style_bg_grad_dir(s_bt_scr, LV_GRAD_DIR_VER, 0);
+    s_bt_back = wifi_button(s_bt_scr, 16, 14, 56, LV_SYMBOL_LEFT, on_bt_back);
+    lv_obj_t *t = label(s_bt_scr, &lv_font_montserrat_28, C_TEXT, "Bluetooth");
+    lv_obj_set_pos(t, 92, 20);
+    s_bt_status = label(s_bt_scr, &lv_font_montserrat_16, C_DIM, "");
+    lv_obj_set_pos(s_bt_status, 24, 70);
+    lv_obj_set_width(s_bt_status, 752 + s_dx);
+    lv_label_set_long_mode(s_bt_status, LV_LABEL_LONG_DOT);
+    s_bt_pads = label(s_bt_scr, &lv_font_montserrat_16, C_DIM, "");
+    lv_obj_set_pos(s_bt_pads, 24, 94);
+    lv_obj_set_width(s_bt_pads, 752 + s_dx);
+    lv_label_set_long_mode(s_bt_pads, LV_LABEL_LONG_DOT);
+    s_bt_scan = wifi_button(s_bt_scr, 24, 122, 120, "Scan", on_bt_scan);
+    s_bt_onoff = wifi_button(s_bt_scr, 156, 122, 170, "Connect", on_bt_onoff);
+    s_bt_forget = wifi_button(s_bt_scr, 338, 122, 210, "Forget speaker", on_bt_forget);
+    s_bt_padforget = wifi_button(s_bt_scr, 560, 122, 216 + s_dx, "Forget controllers", on_bt_padforget);
+    s_bt_list = lv_list_create(s_bt_scr);
+    lv_obj_set_pos(s_bt_list, 24, 178);
+    lv_obj_set_size(s_bt_list, 752 + s_dx, 264 + s_dy);
+    lv_obj_set_style_bg_color(s_bt_list, C_PANEL, 0);
+    lv_obj_set_style_border_color(s_bt_list, C_BORDER, 0);
+    s_bt_note = label(s_bt_scr, &lv_font_montserrat_16, C_DIM, "");
+    lv_obj_set_pos(s_bt_note, 24, 450 + s_dy);
+    lv_obj_set_width(s_bt_note, 752 + s_dx);
+    lv_label_set_long_mode(s_bt_note, LV_LABEL_LONG_DOT);
+}
+
+static void bt_tick(void)
+{
+    static int64_t last;
+    int64_t now = esp_timer_get_time();
+    if (!s_bt_scr || lv_screen_active() != s_bt_scr || now - last < 300000) return;
+    last = now;
+    char buf[128];
+    const char *spk = lx_bt_speaker_name();
+    static const char *const k_state[] = {
+        [LX_BT_SPK_OFF] = "off", [LX_BT_SPK_NO_DONGLE] = "waiting for a USB Bluetooth dongle",
+        [LX_BT_SPK_CONNECTING] = "connecting...", [LX_BT_SPK_CONNECTED] = "connected",
+        [LX_BT_SPK_PLAYING] = "playing: the launcher's sound goes here",
+        [LX_BT_SPK_RETRY] = "not connected, trying again",
+    };
+    lx_bt_pad_t pads[LX_BT_MAX_PADS];
+    int np = lx_bt_pads_list(pads, LX_BT_MAX_PADS), linked = 0;
+    for (int i = 0; i < np; i++) linked += pads[i].connected;
+    if (!lx_bt_dongle_present())
+        snprintf(buf, sizeof(buf), LV_SYMBOL_WARNING " No USB Bluetooth dongle. The Wi-Fi chip has no Bluetooth audio.");
+    else if (!spk[0])
+        snprintf(buf, sizeof(buf), LV_SYMBOL_AUDIO " %s. No speaker yet: Scan and pick one.", lx_bt_dongle_name());
+    else if (lx_bt_speaker_state() == LX_BT_SPK_RETRY && linked)     /* lx_bt_speaker.c: slower calls then */
+        snprintf(buf, sizeof(buf), LV_SYMBOL_AUDIO " %s: not connected. With a controller connected it "
+                 "is tried every minute or two, while nobody plays (switch the speaker on, or Disconnect + Connect "
+                 "to try now)", spk);
+    else
+        snprintf(buf, sizeof(buf), LV_SYMBOL_AUDIO " %s: %s", spk, k_state[lx_bt_speaker_state()]);
+    lv_label_set_text(s_bt_status, buf);
+    if (lx_bt_pads_pairing())
+        snprintf(buf, sizeof(buf), LV_SYMBOL_KEYBOARD " Pairing the controller...");
+    else if (!np)
+        snprintf(buf, sizeof(buf), LV_SYMBOL_KEYBOARD " No controllers yet: put one in pairing mode, Scan and pick it.");
+    else {
+        int o = snprintf(buf, sizeof(buf), LV_SYMBOL_KEYBOARD " ");
+        for (int i = 0; i < np && o < (int)sizeof(buf); i++)
+            o += snprintf(buf + o, sizeof(buf) - o, "%s%.20s (%s)", i ? ", " : "", pads[i].name,
+                          pads[i].connected ? "connected" : "press its home button");
+    }
+    lv_label_set_text(s_bt_pads, buf);
+    lv_label_set_text(lv_obj_get_child(s_bt_onoff, 0), lx_bt_speaker_enabled() ? "Disconnect" : "Connect");
+    lv_label_set_text(s_bt_note, lx_bt_pads_error()[0] ? lx_bt_pads_error() : lx_bt_speaker_error());
+    if (!s_bt_scanning) return;
+    int n = lx_bt_speaker_results(s_bt_found, LX_BT_MAX_FOUND);
+    if (n < 0) return;
+    s_bt_scanning = false;
+    lv_obj_clean(s_bt_list);
+    for (int pass = 0; pass < 3; pass++)            /* speakers and headphones, controllers, the rest */
+        for (int i = 0; i < n; i++) {
+            const lx_bt_found_t *f = &s_bt_found[i];
+            if ((f->audio ? 0 : f->hid ? 1 : 2) != pass) continue;
+            const char *what = f->audio ? "" : f->hid ? (f->ble ? ", BLE controller" : ", controller") : ", not audio";
+            if (f->name[0]) snprintf(buf, sizeof(buf), "%s  (%d dBm%s)", f->name, f->rssi, what);
+            else snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X  (%d dBm%s)", f->addr[0], f->addr[1],
+                          f->addr[2], f->addr[3], f->addr[4], f->addr[5], f->rssi, what);
+            lv_obj_t *b = lv_list_add_button(s_bt_list, f->audio ? LV_SYMBOL_AUDIO : f->hid ? LV_SYMBOL_KEYBOARD
+                                                                                  : LV_SYMBOL_BLUETOOTH, buf);
+            lv_obj_set_style_outline_width(b, 2, LV_STATE_FOCUSED);
+            lv_obj_set_style_outline_color(b, C_ACCENT, LV_STATE_FOCUSED);
+            lv_obj_add_event_cb(b, on_bt_pick, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        }
+    if (!n) lv_list_add_text(s_bt_list, "Nothing found. Is the speaker or controller in pairing mode?");
+    bt_focus();
+}
+
 static lv_obj_t *s_update_btn;
 static void on_upd_check(lv_event_t *ev);
 enum { ACT_CLOSE, ACT_OPEN, ACT_RENAME, ACT_DELETE, ACT_DELETE_YES, ACT_PICK, ACT_OUT, ACT_NEW_MOVE, ACT_FORGET,
@@ -1345,17 +1605,35 @@ static void build_settings(void)
     lv_obj_t *dev = panel(s_settings, 24, 220, 752 + s_dx, 52, 14);
     lv_obj_t *di = label(dev, &lv_font_montserrat_24, C_ACCENT, LV_SYMBOL_LIST);
     lv_obj_set_pos(di, 18, 13);
-    lv_obj_t *dt = label(dev, &lv_font_montserrat_20, C_TEXT, "Show developer apps");
+    lv_obj_t *dt = label(dev, &lv_font_montserrat_20, C_TEXT, "Developer apps");
     lv_obj_set_pos(dt, 60, 14);
     s_dev_switch = lv_switch_create(dev);
-    lv_obj_set_pos(s_dev_switch, 664 + s_dx, 10);
+    lv_obj_set_pos(s_dev_switch, 228, 10);
+    /* Start at boot: the app picked in the search screen (autostart_pick), or none */
+    lv_obj_t *at = label(dev, &lv_font_montserrat_20, C_TEXT, LV_SYMBOL_PLAY " At boot");
+    lv_obj_set_pos(at, 330, 14);
+    s_auto_btn = lv_button_create(dev);
+    lv_obj_set_pos(s_auto_btn, 460, 6);
+    lv_obj_set_size(s_auto_btn, 280 + s_dx, 40);
+    lv_obj_set_style_bg_color(s_auto_btn, C_BLUE, 0);
+    lv_obj_set_style_outline_width(s_auto_btn, 3, LV_STATE_FOCUSED);
+    lv_obj_set_style_outline_color(s_auto_btn, C_ACCENT, LV_STATE_FOCUSED);
+    lv_obj_set_style_outline_pad(s_auto_btn, 3, LV_STATE_FOCUSED);
+    s_auto_val = label(s_auto_btn, &lv_font_montserrat_20, C_TEXT, "");
+    lv_obj_set_width(s_auto_val, 260 + s_dx);
+    lv_label_set_long_mode(s_auto_val, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(s_auto_val, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(s_auto_val);
+    lv_obj_add_event_cb(s_auto_btn, on_auto_click, LV_EVENT_CLICKED, NULL);
+    autostart_show();
     lv_obj_set_style_bg_color(s_dev_switch, C_BLUE, LV_PART_INDICATOR | LV_STATE_CHECKED);
     lv_obj_set_style_outline_width(s_dev_switch, 3, LV_STATE_FOCUSED);
     lv_obj_set_style_outline_color(s_dev_switch, C_ACCENT, LV_STATE_FOCUSED);
     lv_obj_set_style_outline_pad(s_dev_switch, 6, LV_STATE_FOCUSED);
     if (s_show_dev) lv_obj_add_state(s_dev_switch, LV_STATE_CHECKED);
     lv_obj_add_event_cb(s_dev_switch, on_dev_switch, LV_EVENT_VALUE_CHANGED, NULL);
-    int bw = (752 + s_dx - 2 * 10) / 3;        /* three buttons share the row */
+    int nb = lx_bt_supported() ? 4 : 3;        /* the buttons that share the row */
+    int bw = (752 + s_dx - (nb - 1) * 10) / nb;
     s_map_btn = lv_button_create(s_settings);
     lv_obj_set_pos(s_map_btn, 24, 278);
     lv_obj_set_size(s_map_btn, bw, 52);
@@ -1376,8 +1654,20 @@ static void build_settings(void)
     lv_obj_center(label(s_wifi_btn, &lv_font_montserrat_20, C_TEXT, LV_SYMBOL_WIFI " Wi-Fi"));
     lv_obj_add_event_cb(s_wifi_btn, on_wifi_open, LV_EVENT_CLICKED, NULL);
     build_wifi_screens();
+    if (lx_bt_supported()) {
+        s_bt_btn = lv_button_create(s_settings);
+        lv_obj_set_pos(s_bt_btn, 24 + 2 * (bw + 10), 278);
+        lv_obj_set_size(s_bt_btn, bw, 52);
+        lv_obj_set_style_bg_color(s_bt_btn, C_BLUE, 0);
+        lv_obj_set_style_outline_width(s_bt_btn, 3, LV_STATE_FOCUSED);
+        lv_obj_set_style_outline_color(s_bt_btn, C_ACCENT, LV_STATE_FOCUSED);
+        lv_obj_set_style_outline_pad(s_bt_btn, 3, LV_STATE_FOCUSED);
+        lv_obj_center(label(s_bt_btn, &lv_font_montserrat_20, C_TEXT, LV_SYMBOL_BLUETOOTH " Bluetooth"));
+        lv_obj_add_event_cb(s_bt_btn, on_bt_open, LV_EVENT_CLICKED, NULL);
+        build_bt_screen();
+    }
     s_update_btn = lv_button_create(s_settings);
-    lv_obj_set_pos(s_update_btn, 24 + 2 * (bw + 10), 278);
+    lv_obj_set_pos(s_update_btn, 24 + (nb - 1) * (bw + 10), 278);
     lv_obj_set_size(s_update_btn, bw, 52);
     lv_obj_set_style_bg_color(s_update_btn, C_BLUE, 0);
     lv_obj_set_style_outline_width(s_update_btn, 3, LV_STATE_FOCUSED);
@@ -1385,6 +1675,7 @@ static void build_settings(void)
     lv_obj_set_style_outline_pad(s_update_btn, 3, LV_STATE_FOCUSED);
     lv_obj_center(label(s_update_btn, &lv_font_montserrat_20, C_TEXT, LV_SYMBOL_DOWNLOAD " Update"));
     lv_obj_add_event_cb(s_update_btn, on_upd_check, LV_EVENT_CLICKED, NULL);
+    s_upd_dot = red_dot(s_update_btn, 16);
 
     lv_obj_t *info = panel(s_settings, 24, 336, 752 + s_dx, 136 + s_dy, 14);
     s_info = label(info, &lv_font_montserrat_14, C_DIM, "");
@@ -1398,19 +1689,26 @@ static void refresh_info(void)
     const bsp_info_t *b = bsp_info();
     uint64_t total = 0, free_b = 0;
     esp_vfs_fat_info("/sd", &total, &free_b);
-    char buf[512], batt[32] = "";
+    char buf[512], batt[48] = "";
     int mv = bsp_battery_mv();
-    if (mv >= 0) snprintf(batt, sizeof(batt), "   Battery pin %.2f V", mv / 1000.0);   /* -1: none */
+    bsp_power_t pw;
+    if (bsp_power_read(&pw) == ESP_OK)                     /* the whole pack and its current */
+        snprintf(batt, sizeof(batt), "   Battery %.2f V %+d mA", pw.pack_mv / 1000.0, pw.ma);
+    else if (mv >= 0) snprintf(batt, sizeof(batt), "   Battery pin %.2f V", mv / 1000.0);   /* -1: none */
+    /* the SD bus width: "(1-bit, 4-bit failed)" = the card was moved to 1 bit (D1-D3 contact) */
+    char bus[32] = "";
+    int bits = ff_sdmmc_bus_width();
+    if (bits) snprintf(bus, sizeof(bus), "  (%d-bit%s)", bits, ff_sdmmc_bus_fell_back() ? ", 4-bit failed" : "");
     snprintf(buf, sizeof(buf),
              "Board         %s\n"
              "Launcher      v%s   (app ABI %s, ESP-IDF %s)\n"
              "Memory        %u KB internal free,  %u KB PSRAM free\n"
-             "SD card       %.1f GB free of %.1f GB,  %d apps%s\n"
+             "SD card       %.1f GB free of %.1f GB,  %d apps%s%s\n"
              "Input         %s",
              b->name, LX_LAUNCHER_VERSION, LX_ABI_STRING, esp_get_idf_version(),
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
-             free_b / 1e9, total / 1e9, s_ninstalled, batt, "");
+             free_b / 1e9, total / 1e9, s_ninstalled, bus, batt, "");
     size_t n = strlen(buf);
     lx_input_describe(buf + n, sizeof(buf) - n);
     if (!buf[n]) snprintf(buf + n, sizeof(buf) - n, "no gamepad or keyboard");
@@ -1426,22 +1724,30 @@ static void show_settings(void)
     focus_add(s_vol_slider);
     focus_add(s_bri_slider);
     focus_add(s_dev_switch);
+    focus_add(s_auto_btn);
     focus_add(s_map_btn);
     focus_add(s_wifi_btn);
+    if (s_bt_btn) focus_add(s_bt_btn);
     focus_add(s_update_btn);
     for (int i = 0; i < s_nfocus; i++)      /* back from Wi-Fi or a dialog: no ring left on the old one */
         lv_obj_remove_state(s_focusable[i], LV_STATE_FOCUSED);
     focus_set(s_vol_slider);
 }
 
-static uint32_t s_web_seen;     /* file manager changes already on the grid */
+static uint32_t s_web_seen;     /* file manager + DevLink changes already on the grid */
+
+/* App files changed from outside: web file manager or DevLink (papp_dev put/rm/mv) */
+static uint32_t files_changed(void)
+{
+    return lx_web_changes() + lx_devlink_app_changes();
+}
 
 void show_home(void)
 {
     if (s_focused) lv_obj_remove_state(s_focused, LV_STATE_FOCUSED);    /* else it stays lit on Settings */
     lv_screen_load(s_home);
-    if (store_take_changed() | (lx_web_changes() != s_web_seen)) {
-        s_web_seen = lx_web_changes();
+    if (store_take_changed() | (files_changed() != s_web_seen)) {
+        s_web_seen = files_changed();
         scan_apps();
     }
     build_grid();
@@ -1522,6 +1828,140 @@ static void folder_leave(void)
     home_show(path);
 }
 
+/* ── Search: every app on the card, in any folder, by a part of its name ──
+ * Opened from the pill in the Applications row, or by typing a letter on a USB
+ * keyboard on the home screen. The list follows the text; Enter starts the
+ * focused (or first) result. */
+
+static lv_obj_t *s_find_scr, *s_find_text, *s_find_grid, *s_find_note, *s_find_back, *s_find_none;
+
+static bool name_has(const char *name, const char *q)
+{
+    size_t n = strlen(q);
+    if (!n) return true;
+    for (const char *p = name; *p; p++)
+        if (!strncasecmp(p, q, n)) return true;
+    return false;
+}
+
+static void find_update(void)
+{
+    if (!s_find_scr) return;
+    const char *q = lv_textarea_get_text(s_find_text);
+    if (s_focused) lv_obj_remove_state(s_focused, LV_STATE_FOCUSED);
+    focus_clear_list();
+    lv_obj_clean(s_find_grid);
+    int n = 0;
+    for (int i = -1; i < s_napps; i++) {
+        app_entry_t *e = i < 0 ? &s_store_tile : &s_apps[i];
+        if (e->is_folder || !name_has(e->name, q) || (s_find_pick && e == &s_store_tile)) continue;
+        focus_add(app_tile(s_find_grid, e, false));
+        n++;
+    }
+    if (s_find_pick) lv_label_set_text(s_find_note, "");
+    else if (!q[0]) lv_label_set_text_fmt(s_find_note, "%d apps", n);
+    else if (n) lv_label_set_text_fmt(s_find_note, "%d found", n);
+    else lv_label_set_text(s_find_note, "No app matches");
+    focus_add(s_find_back);
+    if (s_find_pick) focus_add(s_find_none);
+    lv_obj_scroll_to_y(s_find_grid, 0, LV_ANIM_OFF);
+    focus_set(n ? s_focusable[0] : NULL);           /* Enter starts the first one */
+}
+
+static void find_close(void)
+{
+    if (s_focused) lv_obj_remove_state(s_focused, LV_STATE_FOCUSED);
+    if (s_find_pick) {                              /* choosing the app for boot: back to Settings */
+        s_find_pick = false;
+        s_focused = NULL;
+        show_settings();
+        focus_set(s_auto_btn);
+        return;
+    }
+    lv_screen_load(s_home);
+    s_focused = s_find_btn;                         /* home_focus_list keeps it */
+    home_focus_list();
+}
+
+/* Enter / the keyboard's OK: the focused result, else the first */
+static void find_go(void)
+{
+    if (s_focused && (s_focused == s_find_none || s_focused == s_find_back)) {   /* a header button */
+        lv_obj_send_event(s_focused, LV_EVENT_CLICKED, NULL);
+        return;
+    }
+    lv_obj_t *t = s_focused && lv_obj_get_parent(s_focused) == s_find_grid ? s_focused
+                : lv_obj_get_child_count(s_find_grid) ? lv_obj_get_child(s_find_grid, 0) : NULL;
+    if (t) lv_obj_send_event(t, LV_EVENT_CLICKED, NULL);
+}
+
+static void on_find_changed(lv_event_t *ev) { find_update(); }
+static void on_find_none(lv_event_t *ev)    { autostart_pick(""); }
+static void on_find_back(lv_event_t *ev)    { find_close(); }
+
+static void on_find_key(lv_event_t *ev)
+{
+    if (lv_event_get_code(ev) == LV_EVENT_READY) find_go();
+    else find_close();
+}
+
+static void build_find(void)
+{
+    int h = 480 + s_dy;
+    int rows = 1 + (s_dy + 40) / 134;               /* result rows: more on a taller screen */
+    int grid_h = rows * 134 + 8;
+    s_find_scr = lv_obj_create(NULL);
+    lv_obj_remove_flag(s_find_scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(s_find_scr, C_BG_TOP, 0);
+    lv_obj_set_style_bg_grad_color(s_find_scr, C_BG_BOTTOM, 0);
+    lv_obj_set_style_bg_grad_dir(s_find_scr, LV_GRAD_DIR_VER, 0);
+    s_find_back = wifi_button(s_find_scr, 16, 12, 56, LV_SYMBOL_LEFT, on_find_back);
+    s_find_text = lv_textarea_create(s_find_scr);
+    lv_obj_set_pos(s_find_text, 88, 8);
+    lv_obj_set_size(s_find_text, 540 + s_dx, 52);
+    lv_textarea_set_one_line(s_find_text, true);
+    lv_textarea_set_max_length(s_find_text, 31);
+    lv_textarea_set_placeholder_text(s_find_text, "Search apps");
+    lv_obj_set_style_text_font(s_find_text, &lv_font_montserrat_24, 0);
+    lv_obj_add_event_cb(s_find_text, on_find_changed, LV_EVENT_VALUE_CHANGED, NULL);
+    s_find_note = label(s_find_scr, &lv_font_montserrat_16, C_DIM, "");
+    lv_obj_set_pos(s_find_note, 644 + s_dx, 24);
+    s_find_none = wifi_button(s_find_scr, 640 + s_dx, 8, 148, "None", on_find_none);   /* pick mode only */
+    lv_obj_add_flag(s_find_none, LV_OBJ_FLAG_HIDDEN);
+    s_find_grid = lv_obj_create(s_find_scr);
+    lv_obj_remove_style_all(s_find_grid);
+    lv_obj_set_pos(s_find_grid, 10, 66);
+    lv_obj_set_size(s_find_grid, 780 + s_dx, grid_h);
+    lv_obj_set_flex_flow(s_find_grid, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_style_pad_all(s_find_grid, 6, 0);
+    lv_obj_set_style_pad_column(s_find_grid, 4, 0);
+    lv_obj_set_style_pad_row(s_find_grid, 6, 0);
+    lv_obj_set_scroll_dir(s_find_grid, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_find_grid, LV_SCROLLBAR_MODE_ACTIVE);
+    lv_obj_t *kb = s_find_kb = lv_keyboard_create(s_find_scr);
+    lv_obj_set_size(kb, 800 + s_dx, h - 66 - grid_h);
+    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_text_font(kb, &lv_font_montserrat_28, LV_PART_ITEMS);
+    lv_keyboard_set_textarea(kb, s_find_text);
+    lv_obj_add_event_cb(kb, on_find_key, LV_EVENT_READY, NULL);
+    lv_obj_add_event_cb(kb, on_find_key, LV_EVENT_CANCEL, NULL);
+}
+
+static void find_open(const char *text)
+{
+    if (!s_find_scr) build_find();
+    if (s_find_pick) lv_obj_remove_flag(s_find_none, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(s_find_none, LV_OBJ_FLAG_HIDDEN);
+    lv_textarea_set_placeholder_text(s_find_text, s_find_pick ? "App to start at boot" : "Search apps");
+    if (s_focused) lv_obj_remove_state(s_focused, LV_STATE_FOCUSED);
+    s_focused = NULL;
+    lv_textarea_set_text(s_find_text, text);
+    lv_screen_load(s_find_scr);
+    find_update();
+}
+
+static void on_find_click(lv_event_t *ev)   { find_open(""); }
+
 static void name_open(const char *title, const char *text, int mode)
 {
     s_pw_mode = mode;
@@ -1562,6 +2002,7 @@ static void move_app(const char *path, const char *folder)
     else snprintf(dst, sizeof(dst), APPS_DIR "/%s", base);
     struct stat st;
     bool ok = stat(dst, &st) != 0 && rename(dir, dst) == 0;
+    if (ok) autostart_moved(dir, dst);
     home_view(NULL);
     if (!ok) folder_message("Cannot move the app", "An app with the same directory name is already there.");
 }
@@ -1697,7 +2138,7 @@ static void on_menu_item(lv_event_t *ev)
 static void update_status(lv_timer_t *t)
 {
     static int tick;
-    char buf[64];
+    char buf[96];
     time_t now = time(NULL);
     if (now > 1700000000) {                     /* set (by DevLink, later RTC / NTP) */
         struct tm tm;
@@ -1725,6 +2166,11 @@ static void update_status(lv_timer_t *t)
         }
         snprintf(buf, sizeof(buf), "%d app%s installed", s_ninstalled, s_ninstalled == 1 ? "" : "s");
         lv_label_set_text(s_sd_apps, buf);
+        int bits = card ? ff_sdmmc_bus_width() : 0;
+        if (bits) snprintf(buf, sizeof(buf), "SD Card (%d-bit)", bits);
+        else snprintf(buf, sizeof(buf), "SD Card");
+        lv_label_set_text(s_sd_title, buf);
+        lv_obj_set_style_text_color(s_sd_title, ff_sdmmc_bus_fell_back() ? C_ORANGE : C_TEXT, 0);
     }
 
     snprintf(buf, sizeof(buf), "%d MHz x2", CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
@@ -1744,10 +2190,14 @@ static void update_status(lv_timer_t *t)
         pads += lx_input_gamepad(i, &g);
     }
     int bat = (bsp_info()->caps & BSP_CAP_BATTERY) ? bsp_battery_mv() : -1;
+    bsp_power_t pw;
+    const bool measured = bsp_power_read(&pw) == ESP_OK;   /* a board that says when it charges (Tab5) */
     if (bat >= BAT_MV_MIN && bat <= BAT_MV_MAX) {           /* a cell is fitted */
-        int pct = (bat - BAT_MV_EMPTY) * 100 / (BAT_MV_FULL - BAT_MV_EMPTY);
+        int pct = measured ? (bat - 3300) * 100 / (4150 - 3300)
+                           : (bat - BAT_MV_EMPTY) * 100 / (BAT_MV_FULL - BAT_MV_EMPTY);
         pct = pct < 0 ? 0 : pct > 100 ? 100 : pct;
-        const char *sym = bat > BAT_MV_FULL ? LV_SYMBOL_CHARGE : pct > 75 ? LV_SYMBOL_BATTERY_FULL :
+        const bool charging = measured ? pw.charging : bat > BAT_MV_FULL;
+        const char *sym = charging ? LV_SYMBOL_CHARGE : pct > 75 ? LV_SYMBOL_BATTERY_FULL :
                           pct > 50 ? LV_SYMBOL_BATTERY_3 : pct > 25 ? LV_SYMBOL_BATTERY_2 :
                           pct > 8 ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY;
         snprintf(buf, sizeof(buf), LV_SYMBOL_USB " %d pad%s   %s %d%%", pads, pads == 1 ? "" : "s", sym, pct);
@@ -1757,6 +2207,33 @@ static void update_status(lv_timer_t *t)
     if (lx_net_state() == LX_NET_CONNECTED) {
         size_t n = strlen(buf);
         snprintf(buf + n, sizeof(buf) - n, "   " LV_SYMBOL_WIFI);
+    }
+    /* Bluetooth speaker: icon + name while connected, and a few seconds' note in the state field
+     * when it comes or goes (it connects by itself after boot) */
+    static bool spk_was;
+    static int64_t spk_note_until;
+    lx_bt_spk_state_t spk = lx_bt_speaker_state();
+    bool spk_on = spk == LX_BT_SPK_CONNECTED || spk == LX_BT_SPK_PLAYING;
+    if (spk_on) {
+        size_t n = strlen(buf);
+        if (s_dx >= 100)                        /* the name fits on the wide screens */
+            snprintf(buf + n, sizeof(buf) - n, "   " LV_SYMBOL_BLUETOOTH " %.14s", lx_bt_speaker_name());
+        else
+            snprintf(buf + n, sizeof(buf) - n, "   " LV_SYMBOL_BLUETOOTH LV_SYMBOL_AUDIO);
+    }
+    int64_t now_us = esp_timer_get_time();
+    if (spk_on != spk_was) {
+        spk_was = spk_on;
+        char note[80];
+        snprintf(note, sizeof(note), LV_SYMBOL_AUDIO " %.16s %s", lx_bt_speaker_name(),
+                 spk_on ? "connected" : "disconnected");
+        lv_label_set_text(s_sys_state, note);
+        lv_obj_set_style_text_color(s_sys_state, spk_on ? C_ACCENT : C_DIM, 0);
+        spk_note_until = now_us + 5000000;
+    } else if (spk_note_until && now_us > spk_note_until) {
+        spk_note_until = 0;
+        lv_label_set_text(s_sys_state, LV_SYMBOL_OK " System ready");
+        lv_obj_set_style_text_color(s_sys_state, C_GREEN, 0);
     }
     lv_label_set_text(s_sys_pads, buf);
     if (lv_screen_active() == s_settings && tick % 2 == 0) refresh_info();
@@ -1954,6 +2431,48 @@ static void on_c6_download(lv_event_t *ev)
     lx_update_online_download_c6();
 }
 
+/* A launcher update waiting online: a red dot on the Settings gear and on its
+ * Update button. Checked quietly once Wi-Fi is up (after the Store's catalogue
+ * fetch), then every 12 hours; never while an app runs. */
+static bool s_bg_check;         /* the online check running is the quiet one */
+
+static void upd_dot_set(bool on)
+{
+    lv_obj_t *d[2] = { s_gear_dot, s_upd_dot };
+    for (int i = 0; i < 2; i++) {
+        if (!d[i]) continue;
+        if (on) lv_obj_remove_flag(d[i], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(d[i], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void upd_bg_tick(void)
+{
+    static int64_t up_since, next;
+    if (s_bg_check) {
+        lx_online_state_t st = lx_update_online_state();
+        if (st == LX_ONLINE_BUSY) return;
+        s_bg_check = false;
+        if (st == LX_ONLINE_AVAILABLE) upd_dot_set(true);
+        else if (st == LX_ONLINE_LATEST) upd_dot_set(false);
+        if (st == LX_ONLINE_FAILED) ESP_LOGW(TAG, "update check: %s", lx_update_online_error());
+        else ESP_LOGI(TAG, "update check: %s", st == LX_ONLINE_AVAILABLE ? lx_update_online_version() : "latest");
+        lx_update_online_reset();
+        return;
+    }
+    int64_t now = esp_timer_get_time();
+    if (lx_net_state() != LX_NET_CONNECTED) {
+        up_since = 0;
+        return;
+    }
+    if (!up_since) up_since = now;
+    if (now - up_since < 5000000 || now < next || s_upd_online || s_upd_box || s_c6_updating ||
+        lx_update_online_state() != LX_ONLINE_IDLE || lx_appstore_state() != LX_APPSTORE_IDLE) return;
+    next = now + 12LL * 3600 * 1000000;
+    s_bg_check = true;
+    lx_update_online_check();
+}
+
 static void on_upd_check(lv_event_t *ev)
 {
     if (c6_offer()) return;
@@ -1963,7 +2482,8 @@ static void on_upd_check(lv_event_t *ev)
     }
     s_upd_online = true;
     upd_box("Checking for updates...", false);
-    lx_update_online_check();
+    if (s_bg_check) s_bg_check = false;     /* the quiet check is running: follow it instead */
+    else lx_update_online_check();
 }
 
 static void upd_online_tick(void)
@@ -1977,6 +2497,7 @@ static void upd_online_tick(void)
         }
         break;
     case LX_ONLINE_AVAILABLE:
+        upd_dot_set(true);
         upd_close();
         snprintf(buf, sizeof(buf), "Install launcher %s?\nThis version: %s",
                  lx_update_online_version(), LX_LAUNCHER_VERSION);
@@ -1984,6 +2505,7 @@ static void upd_online_tick(void)
         lx_update_online_reset();
         break;
     case LX_ONLINE_LATEST:
+        upd_dot_set(false);
         s_upd_online = false;
         upd_close();
         lx_update_online_reset();
@@ -2131,9 +2653,24 @@ static void dim_tick(void)
     bsp_display_backlight(idle && s_brightness > DIM_PERCENT ? DIM_PERCENT : s_brightness);
 }
 
+/* Back from an app, the home screen takes about a second to list the card and draw its tiles again, with the
+ * app's last picture (often its menu, "Exit" lit) still on the glass. A second tap or press made then, or a finger
+ * not yet lifted, must not start the tile that turns up under it: nothing counts until the grid has been drawn
+ * and a third of a second more, nor a touch that is already down then, until it lifts. */
+#define BACK_QUIET_US 300000
+static int64_t s_touch_quiet_until;
+static bool s_touch_wait_lift;
+static int s_back_draws;            /* lv_timer_handler calls still to go before the grid counts as drawn */
+
 static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
 {
     bsp_touch_point_t p[1];
+    if (s_touch_wait_lift) {
+        bool down = (bsp_info()->caps & BSP_CAP_TOUCH) && bsp_touch_read(p, 1) > 0;
+        if (!down && esp_timer_get_time() >= s_touch_quiet_until) s_touch_wait_lift = false;
+        data->state = LV_INDEV_STATE_RELEASED;
+        return;
+    }
     if ((bsp_info()->caps & BSP_CAP_TOUCH) && bsp_touch_read(p, 1) > 0) {
         data->point.x = p[0].x;
         data->point.y = p[0].y;
@@ -2144,10 +2681,24 @@ static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
     }
 }
 
+/* The on-screen keyboards of the password and search screens: hidden while a real keyboard is attached
+ * (a USB one, or the board's own), which types into those screens itself (poll_keys). */
+static void onscreen_keyboards(void)
+{
+    const bool real = lx_input_keyboard_attached();
+    lv_obj_t *kbs[2] = { s_pw_kb, s_find_kb };
+    for (int i = 0; i < 2; i++) {
+        if (!kbs[i] || lv_obj_has_flag(kbs[i], LV_OBJ_FLAG_HIDDEN) == real) continue;
+        if (real) lv_obj_add_flag(kbs[i], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_remove_flag(kbs[i], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 /* Gamepad and keyboard: directions move the focus; on a slider left/right
  * change its value; A / Start / Enter click; B / Esc go back. */
 static void poll_keys(void)
 {
+    onscreen_keyboards();
     papp_input_event_t ev;
     while (lx_input_poll_event(&ev)) {
         s_last_input = esp_timer_get_time();
@@ -2174,6 +2725,20 @@ static void poll_keys(void)
                 } else if (ev.text >= 32 && ev.text < 127) {
                     lv_textarea_add_char(s_pw_text, ev.text);
                 }
+                continue;
+            }
+            bool arrow = ev.code >= 0x4F && ev.code <= 0x52;
+            if (s_find_scr && lv_screen_active() == s_find_scr && !arrow) {   /* typing the search */
+                if (ev.code == 0x28 || ev.code == 0x58) find_go();
+                else if (ev.code == 0x2A) lv_textarea_delete_char(s_find_text);
+                else if (ev.code == 0x29) find_close();
+                else if (ev.text >= 32 && ev.text < 127) lv_textarea_add_char(s_find_text, ev.text);
+                continue;
+            }
+            if (lv_screen_active() == s_home && !s_menu && !s_crash_box && isalnum(ev.text) &&
+                lv_obj_get_child_count(lv_layer_top()) == 0) {
+                char first[2] = { (char)ev.text, 0 };      /* a letter on the home screen starts a search */
+                find_open(first);
                 continue;
             }
             switch (ev.code) {
@@ -2221,6 +2786,8 @@ static void poll_keys(void)
             menu_close();
         } else if (back && lv_screen_active() == s_home && s_folder[0]) {
             folder_leave();
+        } else if (back && s_find_scr && lv_screen_active() == s_find_scr) {
+            find_close();
         } else if (back && lv_screen_active() == s_settings) {
             show_home();
         } else if (back && s_clk_scr && lv_screen_active() == s_clk_scr) {
@@ -2268,6 +2835,204 @@ static void launch(const char *path)
     }
 }
 
+/* ── Start at boot ──────────────────────────────────────────────────────
+ * Settings → At boot names an app (chosen in the search screen) that starts by itself after the
+ * launcher boots. For AUTOSTART_WAIT_US first a screen says so; a touch held on it (also one already
+ * down when it comes up, so the screen can be held from power-on) or any button or key opens a menu:
+ * back to the launcher, or start the app now. The app is not started after a crash (an app's crash
+ * record, or the launcher's own panic or watchdog), so a bad app can't keep the board restarting. */
+
+#define AUTOSTART_FILE    "/sd/config/autostart.txt"
+#define AUTOSTART_WAIT_US 2500000
+#define AUTOSTART_HOLD_US 300000
+
+static char s_auto[160];            /* the .papp, "" = none */
+static int s_auto_state;            /* 0 nothing, 1 the starting screen, 2 the menu */
+static int64_t s_auto_end, s_auto_down_since;
+static lv_obj_t *s_auto_scr, *s_auto_bar, *s_auto_box;
+
+static void autostart_name(const char *path, char *out, size_t len)
+{
+    papp_manifest_t m;
+    if (lx_app_read_manifest(path, &m) == ESP_OK && m.name[0]) {
+        snprintf(out, len, "%s", m.name);
+        return;
+    }
+    const char *b = strrchr(path, '/');
+    snprintf(out, len, "%s", b ? b + 1 : path);
+    char *dot = strrchr(out, '.');
+    if (dot) *dot = 0;
+}
+
+static void autostart_load(void)
+{
+    s_auto[0] = 0;
+    FILE *f = fopen(AUTOSTART_FILE, "r");
+    if (!f) return;
+    if (fgets(s_auto, sizeof(s_auto), f)) s_auto[strcspn(s_auto, "\r\n")] = 0;
+    fclose(f);
+}
+
+static void autostart_show(void)
+{
+    if (!s_auto_val) return;
+    char name[48];
+    if (s_auto[0]) autostart_name(s_auto, name, sizeof(name));
+    lv_label_set_text(s_auto_val, s_auto[0] ? name : "None");
+}
+
+/* The search screen's choice ("" = None): saved, and back to Settings */
+static void autostart_pick(const char *path)
+{
+    snprintf(s_auto, sizeof(s_auto), "%s", path);
+    mkdir("/sd/config", 0775);
+    if (!s_auto[0]) {
+        unlink(AUTOSTART_FILE);
+    } else {
+        FILE *f = fopen(AUTOSTART_FILE, "w");
+        if (f) { fprintf(f, "%s\n", s_auto); fclose(f); }
+    }
+    ESP_LOGI(TAG, "at boot: %s", s_auto[0] ? s_auto : "nothing");
+    autostart_show();
+    find_close();                       /* pick mode: back to Settings */
+}
+
+static void on_auto_click(lv_event_t *ev)
+{
+    s_find_pick = true;
+    find_open("");
+}
+
+/* An app moved to another folder (move_app): the setting follows it */
+static void autostart_moved(const char *from_dir, const char *to_dir)
+{
+    size_t n = strlen(from_dir);
+    if (!s_auto[0] || strncmp(s_auto, from_dir, n) || s_auto[n] != '/') return;
+    char p[160];
+    snprintf(p, sizeof(p), "%s%s", to_dir, s_auto + n);
+    snprintf(s_auto, sizeof(s_auto), "%s", p);
+    FILE *f = fopen(AUTOSTART_FILE, "w");
+    if (f) { fprintf(f, "%s\n", s_auto); fclose(f); }
+    autostart_show();
+}
+
+static void autostart_close_menu(void)
+{
+    if (s_auto_box) lv_msgbox_close(s_auto_box);
+    s_auto_box = NULL;
+    s_auto_state = 0;
+    s_focused = NULL;
+    home_focus_list();
+}
+
+static void on_auto_quit(lv_event_t *ev)  { autostart_close_menu(); }
+static void on_auto_start(lv_event_t *ev)
+{
+    autostart_close_menu();
+    snprintf(s_launch, sizeof(s_launch), "%s", s_auto);
+}
+
+static void autostart_menu(void)
+{
+    if (s_auto_scr) { lv_obj_delete(s_auto_scr); s_auto_scr = NULL; }
+    char name[48], text[96], start[64];
+    autostart_name(s_auto, name, sizeof(name));
+    snprintf(text, sizeof(text), "%s is set to start at boot.", name);
+    snprintf(start, sizeof(start), LV_SYMBOL_PLAY " Start %s", name);
+    lv_obj_t *mb = s_auto_box = lv_msgbox_create(NULL);
+    lv_msgbox_add_title(mb, LV_SYMBOL_HOME "  Start at boot");
+    lv_msgbox_add_text(mb, text);
+    lv_obj_t *quit = lv_msgbox_add_footer_button(mb, "Quit to launcher");
+    lv_obj_t *go = lv_msgbox_add_footer_button(mb, start);
+    lv_obj_add_event_cb(quit, on_auto_quit, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(go, on_auto_start, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_width(mb, 560);
+    focus_clear_list();
+    focus_add(quit);
+    focus_add(go);
+    focus_set(quit);
+    /* the touch that is still down is the one that asked: it may not press a button as it lifts */
+    s_touch_wait_lift = true;
+    s_touch_quiet_until = esp_timer_get_time() + BACK_QUIET_US;
+    lx_input_flush();
+    s_auto_state = 2;
+    ESP_LOGI(TAG, "at boot: held, asking");
+}
+
+/* home_start: the starting screen, if an app is set and may start */
+static void autostart_begin(void)
+{
+    autostart_load();
+    if (!s_auto[0]) return;
+    struct stat st;
+    esp_reset_reason_t why = esp_reset_reason();
+    const char *skip = stat(s_auto, &st) != 0 ? "the app is not on the card"
+                     : s_crash_box ? "the app crashed last time"
+                     : why == ESP_RST_PANIC || why == ESP_RST_INT_WDT || why == ESP_RST_TASK_WDT ||
+                       why == ESP_RST_WDT ? "the launcher restarted after an error" : NULL;
+    if (skip) {
+        ESP_LOGW(TAG, "at boot: not starting %s: %s", s_auto, skip);
+        return;
+    }
+    char name[48], text[80];
+    autostart_name(s_auto, name, sizeof(name));
+    snprintf(text, sizeof(text), "Starting %s", name);
+    lv_obj_t *s = s_auto_scr = lv_obj_create(lv_layer_top());     /* over the home screen, takes the touches */
+    lv_obj_remove_style_all(s);
+    lv_obj_set_size(s, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_opa(s, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s, C_BG_TOP, 0);
+    lv_obj_set_style_bg_grad_color(s, C_BG_BOTTOM, 0);
+    lv_obj_set_style_bg_grad_dir(s, LV_GRAD_DIR_VER, 0);
+    lv_obj_add_flag(s, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t *t = label(s, &lv_font_montserrat_28, C_TEXT, text);
+    lv_obj_align(t, LV_ALIGN_CENTER, 0, -50);
+    lv_obj_t *h = label(s, &lv_font_montserrat_20, C_DIM, "Touch and hold the screen to stay in the launcher");
+    lv_obj_align(h, LV_ALIGN_CENTER, 0, 0);
+    s_auto_bar = lv_bar_create(s);
+    lv_obj_set_size(s_auto_bar, 360, 10);
+    lv_obj_align(s_auto_bar, LV_ALIGN_CENTER, 0, 50);
+    lv_bar_set_range(s_auto_bar, 0, 100);
+    lv_obj_set_style_bg_color(s_auto_bar, C_BLUE, LV_PART_INDICATOR);
+    s_auto_end = esp_timer_get_time() + AUTOSTART_WAIT_US;
+    s_auto_down_since = 0;
+    s_auto_state = 1;
+    ESP_LOGI(TAG, "at boot: %s in %d s unless held", s_auto, AUTOSTART_WAIT_US / 1000000);
+}
+
+/* home_task, while the starting screen is up */
+static void autostart_tick(void)
+{
+    int64_t now = esp_timer_get_time();
+    bsp_touch_point_t p[1];
+    bool down = (bsp_info()->caps & BSP_CAP_TOUCH) && bsp_touch_read(p, 1) > 0;
+    if (!down) s_auto_down_since = 0;
+    else if (!s_auto_down_since) s_auto_down_since = now;
+    bool asked = down && now - s_auto_down_since >= AUTOSTART_HOLD_US;
+    papp_input_event_t ev;
+    while (lx_input_poll_event(&ev))
+        if (ev.type == PAPP_EV_BUTTON_DOWN || ev.type == PAPP_EV_KEY_DOWN) asked = true;
+    if (asked) {
+        autostart_menu();
+        return;
+    }
+    if (lx_app_state() != LX_APP_IDLE) {           /* something else started one (DevLink) */
+        ESP_LOGI(TAG, "at boot: an app is already running");
+        lv_obj_delete(s_auto_scr);
+        s_auto_scr = NULL;
+        s_auto_state = 0;
+        return;
+    }
+    if (now < s_auto_end) {
+        lv_bar_set_value(s_auto_bar, (int)(100 - (s_auto_end - now) * 100 / AUTOSTART_WAIT_US), LV_ANIM_OFF);
+        return;
+    }
+    lv_obj_delete(s_auto_scr);
+    s_auto_scr = NULL;
+    s_auto_state = 0;
+    snprintf(s_launch, sizeof(s_launch), "%s", s_auto);
+}
+
 static void home_task(void *arg)
 {
     bool was_running = false, confirmed = false, offered = false;
@@ -2298,9 +3063,16 @@ static void home_task(void *arg)
             lv_slider_set_value(s_vol_slider, s_volume, LV_ANIM_OFF);
             apply_settings();
             if (lv_screen_active() != s_home) lv_screen_load(s_home);
+            /* The home screen as it was, at once: listing the card again takes most of a second, and until
+             * something is drawn the app's last picture stays up, looking as if leaving it had not worked. */
+            lv_obj_invalidate(lv_screen_active());
+            lv_refr_now(NULL);
             s_focused = NULL;
             refresh_home();
             lv_obj_invalidate(lv_screen_active());
+            s_touch_quiet_until = INT64_MAX;    /* set once the grid is drawn, below */
+            s_touch_wait_lift = true;
+            s_back_draws = 3;
         }
         if (confirmed && !offered && !s_crash_box) {
             offered = true;
@@ -2308,21 +3080,26 @@ static void home_task(void *arg)
         }
         dim_tick();
         screenshot_tick();
-        if (s_map_step >= 0) map_tick();
+        if (s_auto_state == 1) autostart_tick();
+        else if (s_touch_wait_lift && esp_timer_get_time() < s_touch_quiet_until) lx_input_flush();
+        else if (s_map_step >= 0) map_tick();
         else poll_keys();
         wifi_tick();
+        bt_tick();
         store_tick();
         if (store_updates() != s_badge_shown) badge_update();
-        if (lx_web_changes() != s_web_seen && lv_screen_active() == s_home &&
+        if (files_changed() != s_web_seen && lv_screen_active() == s_home &&
             lv_obj_get_child_count(lv_layer_top()) == 0) {            /* not under a menu or message */
-            s_web_seen = lx_web_changes();
+            s_web_seen = files_changed();
             const app_entry_t *e = s_focused ? lv_obj_get_user_data(s_focused) : NULL;
             char keep[160] = "";
             if (e) snprintf(keep, sizeof(keep), "%s", e->path);
             home_view(keep[0] ? keep : NULL);
         }
         uint32_t wait = lv_timer_handler();
+        if (s_back_draws && --s_back_draws == 0) s_touch_quiet_until = esp_timer_get_time() + BACK_QUIET_US;
         if (s_upd_online) upd_online_tick();
+        else upd_bg_tick();
         if (s_c6_updating) c6_tick();
         if (s_upd_go) upd_install();
         if (s_launch[0]) {
@@ -2369,6 +3146,7 @@ esp_err_t home_start(void)
 
     s_dx = w - 800;
     s_dy = h_px - 480;
+    autostart_load();                   /* Settings shows it */
     build_home();
     build_settings();
     store_build();
@@ -2378,6 +3156,7 @@ esp_err_t home_start(void)
     lv_timer_create(update_status, 1000, NULL);
     update_status(NULL);
     show_crash_notice();
+    autostart_begin();
 
     xTaskCreatePinnedToCore(home_task, "home", 8192, NULL, 4, NULL, 0);
     ESP_LOGI(TAG, "home screen up, %d apps", s_ninstalled);

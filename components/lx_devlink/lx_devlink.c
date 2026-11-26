@@ -1,5 +1,5 @@
 /*
- * DevLink — remote development service over USB-Serial-JTAG.
+ * DevLink — remote development service over USB-Serial-JTAG or board UART.
  *
  * One task parses request frames and answers them. ESP_LOG output and app
  * logs are forwarded as LOG frames, but only while a host has talked to us in
@@ -7,12 +7,15 @@
  * listening nothing is written, so the device never stalls on a full USB FIFO.
  */
 #include "lx_devlink.h"
+#include "esp_attr.h"     /* EXT_RAM_BSS_ATTR */
+#include "hal/usb_serial_jtag_ll.h"
 #include "devlink_proto.h"
 #include "lx_app.h"
 #include "lx_common.h"
 #include "bsp.h"
 #include "lx_input.h"
 #include "lx_net.h"
+#include "lx_bt.h"
 #include "lx_c6.h"
 
 #include <stdio.h>
@@ -29,8 +32,11 @@
 #include "esp_system.h"
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
+#include "ff.h"
+#include "diskio_sdmmc.h"
 #include "esp_core_dump.h"
 #include "driver/usb_serial_jtag.h"
+#include "driver/uart.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -43,8 +49,13 @@ static const char *TAG = "devlink";
 static SemaphoreHandle_t s_tx_lock;
 static vprintf_like_t    s_orig_vprintf;
 static volatile int64_t  s_last_host_us = -HOST_ALIVE_US;
+static volatile bool     s_paused;    /* an app has USB-C (lx_usbd): nothing goes to the serial/JTAG unit */
 static uint8_t          *s_rx;        /* request payload  */
 static char             *s_tx;        /* response scratch */
+
+#if CONFIG_LX_DEVLINK_UART
+#define DEVLINK_UART UART_NUM_0
+#endif
 
 /* PUT state */
 static FILE    *s_put_f;
@@ -55,16 +66,27 @@ static uint32_t s_put_size, s_put_crc, s_put_done, s_put_crc_run;
 
 static bool host_alive(void)
 {
-    return usb_serial_jtag_is_connected() &&
+#if CONFIG_LX_DEVLINK_UART
+    return !s_paused && esp_timer_get_time() - s_last_host_us < HOST_ALIVE_US;
+#else
+    return !s_paused && usb_serial_jtag_is_connected() &&
            esp_timer_get_time() - s_last_host_us < HOST_ALIVE_US;
+#endif
 }
 
 static bool write_all(const void *p, size_t len, TickType_t to)
 {
     const uint8_t *b = p;
+#if CONFIG_LX_DEVLINK_UART
+    (void)to;
+#endif
     while (len) {
+#if CONFIG_LX_DEVLINK_UART
+        int n = uart_write_bytes(DEVLINK_UART, b, len > 4096 ? 4096 : len);
+#else
         /* The driver queues into a 16 KB ring buffer: an item larger than that never fits */
         int n = usb_serial_jtag_write_bytes(b, len > 4096 ? 4096 : len, to);
+#endif
         if (n <= 0) return false;
         b += n; len -= n;
     }
@@ -81,7 +103,7 @@ static bool dl_send(uint8_t type, uint8_t flags, uint16_t seq,
     uint32_t crc = lx_crc32(0, hdr + 2, DL_HDR_SIZE - 2);
     crc = lx_crc32(crc, payload, len);
 
-    if (xSemaphoreTake(s_tx_lock, lock_to) != pdTRUE) return false;
+    if (s_paused || xSemaphoreTake(s_tx_lock, lock_to) != pdTRUE) return false;
     TickType_t to = pdMS_TO_TICKS(1000);
     bool ok = write_all(hdr, sizeof(hdr), to) &&
               (!len || write_all(payload, len, to)) &&
@@ -144,12 +166,28 @@ static int dl_vprintf(const char *fmt, va_list ap)
 {
     va_list ap2;
     va_copy(ap2, ap);
-    int r = s_orig_vprintf(fmt, ap);     /* keep the UART console */
-    if (host_alive() && xSemaphoreGetMutexHolder(s_tx_lock) != xTaskGetCurrentTaskHandle()) {
+    /* UART0 is shared with the AIO's CH340. Once DevLink is active, route logs
+     * as frames so console text cannot corrupt the protocol stream. */
+    bool active = host_alive();
+    int r;
+#if CONFIG_LX_DEVLINK_UART
+    if (active) {
+        char buf[256];
+        int n = vsnprintf(buf, sizeof(buf), fmt, ap2);
+        r = n;
+        if (n > 0 && xSemaphoreGetMutexHolder(s_tx_lock) != xTaskGetCurrentTaskHandle())
+            dl_send(DL_LOG, 0, 0, buf, n < (int)sizeof(buf) ? n : sizeof(buf) - 1, pdMS_TO_TICKS(20));
+    } else {
+        r = s_orig_vprintf(fmt, ap);
+    }
+#else
+    r = s_orig_vprintf(fmt, ap);
+    if (active && xSemaphoreGetMutexHolder(s_tx_lock) != xTaskGetCurrentTaskHandle()) {
         char buf[256];
         int n = vsnprintf(buf, sizeof(buf), fmt, ap2);
         if (n > 0) dl_send(DL_LOG, 0, 0, buf, n < (int)sizeof(buf) ? n : sizeof(buf) - 1, pdMS_TO_TICKS(20));
     }
+#endif
     va_end(ap2);
     return r;
 }
@@ -216,11 +254,14 @@ static void h_info(uint16_t seq)
     jstr(&j, b->id);
     jcat(&j, ",\"board_name\":");
     jstr(&j, b->name);
-    jcat(&j, ",\"caps\":%lu,\"display\":[%u,%u],\"sd\":%s,\"uptime_ms\":%lld,"
-             "\"free_internal\":%u,\"free_psram\":%u,\"largest_psram\":%u,\"app_state\":\"%s\",\"app\":",
+    jcat(&j, ",\"caps\":%lu,\"display\":[%u,%u],\"sd\":%s,\"sd_bits\":%d,\"sd_1bit\":%s,\"uptime_ms\":%lld,"
+             "\"free_internal\":%u,\"largest_fast\":%u,\"free_psram\":%u,\"largest_psram\":%u,\"app_state\":\"%s\",\"app\":",
          (unsigned long)b->caps, b->display_w, b->display_h, bsp_sdcard_mounted() ? "true" : "false",
+         ff_sdmmc_bus_width(),                             /* data lines in use */
+         ff_sdmmc_bus_fell_back() ? "true" : "false",     /* 4-bit failed, card moved to 1-bit */
          esp_timer_get_time() / 1000,
          (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_EXEC | MALLOC_CAP_INTERNAL),   /* an app's FAST region */
          (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
          (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM), app_state_name());
     jstr(&j, lx_app_path());
@@ -287,6 +328,19 @@ static void put_abort(void)
     }
 }
 
+/* Changes to /sd/apps made over DevLink: the home screen rescans when this moves */
+static volatile uint32_t s_app_changes;
+
+static void note_change(const char *path)
+{
+    if (path && strncmp(path, "/sd/apps", 8) == 0) s_app_changes++;
+}
+
+uint32_t lx_devlink_app_changes(void)
+{
+    return s_app_changes;
+}
+
 static void h_put_begin(uint16_t seq, const uint8_t *p, uint32_t len)
 {
     put_abort();
@@ -340,6 +394,7 @@ static void h_put_end(uint16_t seq)
         return;
     }
     ESP_LOGI(TAG, "received %s (%lu bytes)", s_put_path, (unsigned long)s_put_size);
+    note_change(s_put_path);
     reply_str(DL_PUT_END, seq, "ok");
 }
 
@@ -531,6 +586,9 @@ static void h_input(uint16_t seq, const uint8_t *p, uint32_t len)
     }
 }
 
+/* Boards without it */
+__attribute__((weak)) esp_err_t bsp_display_scanout(bool on) { return ESP_ERR_NOT_SUPPORTED; }
+
 static void dispatch(uint8_t type, uint16_t seq, uint8_t *p, uint32_t len)
 {
     p[len] = 0;   /* string payloads are NUL-terminated for free */
@@ -560,15 +618,20 @@ static void dispatch(uint8_t type, uint16_t seq, uint8_t *p, uint32_t len)
     case DL_STAT:   h_stat(seq, str); break;
     case DL_MKDIR:
         mkdirs(str, true);
+        note_change(str);
         reply_str(type, seq, "ok");
         break;
     case DL_RM:
-        if (remove(str) == 0 || rmdir(str) == 0) reply_str(type, seq, "ok");
+        if (remove(str) == 0 || rmdir(str) == 0) { note_change(str); reply_str(type, seq, "ok"); }
         else reply_err(type, seq, "cannot remove %s (errno %d)", str, errno);
         break;
     case DL_RENAME: {
         const char *to = str + strlen(str) + 1;
-        if ((const uint8_t *)to < p + len && rename(str, to) == 0) reply_str(type, seq, "ok");
+        if ((const uint8_t *)to < p + len && rename(str, to) == 0) {
+            note_change(str);
+            note_change(to);
+            reply_str(type, seq, "ok");
+        }
         else reply_err(type, seq, "rename failed (errno %d)", errno);
         break;
     }
@@ -595,12 +658,26 @@ static void dispatch(uint8_t type, uint16_t seq, uint8_t *p, uint32_t len)
     case DL_BOOTLOG: reply(type, seq, s_boot, s_boot ? s_boot_len : 0); break;
     case DL_SHOT: h_shot(seq, p, len); break;
     case DL_INPUT: h_input(seq, p, len); break;
+    case DL_DISPLAY: {
+        esp_err_t e = bsp_display_scanout(!len || p[0]);
+        if (e == ESP_OK) reply_str(type, seq, !len || p[0] ? "display on" : "display off");
+        else reply_err(type, seq, "display: %s", esp_err_to_name(e));
+        break;
+    }
     case DL_NET: {
         if (len && p[0]) lx_net_diag_start(p[0]);
-        static char text[1600];
+        static EXT_RAM_BSS_ATTR char text[1600];
         text[0] = lx_net_diag_busy() ? '1' : '0';
         snprintf(text + 1, sizeof(text) - 1, "%s", lx_net_diag_text());
         reply_str(type, seq, text);
+        break;
+    }
+    case DL_BT: {
+        char cmd[96];
+        size_t n = len < sizeof(cmd) - 1 ? len : sizeof(cmd) - 1;
+        memcpy(cmd, p, n);
+        cmd[n] = 0;
+        reply_str(type, seq, lx_bt_devlink(cmd));
         break;
     }
     case DL_CRASH_CLEAR:
@@ -621,7 +698,11 @@ static bool read_exact(uint8_t *buf, size_t len, int timeout_ms)
 {
     int64_t deadline = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
     while (len) {
+#if CONFIG_LX_DEVLINK_UART
+        int n = uart_read_bytes(DEVLINK_UART, buf, len, pdMS_TO_TICKS(50));
+#else
         int n = usb_serial_jtag_read_bytes(buf, len, pdMS_TO_TICKS(50));
+#endif
         if (n > 0) { buf += n; len -= n; }
         else if (esp_timer_get_time() > deadline) return false;
     }
@@ -634,7 +715,11 @@ static void devlink_task(void *arg)
     for (;;) {
         /* Sync on the two start-of-frame bytes */
         uint8_t c;
+#if CONFIG_LX_DEVLINK_UART
+        if (uart_read_bytes(DEVLINK_UART, &c, 1, portMAX_DELAY) != 1 || c != DL_SOF0) continue;
+#else
         if (usb_serial_jtag_read_bytes(&c, 1, portMAX_DELAY) != 1 || c != DL_SOF0) continue;
+#endif
         if (!read_exact(&c, 1, RX_TIMEOUT_MS) || c != DL_SOF1) continue;
         hdr[0] = DL_SOF0; hdr[1] = DL_SOF1;
         if (!read_exact(hdr + 2, DL_HDR_SIZE - 2, RX_TIMEOUT_MS)) continue;
@@ -671,10 +756,62 @@ void lx_devlink_app_exited(const char *path, int code, bool forced,
     dl_send(DL_EVENT, 0, 0, j.buf, j.len, pdMS_TO_TICKS(200));
 }
 
+/* ── Pause ──────────────────────────────────────────────────────────────────
+ * While an app has USB-C as a device of its own (lx_usbd) the serial/JTAG unit is off the pins: anything
+ * queued for it can never leave, and its "TX FIFO empty" interrupt then fires without end (an interrupt
+ * storm, then the interrupt watchdog). So DevLink stops sending and the unit's interrupts are masked until
+ * the port comes back. */
+void lx_devlink_pause(bool pause)
+{
+#if CONFIG_LX_DEVLINK_UART
+    /* UART0 is independent of the USB-C device port claimed by apps. */
+    (void)pause;
+    return;
+#else
+    if (pause == s_paused) return;
+    if (pause) {
+        s_paused = true;
+        if (s_tx_lock && xSemaphoreTake(s_tx_lock, pdMS_TO_TICKS(1000)) == pdTRUE) {   /* no send mid-frame */
+            usb_serial_jtag_wait_tx_done(pdMS_TO_TICKS(50));
+            xSemaphoreGive(s_tx_lock);
+        }
+        usb_serial_jtag_ll_disable_intr_mask(USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY | USB_SERIAL_JTAG_INTR_SERIAL_OUT_RECV_PKT);
+        usb_serial_jtag_ll_clr_intsts_mask(USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY | USB_SERIAL_JTAG_INTR_SERIAL_OUT_RECV_PKT);
+    } else {
+        usb_serial_jtag_ll_clr_intsts_mask(USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY | USB_SERIAL_JTAG_INTR_SERIAL_OUT_RECV_PKT);
+        usb_serial_jtag_ll_ena_intr_mask(USB_SERIAL_JTAG_INTR_SERIAL_OUT_RECV_PKT | USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY);
+        s_last_host_us = -HOST_ALIVE_US;   /* the host says hello again before anything is sent */
+        s_paused = false;
+    }
+#endif
+}
+
 /* ── Start ──────────────────────────────────────────────────────────────── */
 
 esp_err_t lx_devlink_start(void)
 {
+#if CONFIG_LX_DEVLINK_UART
+    /* The CH340 on the Elecrow AIO is wired to UART0: TX GPIO 37, RX GPIO 38. */
+    esp_err_t err = uart_driver_install(DEVLINK_UART, 8 * 1024, 4 * 1024, 0, NULL, 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "UART0 DevLink driver install failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    const uart_config_t uart_cfg = {
+        .baud_rate = 115200,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_DEFAULT,
+    };
+    err = uart_param_config(DEVLINK_UART, &uart_cfg);
+    if (err == ESP_OK) err = uart_set_pin(DEVLINK_UART, 37, 38, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "UART0 DevLink configuration failed: %s", esp_err_to_name(err));
+        return err;
+    }
+#else
     usb_serial_jtag_driver_config_t cfg = {
         .rx_buffer_size = 40 * 1024,
         .tx_buffer_size = 16 * 1024,
@@ -684,6 +821,7 @@ esp_err_t lx_devlink_start(void)
         ESP_LOGE(TAG, "USB-Serial-JTAG driver install failed: %s", esp_err_to_name(err));
         return err;
     }
+#endif
     s_rx = heap_caps_malloc(DL_MAX_PAYLOAD + 1, MALLOC_CAP_SPIRAM);
     s_tx = heap_caps_malloc(DL_MAX_PAYLOAD, MALLOC_CAP_SPIRAM);
     s_tx_lock = xSemaphoreCreateMutex();
@@ -692,6 +830,10 @@ esp_err_t lx_devlink_start(void)
     s_orig_vprintf = esp_log_set_vprintf(dl_vprintf);
     if (xTaskCreatePinnedToCore(devlink_task, "devlink", 8192, NULL, 4, NULL, 1) != pdPASS)
         return ESP_ERR_NO_MEM;
+#if CONFIG_LX_DEVLINK_UART
+    ESP_LOGI(TAG, "DevLink ready on UART0 (CH340)");
+#else
     ESP_LOGI(TAG, "DevLink ready on USB-Serial-JTAG");
+#endif
     return ESP_OK;
 }

@@ -82,6 +82,10 @@
                 h = Y2 - y - y_sum;
             if (spbg == 0) {
                 sprite_usespbg = 1;
+                {   /* the rows this strip covers: y + y_sum + max(t, 0), h rows */
+                    int r0 = y + y_sum + (t > 0 ? t : 0);
+                    pce_clear_rows(r0, r0 + h);
+                }
                 if (atr & H_FLIP) {
                     for (j = 0; j <= cgx; j++) {
                         PutSpriteHflipMakeMask(osd_gfx_buffer + pos

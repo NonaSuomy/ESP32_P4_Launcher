@@ -2,10 +2,12 @@ dependencies:
   idf: ">=5.5"
   espressif/esp_codec_dev: "1.5.11"
   espressif/esp_lcd_ili9881c: "1.1.0"
-  # Wi-Fi companion: ESP32-C6 on SDIO (pins in sdkconfig.board). The versions M5Stack's
-  # Tab5 demo uses, to match the C6 firmware the board ships with
-  espressif/esp_wifi_remote: "0.8.5"
-  espressif/esp_hosted: "1.4.0"
+  # Wi-Fi companion: ESP32-C6 on SDIO (pins in sdkconfig.board), the esp_hosted the Guition boards use.
+  # M5Stack's shipped C6 firmware is 1.4-era; Settings > Update offers the matching C6 firmware (#48)
+  espressif/esp_wifi_remote: "1.6.5"
+  espressif/esp_hosted: "2.12.13"
   # Pulled in by the packages above, pinned too so every build is the same
   espressif/eppp_link: "1.1.6"
   espressif/esp_serial_slave_link: "1.1.2"
+  espressif/cmake_utilities: "0.5.3"
+  espressif/wifi_remote_over_eppp: "0.3.3"

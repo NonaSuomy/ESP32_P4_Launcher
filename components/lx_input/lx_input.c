@@ -174,7 +174,9 @@ int lx_input_pad_attach(const char *name, uint16_t vid, uint16_t pid)
     const char *from = map_load(name, vid, pid, map);
     bool has_map = from != NULL;
     LOCK();
-    int player = -1;
+    int player = 0;                                             /* the only pad: player 1, whoever */
+    for (int i = 0; i < PAPP_MAX_PLAYERS; i++)                  /* held the slots before (one-player */
+        if (s_pads[i].attached) player = -1;                    /* games read player 1 only) */
     for (int i = 0; i < PAPP_MAX_PLAYERS && player < 0; i++)    /* back to its own slot */
         if (!s_pads[i].attached && s_pads[i].last_vid == vid && s_pads[i].last_pid == pid) player = i;
     for (int i = 0; i < PAPP_MAX_PLAYERS && player < 0; i++)    /* else a slot nobody left */
@@ -353,6 +355,11 @@ void lx_input_kbd_detach(void)
     ESP_LOGI(TAG, "keyboard disconnected");
 }
 
+bool lx_input_keyboard_attached(void)
+{
+    return s_kbd_attached;
+}
+
 bool lx_input_key_down(uint16_t usage)
 {
     if (usage > 255) return false;
@@ -430,6 +437,28 @@ _Static_assert(BSP_BTN_A == PAPP_BTN_A && BSP_BTN_L1 == PAPP_BTN_L1 && BSP_BTN_S
 
 #define BOARD_POLL_MS 5
 
+/* A keyboard of the board's own (BSP_CAP_KEYBOARD): its reports go where a USB keyboard's do. A board without one
+ * gets this default. */
+__attribute__((weak)) int bsp_keyboard_read(bool *present, uint8_t *mods, uint8_t keys[6])
+{
+    (void)mods; (void)keys;
+    *present = false;
+    return 0;
+}
+
+static void board_keyboard_poll(void)
+{
+    static bool attached;
+    bool present = false;
+    uint8_t mods, keys[6];
+    while (bsp_keyboard_read(&present, &mods, keys)) {
+        if (!attached) { lx_input_kbd_attach(); attached = true; }
+        lx_input_kbd_report(mods, keys);
+    }
+    if (present && !attached) { lx_input_kbd_attach(); attached = true; }
+    else if (!present && attached) { lx_input_kbd_detach(); attached = false; }
+}
+
 /* Polls the board's buttons (merged into player 1, so a built-in pad and a
  * USB pad both drive single-player apps) and the paddle. A change is taken
  * once two polls in a row agree: the shared ADC pins pass through the second
@@ -438,8 +467,10 @@ static void board_task(void *arg)
 {
     bool pad = bsp_info()->caps & BSP_CAP_GPIO_PAD;
     bool paddle = bsp_info()->caps & BSP_CAP_PADDLE;
-    uint32_t last = 0;
+    bool kbd = bsp_info()->caps & BSP_CAP_KEYBOARD;
+    uint32_t last = 0, n = 0;
     for (;;) {
+        if (kbd && (n++ & 1) == 0) board_keyboard_poll();   /* every other pass: 10 ms */
         if (paddle) s_paddle = bsp_analog_read(BSP_ANALOG_PADDLE);
         if (pad) {
             uint32_t b = bsp_buttons_read();
@@ -458,21 +489,23 @@ static void board_task(void *arg)
 
 static void board_start(void)
 {
-    if (bsp_buttons_init() != ESP_OK) return;
+    esp_err_t found = bsp_buttons_init();
     uint32_t caps = bsp_info()->caps;
+    if (found != ESP_OK && !(caps & BSP_CAP_KEYBOARD)) return;
     if (caps & BSP_CAP_GPIO_PAD) {
         LOCK();
         s_board = true;
         push_event(PAPP_EV_DEVICE_ADDED, 0, 0, 0);
         UNLOCK();
     }
-    ESP_LOGI(TAG, "board input:%s%s", caps & BSP_CAP_GPIO_PAD ? " GPIO pad (P1)" : "",
-             caps & BSP_CAP_PADDLE ? " paddle" : "");
-    xTaskCreatePinnedToCore(board_task, "lx_btn", 3072, NULL, 6, NULL, 0);
+    ESP_LOGI(TAG, "board input:%s%s%s", caps & BSP_CAP_GPIO_PAD ? " GPIO pad (P1)" : "",
+             caps & BSP_CAP_PADDLE ? " paddle" : "", caps & BSP_CAP_KEYBOARD ? " keyboard (when attached)" : "");
+    xTaskCreatePinnedToCore(board_task, "lx_btn", 4096, NULL, 6, NULL, 0);   /* the keyboard's I2C and its log want more than 3 KB */
 }
 
 int lx_input_analog(int ch)
 {
+    if (ch >= PAPP_ANALOG_ACCEL_X && ch <= PAPP_ANALOG_ACCEL_Z) return bsp_analog_read(ch);   /* read when asked, not polled */
     return ch == PAPP_ANALOG_PADDLE ? s_paddle : -1;
 }
 

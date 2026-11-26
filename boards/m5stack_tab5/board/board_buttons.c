@@ -1,6 +1,7 @@
 /*
- * No buttons or paddle on this board: input is USB (and touch). The battery is a 2-cell
- * pack read by an INA226 (0x41); not reported yet, as the launcher expects one Li-ion cell.
+ * No buttons or paddle on this board: input is USB (and touch). The battery (a 2-cell pack
+ * read by an INA226 at 0x41) is board_power.c's.
+ * The accelerometer (board_imu.c) is offered as three analog inputs.
  */
 #include "board_internal.h"
 
@@ -16,10 +17,8 @@ uint32_t bsp_buttons_read(void)
 
 int bsp_analog_read(int ch)
 {
+    if (ch >= BSP_ANALOG_ACCEL_X && ch <= BSP_ANALOG_ACCEL_Z) return board_imu_read(ch - BSP_ANALOG_ACCEL_X);
     return -1;
 }
 
-int bsp_battery_mv(void)
-{
-    return -1;
-}
+/* bsp_battery_mv: board_power.c */

@@ -383,6 +383,7 @@ esp_err_t lx_app_launch(const char *path, int argc, const char *const *argv,
     if (s_state != LX_APP_IDLE)
         return fail(err, err_len, ESP_ERR_INVALID_STATE, "an app is already running");
 
+    lx_lpram_sweep();           /* low-power RAM IDF gave back (main task stack): never for the app's own memory */
     app_t *a = calloc(1, sizeof(*a));
     if (!a) return fail(err, err_len, ESP_ERR_NO_MEM, "out of memory");
     strlcpy(a->path, path, sizeof(a->path));
@@ -425,6 +426,15 @@ esp_err_t lx_app_launch(const char *path, int argc, const char *const *argv,
     a->task = xTaskCreateStaticPinnedToCore(app_task, "papp_main", stack / sizeof(StackType_t),
                                             a, APP_TASK_PRIO, a->stack, a->tcb, APP_TASK_CORE);
     return ESP_OK;
+}
+
+bool lx_app_fast_sram(uintptr_t *base, size_t *size)
+{
+    app_t *a = s_app;
+    if (!a || !a->fast_sram) return false;
+    *base = (uintptr_t)a->fast_sram;
+    *size = ALIGN_UP(a->hdr.fast_image_size + a->hdr.fast_bss_size, CACHE_LINE);
+    return true;
 }
 
 /* ── Teardown (App Manager task) ────────────────────────────────────────── */

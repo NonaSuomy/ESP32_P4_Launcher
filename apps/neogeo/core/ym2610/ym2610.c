@@ -2181,7 +2181,7 @@ static void OPNB_ADPCMA_write(int r, int v) {
 					adpcma[c].adpcma_out = 0;
 					adpcma[c].flag = 1;
 
-					if (pcmbufA == NULL) {
+					if (pcmbufA == NULL && !adpcm_cacheA.active) { /* streamed from SD: pcmbufA is NULL */
 						/* Check ROM Mapped */
 //						logerror("YM2610: ADPCM-A rom not mapped\n");
 						adpcma[c].flag = 0;
@@ -2364,7 +2364,7 @@ static void OPNB_ADPCMB_write(ADPCMB *adpcmb, int r, int v) {
 			adpcmb->memread = 2; /* two dummy reads needed before accesing external memory via register $08*/
 
 			/* if yes, then let's check if ADPCM memory is mapped and big enough */
-			if (!pcmbufB) {
+			if (!pcmbufB && !adpcm_cacheB.active) {
 //				logerror("YM2610: Delta-T ADPCM rom not mapped\n");
 				adpcmb->portstate = 0x00;
 				adpcmb->PCM_BSY = 0;
@@ -3224,8 +3224,8 @@ void ym2610_mkstate(gzFile *gzf, int mode) {
 		for (r = 1; r < 16; r++)
 			OPNB_ADPCMB_write(&YM2610.adpcmb, r + 0x10, YM2610.regs[r + 0x10]);
 
-		if (pcmbufB)
-			YM2610.adpcmb.now_data = *(pcmbufB + (YM2610.adpcmb.now_addr >> 1));
+		if (pcmbufB || adpcm_cacheB.active)
+			YM2610.adpcmb.now_data = ADPCM_READ_B(YM2610.adpcmb.now_addr >> 1);
 	}
 }
 
@@ -3395,8 +3395,8 @@ STATE_LOAD( ym2610 )
 	for (r = 1; r < 16; r++)
 	OPNB_ADPCMB_write(&YM2610.adpcmb, r + 0x10, YM2610.regs[r + 0x10]);
 
-	if (pcmbufB)
-	YM2610.adpcmb.now_data = *(pcmbufB + (YM2610.adpcmb.now_addr >> 1));
+	if (pcmbufB || adpcm_cacheB.active)
+	YM2610.adpcmb.now_data = ADPCM_READ_B(YM2610.adpcmb.now_addr >> 1);
 }
 
 #endif /* SAVE_STATE */

@@ -3,7 +3,7 @@
 papp_dev.py — DevLink host tool for the ESP32-P4 Launcher.
 
 Talks the framed DevLink protocol (components/lx_devlink/include/devlink_proto.h)
-over the USB-Serial-JTAG port.
+over USB-Serial-JTAG or, on the Elecrow AIO, its CH340 UART bridge.
 
   python tools/papp_dev.py [--port COM9] info
   python tools/papp_dev.py ls /sd/apps
@@ -22,7 +22,8 @@ runs it, and streams logs until the
 app exits (or timeout → force stop) and exits with the app's return code
 (124 on timeout, 125 on DevLink error) — so it can be used from scripts/CI.
 
-Port: --port, else $PAPP_PORT, else auto-detect the Espressif USB-Serial-JTAG (VID 303A).
+Port: --port, else $PAPP_PORT, else auto-detect Espressif USB-Serial-JTAG (VID 303A)
+or a CH340 (VID 1A86). Use --transport uart for another USB-UART bridge.
 """
 
 import argparse
@@ -50,7 +51,7 @@ LS, STAT, MKDIR, RM, RENAME = 0x10, 0x11, 0x12, 0x13, 0x14
 PUT_BEGIN, PUT_DATA, PUT_END, GET = 0x20, 0x21, 0x22, 0x28
 RUN, STOP, STATUS = 0x30, 0x31, 0x32
 REBOOT, CRASH, CRASH_CLEAR, BOOTLOG = 0x40, 0x41, 0x42, 0x43
-NET = 0x52
+NET, DISPLAY, BT = 0x52, 0x53, 0x54
 SHOT, INPUT = 0x50, 0x51
 INPUT_PAD, INPUT_KEY, INPUT_STATE, INPUT_UNMAP = 1, 2, 3, 4
 
@@ -103,26 +104,39 @@ def find_port():
     for p in serial.tools.list_ports.comports():
         if p.vid == 0x303A:
             return p.device
-    raise DevLinkError("no Espressif USB-Serial-JTAG port found; use --port")
+    for p in serial.tools.list_ports.comports():
+        if p.vid == 0x1A86 and p.pid in (0x7522, 0x7523, 0x5523, 0x55D4):
+            return p.device
+    raise DevLinkError("no Espressif USB-Serial-JTAG or CH340 port found; use --port")
+
+
+def is_ch340(port):
+    return any(p.device == port and p.vid == 0x1A86 and
+               p.pid in (0x7522, 0x7523, 0x5523, 0x55D4)
+               for p in serial.tools.list_ports.comports())
 
 
 class DevLink:
     """Frame-level client. A reader thread splits the byte stream into frames;
     responses go to a queue keyed by seq, LOG/EVENT frames to callbacks."""
 
-    def __init__(self, port, on_log=None, on_event=None):
+    def __init__(self, port, on_log=None, on_event=None, uart_transport=False):
         self.ser = serial.Serial()
         self.ser.port = port
         self.ser.baudrate = 115200
         self.ser.timeout = 0.05
         # Don't toggle DTR/RTS on open: on USB-Serial-JTAG RTS high with DTR low resets the chip.
-        if os.name == "nt":
+        if uart_transport and os.name == "nt":
+            # Keep the CH340's default DTR/RTS levels stable across open; they
+            # are commonly wired to the target's auto-reset circuit.
+            self.ser.open()
+        elif os.name == "nt":
             self.ser.dtr = False
             self.ser.rts = False
             self.ser.open()
         else:
-            # Linux/macOS raise both lines on open; pyserial would then drop DTR before RTS
-            # (a reset). Keep both high through open, then drop RTS first.
+            # Linux/macOS raise both lines on open; keep that sequence, then
+            # drop RTS before DTR so CH340 auto-reset circuitry won't reset the target.
             self.ser.open()
             self.ser.rts = False
             self.ser.dtr = False
@@ -494,6 +508,8 @@ def main():
             stream.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description="DevLink host tool")
     ap.add_argument("--port")
+    ap.add_argument("--transport", choices=("auto", "usb", "uart"), default="auto",
+                    help="serial transport (auto detects CH340; force UART for other USB-UART bridges)")
     ap.add_argument("--no-time", action="store_true", help="don't set the board's clock from this PC")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("info")
@@ -513,6 +529,11 @@ def main():
     sub.add_parser("crash-clear")
     sub.add_parser("bootlog", help="messages logged while the board was starting")
     sub.add_parser("reboot")
+    p = sub.add_parser("bt", help="Bluetooth speaker and gamepads (test aid): status | scan | results | "
+                       "pair ADDR | speaker ADDR [NAME] | speaker on|off | forget-speaker | forget-pads")
+    p.add_argument("words", nargs="*", default=["status"])
+    p.add_argument("--wait", action="store_true", help="scan: wait for the results")
+    p = sub.add_parser("display", help="panel scan-out and backlight off/on (a test aid; not every board)"); p.add_argument("state", choices=["on", "off"])
     p = sub.add_parser("shot"); p.add_argument("out", nargs="?", default="screenshot.png")
     p = sub.add_parser("log"); p.add_argument("--seconds", type=float, default=0)
     p = sub.add_parser("input", help="inject input or read the input state")
@@ -529,7 +550,9 @@ def main():
     args = ap.parse_args()
 
     try:
-        dl = DevLink(args.port or find_port(), on_log=print_log,
+        port = args.port or find_port()
+        uart_transport = args.transport == "uart" or (args.transport == "auto" and is_ch340(port))
+        dl = DevLink(port, on_log=print_log, uart_transport=uart_transport,
                      on_event=lambda ev: print(f"EVENT {json.dumps(ev)}", file=sys.stderr))
     except (DevLinkError, serial.SerialException) as e:
         print(f"error: {e}", file=sys.stderr)
@@ -552,6 +575,16 @@ def main():
                 time.sleep(1)
                 r = dl.request(NET).decode("utf-8", "replace")
             print(r[1:].strip(chr(0)))
+        elif c == "bt":
+            cmd = " ".join(args.words)
+            r = dl.request(BT, cmd.encode()).decode("utf-8", "replace")
+            if cmd == "scan" and args.wait and r == "scanning":
+                while r == "scanning":
+                    time.sleep(1)
+                    r = dl.request(BT, b"results").decode("utf-8", "replace")
+            print(r)
+        elif c == "display":
+            print(dl.request(DISPLAY, bytes([args.state == "on"])).decode())
         elif c == "ping":
             print("pong" if dl.ping() else "?")
         elif c == "ls":

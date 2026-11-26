@@ -1,0 +1,11 @@
+dependencies:
+  idf: ">=5.5"
+  espressif/esp_lcd_ek79007: "2.0.2"
+  # Wi-Fi companion: the ESP32-C6 over SPI full duplex (sdkconfig.board)
+  espressif/esp_wifi_remote: "1.6.5"
+  espressif/esp_hosted: "2.12.13"
+  # Pulled in by the packages above, pinned too so every build is the same
+  espressif/eppp_link: "1.1.6"
+  espressif/esp_serial_slave_link: "1.1.2"
+  espressif/cmake_utilities: "0.5.3"
+  espressif/wifi_remote_over_eppp: "0.3.3"

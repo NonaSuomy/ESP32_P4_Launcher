@@ -8,7 +8,9 @@
  */
 #include "papp/papp.h"
 
+#include <dirent.h>
 #include <errno.h>
+#include <stdlib.h>
 #include <fcntl.h>
 #include <reent.h>
 #include <string.h>
@@ -207,9 +209,25 @@ int _fstat(int fd, struct stat *st)
     return 0;
 }
 
+/* FS v2: stat with directories, rename, rmdir, directory listing. */
+static const papp_if_fs_t *fs2(void)
+{
+    const papp_if_fs_t *fs = papp_fs();
+    return fs && fs->hdr.version >= 2 ? fs : NULL;
+}
+
 int _stat(const char *path, struct stat *st)
 {
     memset(st, 0, sizeof(*st));
+    if (fs2()) {
+        papp_stat_t s;
+        if (fs2()->stat(path, &s) != 0) { errno = ENOENT; return -1; }
+        st->st_size = (off_t)s.size;
+        st->st_mode = s.is_dir ? S_IFDIR | 0775 : S_IFREG | 0664;
+        st->st_mtime = (time_t)s.mtime;
+        st->st_blksize = 512;
+        return 0;
+    }
     long sz = papp_fs() ? papp_fs()->size(path) : -1;
     if (sz < 0) { errno = ENOENT; return -1; }
     st->st_size = sz;
@@ -220,11 +238,65 @@ int _stat(const char *path, struct stat *st)
 int _isatty(int fd)                   { return fd >= 0 && fd < FD_BASE; }
 int _unlink(const char *path)         { return papp_fs() && papp_fs()->remove(path) == 0 ? 0 : (errno = ENOENT, -1); }
 int _link(const char *a, const char *b) { errno = ENOSYS; return -1; }
-int _rename(const char *a, const char *b) { errno = ENOSYS; return -1; }   /* FS has no rename yet */
+int _rename(const char *a, const char *b)
+{
+    if (!fs2()) { errno = ENOSYS; return -1; }                             /* a launcher before FS v2 */
+    return fs2()->rename(a, b) == 0 ? 0 : (errno = EIO, -1);
+}
+int rmdir(const char *path)
+{
+    if (!fs2()) { errno = ENOSYS; return -1; }
+    return fs2()->rmdir(path) == 0 ? 0 : (errno = ENOTEMPTY, -1);
+}
+
+/* newlib's DIR is the VFS's header; ours carries the launcher's handle and the entry readdir returns. */
+typedef struct {
+    DIR hdr;
+    papp_dir_t *d;
+    struct dirent e;
+} papp_DIR;
+
+DIR *opendir(const char *path)
+{
+    if (!fs2()) { errno = ENOSYS; return NULL; }
+    papp_dir_t *d = fs2()->opendir(path);
+    if (!d) { errno = ENOENT; return NULL; }
+    papp_DIR *pd = calloc(1, sizeof(*pd));
+    if (!pd) { fs2()->closedir(d); errno = ENOMEM; return NULL; }
+    pd->d = d;
+    return &pd->hdr;
+}
+
+struct dirent *readdir(DIR *dir)
+{
+    papp_DIR *pd = (papp_DIR *)dir;
+    papp_dirent_t e;
+    if (!pd || !fs2() || fs2()->readdir(pd->d, &e) != 1) return NULL;
+    memset(&pd->e, 0, sizeof(pd->e));
+    strncpy(pd->e.d_name, e.name, sizeof(pd->e.d_name) - 1);
+    pd->e.d_type = e.is_dir ? DT_DIR : DT_REG;
+    return &pd->e;
+}
+
+int closedir(DIR *dir)
+{
+    papp_DIR *pd = (papp_DIR *)dir;
+    if (!pd) return -1;
+    if (fs2()) fs2()->closedir(pd->d);
+    free(pd);
+    return 0;
+}
 int _fcntl(int fd, int cmd, int arg)  { return 0; }
 int fsync(int fd)                     { return 0; }                         /* writes go straight to the FS */
 int _kill(int pid, int sig)           { errno = EINVAL; return -1; }
 int _getpid(void)                     { return 1; }
+/* getentropy(): the hardware random number generator (SYS v5), for libraries that ask the C library. */
+int getentropy(void *buf, size_t len)
+{
+    if (len > 256) { errno = EIO; return -1; }
+    return papp_random(buf, len) ? 0 : (errno = ENOSYS, -1);
+}
+
 int mkdir(const char *path, mode_t m) { return papp_fs() && papp_fs()->mkdir(path) == 0 ? 0 : -1; }
 
 int _gettimeofday(struct timeval *tv, void *tz)

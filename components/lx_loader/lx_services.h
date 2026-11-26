@@ -9,6 +9,15 @@
 
 void lx_svc_init(lx_app_log_sink_t log_sink);
 
+/* Low-power RAM, kept out of the heap (lx_lpram.c): PAPP_MEM_LPRAM */
+void   lx_lpram_sweep(void);               /* before each app: pieces IDF gave back since */
+bool   lx_lpram_owns(const void *p);
+void  *lx_lpram_alloc(size_t size, size_t align);
+void  *lx_lpram_realloc(void *p, size_t size);
+void   lx_lpram_free(void *p);
+size_t lx_lpram_size(const void *p);
+size_t lx_lpram_free_size(void);
+
 /* Interface registry lookup: NULL if the id is unknown or too old. */
 const papp_iface_hdr_t *lx_svc_find(uint32_t id, uint16_t min_version);
 
@@ -34,6 +43,18 @@ extern const papp_if_thrd_t lx_if_thrd;
 extern const papp_if_ui_t lx_if_ui;
 extern const papp_if_net_t lx_if_net;
 extern const papp_if_ble_t lx_if_ble;     /* only on boards with BLE (lx_svc_ble_present) */
+extern const papp_if_usbh_t lx_if_usbh;
+
+/* USBH bookkeeping (lx_svc_usbh.c) */
+int  lx_svc_usbh_end_run(void);             /* -> devices the app left open */
+extern const papp_if_pwr_t lx_if_pwr;
+void lx_svc_pwr_end_run(void);              /* lx_svc_pwr.c: charging back on */
+extern const papp_if_irq_t lx_if_irq;
+void lx_svc_irq_init(void);                 /* lx_svc_irq.c: GPIO pins and timers for apps */
+void lx_svc_irq_begin_run(void);
+int  lx_svc_irq_end_run(void);              /* -> interrupts the app left attached */
+/* The running app's FAST region when it is in internal SRAM (lx_app.c): false if none or in PSRAM */
+bool lx_app_fast_sram(uintptr_t *base, size_t *size);
 
 /* NET bookkeeping (lx_svc_net.c) */
 void lx_svc_net_init(void);
@@ -55,6 +76,7 @@ int  lx_thrd_end_run(void);                /* -> sync objects freed */
 /* In-game overlay (lx_svc_ui.c): presents open it when HOME asked for it */
 void lx_overlay_poll(void);
 void lx_overlay_reset(void);
+bool lx_ui_owns_touch(void);                /* a launcher screen is over the app: touches are not the app's */
 
 /* Ends the run from any app thread with `code` (lx_app.c). */
 void lx_app_post_exit(int code);

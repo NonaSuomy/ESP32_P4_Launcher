@@ -151,7 +151,11 @@ def build(name, sources, includes=(), libc=False, out_dir=None, link_base=0, ext
     else:
         ldflags += ["-nostdlib"]
         libs = ["-lgcc"]
-    run([gcc] + ldflags + list(extra_ldflags) + ["-o", elf] + objs + libs)
+    # Object list in a response file: hundreds of objects (LVGL) in a deep folder pass Windows' 32 KB command line
+    rsp = os.path.join(out_dir, "objs.rsp")
+    with open(rsp, "w", encoding="utf-8") as f:
+        f.write("\n".join('"' + o.replace("\\", "/") + '"' for o in objs) + "\n")
+    run([gcc] + ldflags + list(extra_ldflags) + ["-o", elf, "@" + rsp] + libs)
 
     if link_base or fast_link_base:
         return elf, None

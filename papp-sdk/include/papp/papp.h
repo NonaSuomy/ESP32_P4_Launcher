@@ -52,9 +52,18 @@ const char *papp_board_id(void);
 uint32_t    papp_launcher_abi(void);
 bool        papp_local_time(papp_datetime_t *out);  /* false: clock not set, or older launcher */
 bool        papp_utc_time(int64_t *seconds);        /* Unix time (UTC); false: not set, or launcher < 0.27 */
+/* The chip revision, major * 100 + minor (v1.3 = 103, v3.2 = 302); -1: launcher < 0.33, which can't
+ * tell. SIMD code must match it: PIE (-march ..._xesppie) below 300, _xespv from 300 (other encodings
+ * of the same instructions; either faults on the other generation). Unknown = use plain C. */
+int         papp_chip_rev(void);
+/* Bytes from the hardware random number generator (keys, nonces). False on a launcher without it (SYS v5, launcher < 0.34):
+ * buf is then left as it was, and the app must not use it for anything secret. */
+bool        papp_random(void *buf, size_t len);
 
 /* ── Memory ─────────────────────────────────────────────────────────────── */
 void  *papp_alloc(size_t size, uint32_t caps, size_t align);   /* PAPP_MEM_* caps */
+/* PAPP_MEM_LPRAM: the P4's low-power RAM (about 30 KB, ~50x slower than SRAM), never handed out
+ * for any other request; NULL on launchers before 0.33. papp_mem_free_size(PAPP_MEM_LPRAM) = free. */
 void  *papp_realloc(void *ptr, size_t size);
 void   papp_free(void *ptr);
 size_t papp_mem_free_size(uint32_t caps);
@@ -124,9 +133,16 @@ bool     papp_input_key_down(uint16_t usage);                   /* HID usage id 
 uint16_t papp_input_modifiers(void);                            /* PAPP_MOD_*   */
 bool     papp_input_poll_event(papp_input_event_t *ev);         /* false: none  */
 void     papp_input_flush(void);
-/* Board analog inputs (PAPP_ANALOG_PADDLE): 0..65535, -1 if absent or the
- * launcher predates INPT v2. */
+/* Board analog inputs: 0..65535, -1 if absent or the launcher predates INPT v2.
+ * PAPP_ANALOG_PADDLE is a paddle's pot. PAPP_ANALOG_ACCEL_X/Y/Z are an accelerometer,
+ * on boards that have one (the M5Stack Tab5): 32768 is 0 g, 4096 to the g, the board's
+ * own axes. -1 on other boards and on launchers before these were added.
+ *   int z = papp_input_analog(PAPP_ANALOG_ACCEL_Z);
+ *   if (z >= 0) { float g = (z - 32768) / 4096.0f; ... }                    */
 int      papp_input_analog(int ch);
+/* Whether a keyboard is attached now (a USB keyboard, or one the board has of its own): an app can lay out
+ * on-screen keys only when there is none. False on a launcher too old to say. */
+bool     papp_input_keyboard(void);
 
 /* ── Threads ────────────────────────────────────────────────────────────────
  * NULL / false when the launcher has no THRD. cfg may be NULL (8 KB internal
@@ -211,6 +227,28 @@ const papp_if_net_t *papp_net(void);
  *   papp_ble_adv_cfg_t a = { .adv = adv, .adv_len = n, .connectable = 1 };
  *   ble->adv_start(&a);    then wait_event() for CONNECTED / WRITE / SUBSCRIBE, notify() values */
 const papp_if_ble_t *papp_ble(void);
+
+/* The USB host interface (papp_abi.h has the calls): NULL on launchers without it; on boards
+ * without a USB host port its list() answers PAPP_E_UNSUPPORTED. */
+const papp_if_usbh_t *papp_usbh(void);
+
+/* The battery and charging (papp_abi.h has the calls): NULL on launchers without it. */
+const papp_if_pwr_t *papp_pwr(void);
+/* The USB HID device (papp_abi.h has the calls): NULL on launchers and boards without it. */
+const papp_if_hidd_t *papp_hidd(void);
+
+/* GPIO pins, hardware timers and their interrupts (papp_abi.h has the calls and the rules for a direct
+ * handler): NULL on launchers before 0.35. A deferred interrupt is taken with wait(), or with
+ * papp_irq_thread(): a thread on the interrupt's core (prio PAPP_PRIO_*) that calls fn for each event
+ * until the interrupt is detached or the app is asked to exit; join it after detach.
+ *   const papp_if_irq_t *irq = papp_irq();
+ *   irq->gpio_config(5, PAPP_GPIO_INPUT, PAPP_GPIO_PULL_UP);
+ *   papp_irq_cfg_t c = { .core = 1 };  papp_irq_t *h;
+ *   if (irq->gpio_attach(5, PAPP_IRQ_FALLING, &c, &h) == PAPP_E_OK)
+ *       papp_irq_thread(h, on_press, NULL, PAPP_PRIO_HIGH); */
+const papp_if_irq_t *papp_irq(void);
+typedef void (*papp_irq_fn_t)(void *arg, const papp_irq_event_t *ev);
+papp_thread_t *papp_irq_thread(papp_irq_t *h, papp_irq_fn_t fn, void *arg, uint8_t prio);
 
 #define PAPP_BLE_UUID16(v) { 2, { (uint8_t)((v) & 0xFF), (uint8_t)((v) >> 8) } }
 

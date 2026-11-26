@@ -4,6 +4,7 @@
  * SD card and board info here; display, touch, audio and RTC in their own files.
  */
 #include "board_internal.h"
+#include "esp_bit_defs.h"
 #include "board_pins.h"
 
 #include "esp_log.h"
@@ -20,7 +21,8 @@ static const char *TAG = "bsp";
 static bsp_info_t s_info = {
     .id        = "m5stack_tab5",
     .name      = "M5Stack Tab5 1280x720",
-    .caps      = BSP_CAP_USB_HOST,      /* USB-A host port (5 V switched by IOX2 P3); the rest is set at init */
+    .caps      = BSP_CAP_USB_HOST |     /* USB-A host port (5 V switched by IOX2 P3); the rest is set at init */
+                 BSP_CAP_KEYBOARD,      /* the clip-on Tab5 Keyboard, looked for while the launcher runs */
     .display_w = BOARD_LCD_H_RES,
     .display_h = BOARD_LCD_V_RES,
     .display_rot = 90,                  /* portrait panel, used in landscape */
@@ -101,7 +103,10 @@ esp_err_t bsp_init(void)
     };
     esp_err_t err = i2c_new_master_bus(&cfg, &s_i2c);
     if (err != ESP_OK) ESP_LOGE(TAG, "I2C bus init failed: %s", esp_err_to_name(err));
-    else expanders_init();
+    else {
+        expanders_init();
+        bsp_power_init();
+    }
     return ESP_OK;      /* devices report their own absence */
 }
 
@@ -204,4 +209,13 @@ esp_err_t bsp_sdcard_mount(const char *mount_point)
 bool bsp_sdcard_mounted(void)
 {
     return s_sd_mounted;
+}
+
+/* Pins for apps (IRQ interface), from M5Stack's schematic: the M5-Bus on the back (SPI 5/18/19, Port B
+ * 16/17/45/52, Port C 6/7, and 2/3/4/47/48/51), G49 on Ext.Port1 and Grove Port A (53/54). Ext.Port1's
+ * G0/G1/G50 are the clip-on keyboard's (board_keyboard.c); 31/32 (system I2C), 35 (BOOT), 37/38 (console)
+ * and the RS485 pins 20/21/34 are not apps'. */
+uint64_t bsp_app_gpio_mask(void)
+{
+    return BIT64(2) | BIT64(3) | BIT64(4) | BIT64(5) | BIT64(6) | BIT64(7) | BIT64(16) | BIT64(17) | BIT64(18) | BIT64(19) | BIT64(45) | BIT64(47) | BIT64(48) | BIT64(49) | BIT64(51) | BIT64(52) | BIT64(53) | BIT64(54);
 }

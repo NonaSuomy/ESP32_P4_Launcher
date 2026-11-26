@@ -7,6 +7,7 @@
  */
 #include "bsp.h"
 #include "lx_app.h"
+#include "lx_bt.h"
 #include "lx_devlink.h"
 #include "lx_comp.h"
 #include "lx_audio.h"
@@ -30,6 +31,9 @@ static const char *TAG = "launcher";
 static void on_app_exit(const char *path, int code, bool forced,
                         uint32_t leaked_allocs, uint32_t leaked_files)
 {
+    /* A Quit-to-home overlay keeps the mixer muted while the app's tasks and
+     * streams stop. Restore it only after the App Manager has torn them down. */
+    lx_audio_hold(false);
     lx_devlink_app_exited(path, code, forced, leaked_allocs, leaked_files);
 }
 
@@ -82,6 +86,7 @@ static void sd_retry_task(void *arg)
 void app_main(void)
 {
     lx_devlink_early_init();
+    lx_lpram_claim();           /* before anything can land in the slow low-power RAM (#38) */
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         nvs_flash_erase();
@@ -125,6 +130,7 @@ void app_main(void)
         if (lx_audio_init() != ESP_OK) ESP_LOGE(TAG, "audio mixer init failed");
     }
     if (lx_net_init() != ESP_OK) ESP_LOGE(TAG, "network init failed");
+    lx_bt_init();               /* USB Bluetooth dongles + the Bluetooth speaker (after the USB host) */
     if (home_start() != ESP_OK)
         ESP_LOGE(TAG, "home screen failed to start");
     ESP_LOGI(TAG, "ready");

@@ -30,6 +30,7 @@ esp_err_t lx_input_init(lx_input_sys_cb_t sys_cb);
 /* Consumers */
 bool     lx_input_gamepad(int player, papp_gamepad_t *out);
 bool     lx_input_key_down(uint16_t usage);
+bool     lx_input_keyboard_attached(void);          /* a USB keyboard or the board's own */
 uint16_t lx_input_modifiers(void);
 bool     lx_input_poll_event(papp_input_event_t *out);
 void     lx_input_flush(void);
@@ -43,6 +44,28 @@ int  lx_input_pad_attach(const char *name, uint16_t vid, uint16_t pid);   /* -> 
 void lx_input_pad_update(int player, uint32_t buttons, int16_t lx, int16_t ly, int16_t rx, int16_t ry,
                          uint16_t lt, uint16_t rt);
 void lx_input_pad_detach(int player);
+
+/* Sources: HID gamepads of other transports (Bluetooth, lx_input_hidpad.c). open attaches a
+ * player (NULL: no free slot); desc = the HID report descriptor (parsed here, may be freed after);
+ * report = one input report, report id first when the pad uses ids. */
+typedef struct lx_hidpad lx_hidpad_t;
+lx_hidpad_t *lx_input_hidpad_open(const char *name, uint16_t vid, uint16_t pid, const uint8_t *desc, size_t len);
+void         lx_input_hidpad_report(lx_hidpad_t *pad, const uint8_t *report, size_t len);
+void         lx_input_hidpad_close(lx_hidpad_t *pad);
+/* Report timing since the last call (then reset): a stall is a gap of LX_HIDPAD_STALL_US or more */
+#define LX_HIDPAD_STALL_US 100000
+typedef struct {
+    int      player;
+    uint32_t reports, ms;       /* reports in the last ms milliseconds */
+    uint32_t gap_max_ms;        /* longest gap between two reports */
+    uint32_t stalls;
+    uint32_t stalls_in_use;     /* stalls within LX_HIDPAD_IN_USE_US of an input change (someone playing) */
+    uint32_t idle_ms;           /* since the last report */
+    uint32_t still_ms;          /* since the last input change (buttons, or sticks / triggers moved) */
+} lx_hidpad_stats_t;
+#define LX_HIDPAD_IN_USE_US 2000000
+void         lx_input_hidpad_stats(lx_hidpad_t *pad, lx_hidpad_stats_t *out);
+uint32_t     lx_input_hidpad_still_ms(lx_hidpad_t *pad);   /* since the last input change; no reset */
 
 /* Button mapping, per pad model (VID:PID), as text on the SD card: your own in
  * /sd/config/gamepads_mine.txt, else the shared /sd/config/gamepads.txt (lx_padmap.c).

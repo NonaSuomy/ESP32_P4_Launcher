@@ -80,11 +80,14 @@ static double osd_getTime(void)
 
 
 #ifndef MY_VSYNC_DISABLE
+long long pce_sleep_us_acc = 0;   /* time slept for the 60 Hz pace: spare time (FPS log) */
+
 static void osd_sleep(double s)
 {
 	if (s > 0)
 	{
 		usleep((useconds_t)(s * 1e6));
+		pce_sleep_us_acc += (long long)(s * 1e6);
 	}
 }
 #endif /* !MY_VSYNC_DISABLE */

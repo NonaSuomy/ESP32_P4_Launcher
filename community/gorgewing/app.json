@@ -1,0 +1,7 @@
+{
+  "author": "Gil Tal",
+  "description": "3D jet fighter on the e3d engine: fly a desert canyon, shoot turrets, drones and jets, refuel from gas balloons",
+  "category": "games",
+  "license": "MIT",
+  "source": "https://github.com/giltal/ESP32_P4_3D_Engine/tree/main/game/gorgewing"
+}

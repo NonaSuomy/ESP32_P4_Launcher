@@ -6,9 +6,9 @@
 
 __attribute__((section(".papp_imports"), used))
 papp_import_t __papp_imports[] = {
-    { PAPP_IF_SYS, 1, PAPP_IMPORT_REQUIRED, 0 },     /* v2 for papp_local_time, v3 for papp_utc_time */
+    { PAPP_IF_SYS, 1, PAPP_IMPORT_REQUIRED, 0 },     /* v2 papp_local_time, v3 papp_utc_time, v4 papp_chip_rev */
     { PAPP_IF_MEM, 1, PAPP_IMPORT_REQUIRED, 0 },          /* v2 code memory checked at call */
-    { PAPP_IF_FS,  PAPP_IF_FS_VER,  PAPP_IMPORT_OPTIONAL, 0 },
+    { PAPP_IF_FS,  1,  PAPP_IMPORT_OPTIONAL, 0 },             /* v2 (stat, rename, directories) checked at call */
     { PAPP_IF_DISP, 3, PAPP_IMPORT_OPTIONAL, 0 },             /* v3 present_ext; v4 blit checked at call */
     { PAPP_IF_AUDI, PAPP_IF_AUDI_VER, PAPP_IMPORT_OPTIONAL, 0 },
     { PAPP_IF_INPT, 1, PAPP_IMPORT_OPTIONAL, 0 },          /* v2 functions checked at call */
@@ -16,6 +16,10 @@ papp_import_t __papp_imports[] = {
     { PAPP_IF_UI, 1, PAPP_IMPORT_OPTIONAL, 0 },              /* v2 functions checked at call */
     { PAPP_IF_NET, 1, PAPP_IMPORT_OPTIONAL, 0 },             /* launcher 0.29+ */
     { PAPP_IF_BLE, 1, PAPP_IMPORT_OPTIONAL, 0 },             /* launcher 0.29+, boards with BLE */
+    { PAPP_IF_USBH, 1, PAPP_IMPORT_OPTIONAL, 0 },            /* boards with a USB host port */
+    { PAPP_IF_PWR, 1, PAPP_IMPORT_OPTIONAL, 0 },             /* battery and charging */
+    { PAPP_IF_HIDD, 1, PAPP_IMPORT_OPTIONAL, 0 },            /* USB HID device on the device port */
+    { PAPP_IF_IRQ, 1, PAPP_IMPORT_OPTIONAL, 0 },             /* GPIO pins, timers, interrupts (0.35+) */
 };
 
 #define SYS ((const papp_if_sys_t *)__papp_imports[0].iface)
@@ -28,6 +32,10 @@ papp_import_t __papp_imports[] = {
 #define UI   ((const papp_if_ui_t *)__papp_imports[7].iface)
 #define NET  ((const papp_if_net_t *)__papp_imports[8].iface)
 #define BLE  ((const papp_if_ble_t *)__papp_imports[9].iface)
+#define USBH ((const papp_if_usbh_t *)__papp_imports[10].iface)
+#define PWR  ((const papp_if_pwr_t *)__papp_imports[11].iface)
+#define HIDD ((const papp_if_hidd_t *)__papp_imports[12].iface)
+#define IRQ  ((const papp_if_irq_t *)__papp_imports[13].iface)
 
 const papp_if_sys_t *papp_if_sys(void) { return SYS; }
 const papp_if_mem_t *papp_if_mem(void) { return MEM; }
@@ -51,15 +59,35 @@ bool        papp_local_time(papp_datetime_t *out)
     return SYS->hdr.version >= 2 && SYS->local_time(out);
 }
 
+bool papp_random(void *buf, size_t len)
+{
+    if (SYS->hdr.version < 5 || !SYS->random) return false;
+    SYS->random(buf, len);
+    return true;
+}
+
 bool        papp_utc_time(int64_t *seconds)
 {
     return SYS->hdr.version >= 3 && SYS->utc_time(seconds);
 }
 
-void  *papp_alloc(size_t size, uint32_t caps, size_t align) { return MEM->alloc(size, caps, align); }
+int         papp_chip_rev(void)
+{
+    return SYS->hdr.version >= 4 ? SYS->chip_rev() : -1;
+}
+
+void  *papp_alloc(size_t size, uint32_t caps, size_t align)
+{
+    if ((caps & PAPP_MEM_LPRAM) && MEM->hdr.version < 3) return NULL;     /* an older launcher would give other memory */
+    return MEM->alloc(size, caps, align);
+}
 void  *papp_realloc(void *ptr, size_t size)                 { return MEM->realloc(ptr, size); }
 void   papp_free(void *ptr)                                 { MEM->free(ptr); }
-size_t papp_mem_free_size(uint32_t caps)                    { return MEM->free_size(caps); }
+size_t papp_mem_free_size(uint32_t caps)
+{
+    if ((caps & PAPP_MEM_LPRAM) && MEM->hdr.version < 3) return 0;
+    return MEM->free_size(caps);
+}
 void  *papp_code_alloc(size_t size)        { return MEM->hdr.version >= 2 ? MEM->code_alloc(size) : NULL; }
 void   papp_code_free(void *code)          { if (MEM->hdr.version >= 2) MEM->code_free(code); }
 int    papp_code_sync(void *code, size_t size)
@@ -130,6 +158,11 @@ bool     papp_input_key_down(uint16_t usage)          { return INPT && INPT->key
 uint16_t papp_input_modifiers(void)                   { return INPT ? INPT->modifiers() : 0; }
 bool     papp_input_poll_event(papp_input_event_t *e) { return INPT && INPT->poll_event(e); }
 void     papp_input_flush(void)                       { if (INPT) INPT->flush(); }
+
+bool papp_input_keyboard(void)
+{
+    return INPT && INPT->hdr.version >= 3 && INPT->keyboard ? INPT->keyboard() : false;
+}
 
 int papp_input_analog(int ch)
 {
@@ -244,3 +277,34 @@ const papp_if_net_t *papp_net(void) { return NET; }
 /* ── BLE ────────────────────────────────────────────────────────────────── */
 
 const papp_if_ble_t *papp_ble(void) { return BLE; }
+const papp_if_usbh_t *papp_usbh(void) { return USBH; }
+const papp_if_pwr_t *papp_pwr(void) { return PWR; }
+const papp_if_hidd_t *papp_hidd(void) { return HIDD; }
+const papp_if_irq_t  *papp_irq(void)  { return IRQ; }
+
+/* papp_irq_thread: a thread on the interrupt's core that calls fn per event until h is detached or the
+ * app is asked to exit */
+typedef struct { papp_irq_t *h; papp_irq_fn_t fn; void *arg; } irq_thr_t;
+
+static int irq_thread_main(void *p)
+{
+    irq_thr_t t = *(irq_thr_t *)p;
+    papp_free(p);
+    papp_irq_event_t ev;
+    int r;
+    while ((r = IRQ->wait(t.h, &ev, PAPP_WAIT_FOREVER)) == 1 || r == PAPP_E_TIMEOUT)
+        if (r == 1) t.fn(t.arg, &ev);
+    return 0;
+}
+
+papp_thread_t *papp_irq_thread(papp_irq_t *h, papp_irq_fn_t fn, void *arg, uint8_t prio)
+{
+    if (!IRQ || !h || !fn) return NULL;
+    irq_thr_t *t = papp_alloc(sizeof(*t), PAPP_MEM_FAST, 0);
+    if (!t) return NULL;
+    t->h = h; t->fn = fn; t->arg = arg;
+    papp_thread_cfg_t cfg = { .name = "papp_irq", .prio = prio, .core = (int8_t)IRQ->core(h) };
+    papp_thread_t *th = papp_thread_create(irq_thread_main, t, &cfg);
+    if (!th) papp_free(t);
+    return th;
+}

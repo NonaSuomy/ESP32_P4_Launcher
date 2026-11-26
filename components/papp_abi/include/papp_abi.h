@@ -145,7 +145,7 @@ typedef struct {
 /* ── SYS interface ──────────────────────────────────────────────────────── */
 
 #define PAPP_IF_SYS       PAPP_FOURCC('S', 'Y', 'S', ' ')
-#define PAPP_IF_SYS_VER   3      /* v2: local_time; v3: utc_time */
+#define PAPP_IF_SYS_VER   5      /* v2: local_time; v3: utc_time; v4: chip_rev; v5: random */
 
 typedef struct {
     int16_t year;
@@ -164,18 +164,29 @@ typedef struct {
     const char *(*board_id)(void);
     bool     (*local_time)(papp_datetime_t *out);   /* v2: false if the clock isn't set */
     bool     (*utc_time)(int64_t *seconds);          /* v3: Unix time (UTC); false if the clock isn't set */
+    /* v4: the chip revision, major * 100 + minor (v1.3 = 103, v3.2 = 302). Code using the P4's SIMD
+     * extension depends on it: v1.x chips have PIE (-march ..._xesppie), v3.x the re-encoded _xespv;
+     * the same instructions with other encodings, so each faults on the other generation. */
+    int      (*chip_rev)(void);
+    /* v5: bytes from the chip's hardware random number generator (esp_fill_random): true random while
+     * a noise source feeds it, which ESP-IDF keeps on for chips without a radio of their own, such as the
+     * ESP32-P4 (its SAR ADC's noise). Good for keys and nonces. */
+    void     (*random)(void *buf, size_t len);
 } papp_if_sys_t;
 
 /* ── MEM interface ──────────────────────────────────────────────────────── */
 
 #define PAPP_IF_MEM       PAPP_FOURCC('M', 'E', 'M', ' ')
-#define PAPP_IF_MEM_VER   2           /* v2: code_alloc / code_free / code_sync */
+#define PAPP_IF_MEM_VER   3           /* v2: code_alloc / code_free / code_sync; v3: PAPP_MEM_LPRAM */
 
 /* Abstract capabilities — mapped by the launcher, never ESP-IDF values. */
 #define PAPP_MEM_ANY      0u
 #define PAPP_MEM_FAST     (1u << 0)   /* internal SRAM                       */
 #define PAPP_MEM_DMA      (1u << 1)   /* usable by DMA / PPA (64 B aligned)  */
 #define PAPP_MEM_LARGE    (1u << 2)   /* PSRAM                               */
+#define PAPP_MEM_LPRAM    (1u << 3)   /* v3: the P4's low-power RAM, ~30 KB, about 50x slower than
+                                       * SRAM (uncached): only for data that is rarely touched. Never
+                                       * given out otherwise. Other caps are ignored; not DMA-capable. */
 
 typedef struct {
     papp_iface_hdr_t hdr;
@@ -194,9 +205,25 @@ typedef struct {
 /* ── FS interface ───────────────────────────────────────────────────────── */
 
 #define PAPP_IF_FS        PAPP_FOURCC('F', 'S', ' ', ' ')
-#define PAPP_IF_FS_VER    1
+#define PAPP_IF_FS_VER    2      /* v2: stat, rename, rmdir, directories */
 
 typedef struct papp_file papp_file_t;
+typedef struct papp_dir  papp_dir_t;
+
+typedef struct {
+    int64_t  size;                       /* bytes (0 for a directory)                */
+    int64_t  mtime;                      /* seconds since 1970, 0 if unknown        */
+    uint8_t  is_dir;
+    uint8_t  reserved[7];
+} papp_stat_t;
+
+typedef struct {
+    char     name[256];                  /* the entry's name, not its path          */
+    uint8_t  is_dir;
+    uint8_t  reserved[3];
+} papp_dirent_t;
+
+#define PAPP_FS_MAX_DIRS 8               /* open at once; closed with the app       */
 
 typedef struct {
     papp_iface_hdr_t hdr;
@@ -209,6 +236,13 @@ typedef struct {
     long    (*size)(const char *path);            /* -1 if missing */
     int     (*remove)(const char *path);
     int     (*mkdir)(const char *path);
+    /* v2. 0 on success, -1 on failure. */
+    int     (*stat)(const char *path, papp_stat_t *out);
+    int     (*rename)(const char *from, const char *to);
+    int     (*rmdir)(const char *path);                  /* empty directories only  */
+    papp_dir_t *(*opendir)(const char *path);            /* NULL: missing / no slot */
+    int     (*readdir)(papp_dir_t *d, papp_dirent_t *out);   /* 1 an entry, 0 the end ("." and ".." left out) */
+    void    (*closedir)(papp_dir_t *d);
 } papp_if_fs_t;
 
 /* ── DISP interface ─────────────────────────────────────────────────────── */
@@ -341,7 +375,7 @@ typedef struct {
 /* ── INPT interface ─────────────────────────────────────────────────────── */
 
 #define PAPP_IF_INPT      PAPP_FOURCC('I', 'N', 'P', 'T')
-#define PAPP_IF_INPT_VER  2      /* v2: analog */
+#define PAPP_IF_INPT_VER  3      /* v2: analog, v3: keyboard */
 
 #define PAPP_MAX_PLAYERS  4
 
@@ -367,6 +401,9 @@ typedef struct {
 
 /* Analog inputs that are not part of a gamepad (INPT v2 analog()) */
 #define PAPP_ANALOG_PADDLE 0      /* Atari paddle pot: 0..65535 */
+#define PAPP_ANALOG_ACCEL_X 16    /* accelerometer, on boards that have one: 32768 = 0 g, 4096 per g, */
+#define PAPP_ANALOG_ACCEL_Y 17    /* the board's own axes. -1 on a board without, or a launcher before  */
+#define PAPP_ANALOG_ACCEL_Z 18    /* these were added. The first read may take a moment (it wakes the chip) */
 
 typedef struct {
     uint8_t  connected;
@@ -416,6 +453,8 @@ typedef struct {
     void     (*flush)(void);
     /* v2 */
     int      (*analog)(int ch);                           /* PAPP_ANALOG_*: 0..65535, -1 absent */
+    /* v3 */
+    bool     (*keyboard)(void);                           /* a keyboard is attached (USB or the board's own) */
 } papp_if_inpt_t;
 
 /* ── THRD interface ─────────────────────────────────────────────────────── */
@@ -715,11 +754,14 @@ typedef struct {
  * C6). The host starts on the first call and is shut down at teardown, with
  * advertising, scans, connections and the GATT table. Results use the
  * PAPP_E_* codes of NET (>= 0 success). Blocking calls take a timeout in ms
- * and return PAPP_E_EXIT as soon as the app is asked to exit. No pairing in
- * v1: characteristics are open. */
+ * and return PAPP_E_EXIT as soon as the app is asked to exit. v1 has no
+ * pairing: characteristics are open. v2 adds pairing and
+ * bonds kept across runs, characteristics that need an encrypted link,
+ * descriptors, the GAP appearance and a static random address: enough for a
+ * HID over GATT keyboard. */
 
 #define PAPP_IF_BLE       PAPP_FOURCC('B', 'L', 'E', ' ')
-#define PAPP_IF_BLE_VER   1
+#define PAPP_IF_BLE_VER   2      /* v2: security, bonds, gatt_register2, appearance, random address */
 
 #define PAPP_BLE_MAX_CONN     3
 #define PAPP_BLE_MAX_SVCS     8
@@ -751,6 +793,7 @@ typedef struct {
 enum {
     PAPP_BLE_READ = 1, PAPP_BLE_WRITE = 2, PAPP_BLE_WRITE_NR = 4,     /* write without response */
     PAPP_BLE_NOTIFY = 8, PAPP_BLE_INDICATE = 16,
+    PAPP_BLE_READ_ENC = 32, PAPP_BLE_WRITE_ENC = 64,    /* v2: only on an encrypted link (a host pairs first) */
 };
 typedef struct {
     papp_ble_uuid_t uuid;
@@ -763,6 +806,39 @@ typedef struct {
     const papp_ble_chr_t *chrs;
     uint8_t               chr_count;
 } papp_ble_svc_t;
+
+/* v2: a characteristic with descriptors of fixed value (a HID Report Reference, 0x2908, say). */
+typedef struct {
+    papp_ble_uuid_t uuid;
+    uint8_t         value[8];
+    uint8_t         len;
+    uint8_t         flags;               /* PAPP_BLE_READ, optionally PAPP_BLE_READ_ENC */
+} papp_ble_dsc_t;
+typedef struct {
+    papp_ble_uuid_t       uuid;
+    uint16_t              flags;         /* PAPP_BLE_*                                  */
+    uint16_t              max_len;       /* value size, 1..512                          */
+    uint16_t             *handle;        /* filled in by gatt_register2 (value handle)  */
+    const papp_ble_dsc_t *dscs;
+    uint8_t               dsc_count;     /* up to 4                                     */
+} papp_ble_chr2_t;
+typedef struct {
+    papp_ble_uuid_t        uuid;
+    const papp_ble_chr2_t *chrs;
+    uint8_t                chr_count;
+} papp_ble_svc2_t;
+
+/* v2: pairing. Set before advertising; bonds are kept on the SD card (/sd/config/ble_bonds.bin) for later runs. */
+enum { PAPP_BLE_IO_DISPLAY_ONLY = 0, PAPP_BLE_IO_DISPLAY_YESNO, PAPP_BLE_IO_KEYBOARD_ONLY,
+       PAPP_BLE_IO_NONE, PAPP_BLE_IO_KEYBOARD_DISPLAY };
+typedef struct {
+    uint8_t io_cap;                      /* PAPP_BLE_IO_* (NONE: "Just Works")          */
+    uint8_t bond;                        /* keep the keys for the next connection      */
+    uint8_t mitm;
+    uint8_t sc;                          /* LE Secure Connections (else legacy pairing) */
+    uint8_t initiate;                    /* ask a central for encryption as soon as it
+                                          * connects (macOS waits to be asked)          */
+} papp_ble_sec_cfg_t;
 
 /* GATT client discovery */
 typedef struct {
@@ -785,6 +861,7 @@ enum {
     PAPP_BLE_EV_SUBSCRIBE,               /* server: conn, handle; code 0 off, 1 notify, 2 indicate */
     PAPP_BLE_EV_MTU,                     /* conn, code = new MTU                        */
     PAPP_BLE_EV_ADV_DONE,                /* advertising stopped (a central connected)  */
+    PAPP_BLE_EV_ENCRYPTED,               /* v2: conn; code 0 = encrypted, else the pairing failed (NimBLE status) */
 };
 typedef struct {
     uint8_t         type;
@@ -824,7 +901,225 @@ typedef struct {
     int   (*adv_start)(const papp_ble_adv_cfg_t *cfg);
     void  (*adv_stop)(void);
     int   (*set_name)(const char *name);                             /* GAP device name   */
+
+    /* v2 */
+    int   (*gatt_register2)(const papp_ble_svc2_t *svcs, int count);  /* as gatt_register, with descriptors */
+    int   (*security)(const papp_ble_sec_cfg_t *cfg);
+    int   (*set_appearance)(uint16_t appearance);                     /* GAP appearance (0x03C1 keyboard) */
+    /* Advertise and connect from this static random address (6 bytes, least significant first; the two top
+     * bits of a[5] set), or NULL for the board's public one. Before advertising. */
+    int   (*set_random_addr)(const uint8_t a[6]);
+    int   (*forget_bonds)(void);                                      /* every host forgotten */
+    int   (*bond_count)(void);
 } papp_if_ble_t;
+
+/* ── USB host interface ─────────────────────────────────────────────────── */
+/* Raw access to devices on the board's USB host port, for devices the launcher's own input
+ * drivers do not take (programmers, microcontrollers in their bootloaders, serial adapters):
+ * open one, claim an interface, then control, bulk and interrupt transfers. The launcher's HID
+ * and XInput drivers keep their interfaces; an app claims only interfaces nobody else has.
+ * Everything blocks; transfers return the bytes moved or a PAPP_E_* code of NET (PAPP_E_IO: the
+ * device stalled or the transfer failed; PAPP_E_RESET: the device was unplugged; PAPP_E_EXIT
+ * as soon as the app is asked to exit). One transfer at a time per endpoint (a second caller on it
+ * waits); different endpoints run side by side, so a thread can wait on an IN endpoint while others
+ * write and send control requests. close() ends transfers still waiting (PAPP_E_RESET). Devices
+ * the app leaves open are closed when it exits. The port runs at full speed (12 Mbit/s). */
+
+#define PAPP_IF_USBH      PAPP_FOURCC('U', 'S', 'B', 'H')
+#define PAPP_IF_USBH_VER  1
+
+#define PAPP_USBH_MAX_DEVS 4             /* open at once                                */
+
+typedef struct papp_usb_dev papp_usb_dev_t;
+
+typedef struct {
+    uint8_t  addr;                       /* bus address: what open() takes              */
+    uint8_t  speed;                      /* 0 low, 1 full, 2 high                       */
+    uint16_t vid, pid, bcd_device;
+    uint8_t  dev_class, dev_subclass, dev_protocol;
+    uint8_t  num_interfaces;             /* in the active configuration                 */
+    char     manufacturer[32], product[48], serial[48];    /* ASCII, "" if none   */
+} papp_usb_info_t;
+
+typedef struct {
+    papp_iface_hdr_t hdr;
+    /* The devices on the bus now (up to max): the count, or PAPP_E_UNSUPPORTED (no USB host). */
+    int   (*list)(papp_usb_info_t *out, int max);
+    /* Bumps whenever a device arrives or leaves: poll it to notice either without listing. */
+    uint32_t (*generation)(void);
+    papp_usb_dev_t *(*open)(uint8_t addr, int *err);
+    void  (*close)(papp_usb_dev_t *d);                     /* releases what it claimed       */
+    int   (*info)(papp_usb_dev_t *d, papp_usb_info_t *out);
+    /* The active configuration descriptor, whole (copied up to len): its total length. */
+    int   (*config_descriptor)(papp_usb_dev_t *d, void *buf, size_t len);
+    int   (*claim)(papp_usb_dev_t *d, uint8_t interface, uint8_t alt);
+    int   (*release)(papp_usb_dev_t *d, uint8_t interface);
+    /* A control transfer on endpoint 0: data is read when bit 7 of type is set, else written. */
+    int   (*control)(papp_usb_dev_t *d, uint8_t type, uint8_t request, uint16_t value, uint16_t index,
+                     void *data, uint16_t len, uint32_t timeout_ms);
+    /* A bulk or interrupt transfer on a claimed interface's endpoint (bit 7: IN). An IN reads up
+     * to len bytes (a short packet ends it); timeout 0 waits for ever. */
+    int   (*transfer)(papp_usb_dev_t *d, uint8_t ep, void *data, size_t len, uint32_t timeout_ms);
+    /* After a stall or a timeout: the host's side of the endpoint flushed and its halt cleared.
+     * The device's halt is the app's to clear (CLEAR_FEATURE through control). */
+    int   (*clear_halt)(papp_usb_dev_t *d, uint8_t ep);
+    bool  (*gone)(papp_usb_dev_t *d);                      /* unplugged since it was opened  */
+} papp_if_usbh_t;
+
+/* ── PWR interface ──────────────────────────────────────────────────────── */
+/* The battery and its charging, on boards that measure it. Charging is on whenever the launcher runs; an app
+ * may stop it for a while (a USB device it powers that wants the full 5 V while the battery charges, as a T48
+ * programmer does), and it comes back on when the app ends, however it ends. */
+
+#define PAPP_IF_PWR       PAPP_FOURCC('P', 'W', 'R', ' ')
+#define PAPP_IF_PWR_VER   1
+
+typedef struct {
+    int32_t  pack_mv;                    /* the whole battery; 0 if not measured           */
+    int32_t  cell_mv;                    /* a cell's share                                 */
+    int32_t  ma;                         /* positive = charging, negative = running on it  */
+    int8_t   percent;                    /* 0..100 by voltage, -1 unknown                  */
+    uint8_t  charging;                   /* the charger says it is charging                */
+    uint8_t  charge_enabled;             /* charging allowed now                           */
+    uint8_t  can_switch;                 /* set_charge works on this board                 */
+} papp_power_t;
+
+typedef struct {
+    papp_iface_hdr_t hdr;
+    int   (*read)(papp_power_t *out);    /* PAPP_E_OK, or PAPP_E_UNSUPPORTED (no battery reading) */
+    int   (*set_charge)(bool on);        /* PAPP_E_OK, or PAPP_E_UNSUPPORTED                    */
+} papp_if_pwr_t;
+
+/* ── HIDD interface ─────────────────────────────────────────────────────── */
+/* The board's USB device port (the Tab5's USB-C) as a USB HID device of the app's making: a keyboard, a
+ * mouse, media keys, under one HID interface with the app's report descriptor. start() takes the port from
+ * the launcher's own USB link (DevLink, the USB serial/JTAG unit), which is gone from the computer until
+ * stop() or the app's end, when the launcher takes the port back. Reports are queued and go out one per USB
+ * frame in order, so a press and its release are never merged. */
+
+#define PAPP_IF_HIDD      PAPP_FOURCC('H', 'I', 'D', 'D')
+#define PAPP_IF_HIDD_VER  1
+
+typedef struct {
+    const char    *manufacturer;         /* NULL: "P4 Launcher"                            */
+    const char    *product;              /* NULL: the app's name                           */
+    uint16_t       vid, pid;             /* 0: Espressif's 0x303A and a development PID   */
+    const uint8_t *report_desc;          /* copied; up to 512 bytes                        */
+    uint16_t       report_desc_len;
+    uint8_t        boot_keyboard_id;     /* the report ID that is a boot keyboard (BIOS,
+                                          * KVMs): the interface says so, and in boot
+                                          * protocol that report goes without its ID; 0 none */
+} papp_hidd_cfg_t;
+
+enum {                                   /* state()                                      */
+    PAPP_HIDD_RUNNING = 1,               /* the port is the app's                          */
+    PAPP_HIDD_MOUNTED = 2,               /* a host has set it up                           */
+    PAPP_HIDD_SUSPENDED = 4,             /* the host sleeps (or the cable has no data)     */
+    PAPP_HIDD_BOOT = 8,                  /* the host asked for boot protocol               */
+};
+
+typedef struct {
+    papp_iface_hdr_t hdr;
+    int     (*start)(const papp_hidd_cfg_t *cfg);   /* PAPP_E_OK, ARG, UNSUPPORTED, NOMEM   */
+    void    (*stop)(void);
+    /* Queues a report (len <= 16). wait_ms: it goes no sooner than that long after the one
+     * before it (macOS ignores a Caps Lock tap shorter than about 0.1 s). PAPP_E_LIMIT: the
+     * queue is full (the host is not reading); nothing is queued while no host has set it up. */
+    int     (*report)(uint8_t id, const void *data, uint8_t len, uint16_t wait_ms);
+    uint8_t (*leds)(void);                           /* the host's keyboard LEDs (Caps = 2)  */
+    int     (*state)(void);                          /* PAPP_HIDD_* bits                     */
+} papp_if_hidd_t;
+
+/* ── IRQ interface ──────────────────────────────────────────────────────── */
+/* GPIO pins and hardware timers, with their interrupts on the core the app picks. Only the pins the board
+ * leaves free (gpio_mask(): header and Grove pins; never the display, SD card, Wi-Fi chip or audio) can be
+ * used. Everything is undone when the app ends, however it ends: interrupts freed, timers deleted, pins back
+ * to inputs without pulls.
+ *
+ * An interrupt is handled in one of two ways (papp_irq_cfg_t.isr):
+ *   deferred (isr NULL): the launcher's interrupt handler, on cfg.core, queues an event; a thread of the app
+ *     takes it with wait() (papp_irq_thread() makes one that calls a function per event). The thread can do
+ *     anything; it starts some 10-50 us after the edge.
+ *   direct (isr set): the app's function runs inside the interrupt itself, on cfg.core. It must be tagged
+ *     PAPP_FAST and the app's FAST region must be in internal SRAM (attach answers PAPP_E_UNSUPPORTED
+ *     otherwise), because it also runs while the caches are off (flash writes, code_alloc). Inside it:
+ *     no service calls and no papp_* SDK calls (they are in PSRAM), no floating point, under 1 KB of stack,
+ *     only data tagged PAPP_FAST_DATA / PAPP_FAST_BSS or on its stack, and only what ctx offers: read and
+ *     write pins, queue an event for wait() on any of its handles (signal), re-arm a timer. Keep it to a few microseconds.
+ * Level interrupts (PAPP_IRQ_LOW / HIGH) fire once and stay off until enable(h, true): the level would
+ * otherwise interrupt again at once. */
+
+#define PAPP_IF_IRQ       PAPP_FOURCC('I', 'R', 'Q', ' ')
+#define PAPP_IF_IRQ_VER   1
+
+#define PAPP_IRQ_MAX_PINS    8               /* pins with an interrupt, per app              */
+#define PAPP_IRQ_MAX_TIMERS  2               /* hardware timers, per app                     */
+
+enum { PAPP_GPIO_INPUT = 0, PAPP_GPIO_OUTPUT = 1, PAPP_GPIO_OPEN_DRAIN = 2 };   /* gpio_config mode */
+enum { PAPP_GPIO_PULL_NONE = 0, PAPP_GPIO_PULL_UP = 1, PAPP_GPIO_PULL_DOWN = 2 };
+enum {                                       /* gpio_attach trigger                           */
+    PAPP_IRQ_RISING = 1, PAPP_IRQ_FALLING = 2, PAPP_IRQ_ANY_EDGE = 3,
+    PAPP_IRQ_LOW = 4, PAPP_IRQ_HIGH = 5,
+};
+
+/* On v1.x chips an interrupt that finds its core idle (no task of the app's or the launcher's running there)
+ * starts some 17 us late: a pin edge reaches the handler in ~20 us (up to ~70) on an idle core, ~3 us on a
+ * busy one (v3.x chips: ~3 us either way).
+ * PAPP_IRQ_AWAKE keeps the core busy while this interrupt is attached (a launcher task spinning there at
+ * the lowest priority, below every app thread): ~3 us always, for that core's idle time and power. */
+#define PAPP_IRQ_AWAKE  (1u << 0)
+
+typedef struct papp_irq papp_irq_t;
+
+typedef struct {
+    int64_t  time_us;                        /* papp_time_us() clock, taken in the interrupt   */
+    uint32_t count;                          /* interrupts of this handle so far (1 = first)   */
+    uint16_t dropped;                        /* events lost before this one (queue was full)   */
+    uint8_t  pin;                            /* the GPIO, or 0xFF for a timer                  */
+    uint8_t  level;                          /* the pin's level read in the interrupt          */
+} papp_irq_event_t;
+
+/* What a direct handler may use (in internal RAM, valid during the call). */
+typedef struct {
+    const papp_irq_event_t *ev;              /* this interrupt                                 */
+    papp_irq_t *self;
+    void (*gpio_write)(int pin, int level);  /* pins the app set up as outputs                 */
+    int  (*gpio_read)(int pin);
+    void (*signal)(papp_irq_t *h, const papp_irq_event_t *ev);   /* queue ev for wait() on h   */
+    void (*timer_arm)(papp_irq_t *timer, uint32_t us);   /* (re)start a one-shot timer in us   */
+} papp_irq_ctx_t;
+
+typedef void (*papp_irq_isr_t)(void *arg, const papp_irq_ctx_t *ctx);
+
+typedef struct {
+    int8_t          core;                    /* 0 or 1: where the interrupt runs; -1 = 1     */
+    uint8_t         priority;                /* 1..3 (3 = highest); 0 = 1                     */
+    uint8_t         queue;                   /* events kept for wait(); 0 = 16, at most 64    */
+    uint8_t         flags;                   /* PAPP_IRQ_AWAKE                                */
+    papp_irq_isr_t  isr;                     /* NULL = deferred; else direct (PAPP_FAST)      */
+    void           *isr_arg;
+} papp_irq_cfg_t;
+
+typedef struct {
+    papp_iface_hdr_t hdr;
+    uint64_t (*gpio_mask)(void);             /* bit n = GPIO n is free for apps on this board  */
+    int  (*gpio_config)(int pin, int mode, int pull);    /* PAPP_E_OK, ARG (not a free pin)    */
+    int  (*gpio_write)(int pin, int level);
+    int  (*gpio_read)(int pin);              /* 0/1, or PAPP_E_ARG                             */
+    /* An interrupt on a pin set up with gpio_config (an output pin works too: it sees its own edges).
+     * Starts enabled. PAPP_E_LIMIT: PAPP_IRQ_MAX_PINS reached or the pin has one already. */
+    int  (*gpio_attach)(int pin, int trigger, const papp_irq_cfg_t *cfg, papp_irq_t **out);
+    /* A hardware timer with 1 us resolution, stopped until timer_start. PAPP_E_LIMIT: none free. */
+    int  (*timer_attach)(const papp_irq_cfg_t *cfg, papp_irq_t **out);
+    int  (*timer_start)(papp_irq_t *t, uint32_t us, bool periodic);   /* first interrupt in us  */
+    int  (*timer_stop)(papp_irq_t *t);
+    int  (*enable)(papp_irq_t *h, bool on);  /* a pin's interrupt; a timer: same as stop/start  */
+    /* The next queued event: 1 = *ev filled, PAPP_E_TIMEOUT, PAPP_E_EXIT (the app is asked to
+     * exit, or h was detached). */
+    int  (*wait)(papp_irq_t *h, papp_irq_event_t *ev, uint32_t timeout_ms);
+    void (*detach)(papp_irq_t *h);           /* interrupt off and freed; a waiter gets E_EXIT  */
+    int  (*core)(papp_irq_t *h);             /* the core its interrupt runs on                 */
+} papp_if_irq_t;
 
 /* ── Entry point ────────────────────────────────────────────────────────── */
 

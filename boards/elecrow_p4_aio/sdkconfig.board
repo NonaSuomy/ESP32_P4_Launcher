@@ -1,0 +1,55 @@
+# Elecrow All-in-one Starter Kit for ESP32-P4 (SEE00804D, 7" 1024x600) — board-specific sdkconfig fragment.
+# Flash, PSRAM and chip revision from Elecrow's own AI project sdkconfig (P4-All-in-one-AI).
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+# Elecrow builds for a pre-v3 ESP32-P4 (rev v1.x): check with `esptool chip_id`
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_1=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
+
+# ESP32-C6 over SPI full duplex (tested on a kit by its owner, PR #2): MOSI 7, MISO 9, CLK 15, CS 14,
+# data ready 10, handshake 11, reset GPIO 2 (active high). The C6 needs an esp_hosted SPI firmware; the
+# release's C6 image is SDIO, so make_release.py offers none for this board.
+CONFIG_ESP_HOSTED_P4_DEV_BOARD_NONE=y
+CONFIG_ESP_HOSTED_SPI_HOST_INTERFACE=y
+CONFIG_LX_DEVLINK_UART=y
+CONFIG_ESP_HOSTED_SPI_HSPI_GPIO_MOSI=7
+CONFIG_ESP_HOSTED_SPI_HSPI_GPIO_MISO=9
+CONFIG_ESP_HOSTED_SPI_HSPI_GPIO_CLK=15
+CONFIG_ESP_HOSTED_SPI_HSPI_GPIO_CS=14
+CONFIG_ESP_HOSTED_SPI_GPIO_DATA_READY=10
+CONFIG_ESP_HOSTED_SPI_GPIO_HANDSHAKE=11
+CONFIG_ESP_HOSTED_SPI_GPIO_RESET_SLAVE=2
+CONFIG_ESP_HOSTED_SPI_RESET_ACTIVE_HIGH=y
+# The speaker amp's current peaks dip the 3.3 V rail on weak USB supplies
+CONFIG_ESP_BROWNOUT_DET_LVL_SEL_5=y
+
+# Bluetooth: Bluedroid (dual mode) on the P4. BLE for apps (BLE interface) with the controller on the C6
+# over esp_hosted (VHCI); Classic (A2DP to speakers) needs a USB Bluetooth dongle (the C6 is LE only).
+# The stack only runs while it is used; its memory comes from PSRAM first.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_CONTROLLER_DISABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=y
+CONFIG_ESP_HOSTED_ENABLE_BT_BLUEDROID=y
+CONFIG_ESP_HOSTED_BLUEDROID_HCI_VHCI=y
+CONFIG_BT_CLASSIC_ENABLED=y
+CONFIG_BT_A2DP_ENABLE=y
+CONFIG_BT_HID_ENABLED=y
+CONFIG_BT_HID_HOST_ENABLED=y
+CONFIG_BT_BLE_ENABLED=y
+CONFIG_BT_GATTS_ENABLE=y
+CONFIG_BT_GATTC_ENABLE=y
+CONFIG_BT_BLE_SMP_ENABLE=y
+CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
+CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n
+CONFIG_BT_BLUEDROID_ESP_COEX_VSC=n
+CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=y
+CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY=y
+CONFIG_BT_GATT_MAX_SR_PROFILES=12
+CONFIG_BT_GATT_MAX_SR_ATTRIBUTES=300
+# Bluetooth gamepads: a failed encryption (a timeout at start-up) must not unpair a pad; lx_bt_pads.c decides
+# CONFIG_BT_BLE_SMP_REMOVE_BOND_ON_PAIR_FAIL_AS_CENTRAL is not set

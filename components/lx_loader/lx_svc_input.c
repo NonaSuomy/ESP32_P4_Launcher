@@ -38,6 +38,11 @@ static void inpt_flush(void)
     SVC_LEAVE();
 }
 
+static bool inpt_keyboard(void)
+{
+    return lx_input_keyboard_attached();
+}
+
 static int inpt_analog(int ch)
 {
     return lx_input_analog(ch);
@@ -51,4 +56,5 @@ const papp_if_inpt_t lx_if_inpt = {
     .poll_event = inpt_poll_event,
     .flush      = inpt_flush,
     .analog     = inpt_analog,
+    .keyboard   = inpt_keyboard,
 };

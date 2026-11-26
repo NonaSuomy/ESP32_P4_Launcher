@@ -188,6 +188,19 @@ static void open_pad(uint8_t addr)
     const usb_device_desc_t *dd;
     uint8_t iface = 0, ep = 0, out = 0;
     uint16_t mps = 0;
+    usb_device_info_t info;
+    if (usb_host_get_device_descriptor(dev, &dd) == ESP_OK && usb_host_device_info(dev, &info) == ESP_OK) {
+        static const char *const speed[] = { "low", "full", "high" };
+        if (info.parent.dev_hdl) {
+            usb_device_info_t up;
+            ESP_LOGI(TAG, "USB device %d: %04X:%04X class %02X, %s speed, on port %d of hub %d", addr,
+                     dd->idVendor, dd->idProduct, dd->bDeviceClass, speed[info.speed % 3], info.parent.port_num,
+                     usb_host_device_info(info.parent.dev_hdl, &up) == ESP_OK ? up.dev_addr : 0);
+        } else {
+            ESP_LOGI(TAG, "USB device %d: %04X:%04X class %02X, %s speed, on the board's port", addr,
+                     dd->idVendor, dd->idProduct, dd->bDeviceClass, speed[info.speed % 3]);
+        }
+    }
     if (usb_host_get_active_config_descriptor(dev, &cfg) != ESP_OK || usb_host_get_device_descriptor(dev, &dd) != ESP_OK ||
         !find_xinput(cfg, &iface, &ep, &mps, &out)) {
         usb_host_device_close(s_client, dev);           /* not ours */

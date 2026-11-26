@@ -1,6 +1,6 @@
 # Education apps — plan
 
-More apps for the **Education** folder (`apps/education/<app>/`, ids `edu.*`, never in the Store).
+More apps for the **Education** folder (`apps/education/<app>/`, ids `edu.*`; in the Store under Education too, with a line in `apps/store.json`).
 Each one teaches one idea, shows it on screen and lets the student change it live.
 
 Status (2026-11-10): all six apps below are built, 0.1.0, on the starter card. Before them: BLE Remote,
@@ -27,7 +27,7 @@ Leaks: none, except 1 allocation after Paint saves or Dashboard records (newlib'
 - Touch and pad both work; **X exits** (also a close button). Pad on the 7" (DS4 mapping): injected B = A, Y = X.
 - Use `edu_ui` for buttons, radios and the log panel, or LVGL (`edubuild.lvgl()`) when the app is mostly controls.
 - Build with `apps/education/<app>/build.py`; `version.txt` 0.1.0; 88x88 `icon.png`; copied to `SDcard/apps/Education/<app>/`.
-- Each app: an entry in `SDcard/README.md` (Education apps) and in `CLAUDE.md` (apps/education).
+- Each app: its category and description in `apps/store.json`, an entry in `SDcard/README.md` (Education apps) and in `CLAUDE.md` (apps/education).
 - Test on the 7" (COM10) first, then a look on the 4.3" (COM9) and the Tab5 (COM15). Exit code 0, no leaks.
 - Apps on a launcher without a needed interface say so on screen instead of failing (as Sprite Demo's CPU fallback does).
 
