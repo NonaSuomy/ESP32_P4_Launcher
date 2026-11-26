@@ -122,6 +122,8 @@ Two rules keep this portable: apps only see the ABI, and the launcher core only 
   for the board's screen size
 - App search: finds an app in any folder by a part of its name, from the home screen's search field or by
   typing on a USB keyboard; a red dot on the Settings gear when a launcher update is waiting
+- Start an app at boot (Settings → At boot, chosen with the app search): touch and hold the screen
+  while it says "Starting ..." (or press any button or key) to choose between the launcher and the app
 - SD card bus shown on the home screen ("SD Card (4-bit)"); a card whose 4-bit transfers time out (a bad
   contact on D1-D3) moves to 1-bit and keeps working, shown in orange
 - Apps can ask for the chip revision (`papp_chip_rev`), so SIMD code picks the right encoding: v1.x and v3.x
@@ -129,6 +131,18 @@ Two rules keep this portable: apps only see the ABI, and the launcher core only 
 - Apps can list folders, rename and delete them (FS v2), get hardware random bytes, talk to USB devices on the
   host port (USBH), act as a USB keyboard or mouse on the board's USB-C (HIDD), and pair over BLE with bonds
   kept on the SD card
+- Bluetooth speaker or headphones (Settings → Speaker) through a USB Bluetooth dongle (Bluetooth 4.0 or newer,
+  e.g. CSR8510; Realtek dongles not yet): the launcher's and the apps' sound plays there instead of the board's
+  speaker, with the usual Bluetooth delay (about 0.2 s). The board's Wi-Fi chip (C6) has only Bluetooth LE, which
+  carries no audio. With a dongle plugged in, BLE apps use it too
+- Bluetooth gamepads on the same dongle (Settings → Speaker): DualShock 4, DualSense, Switch Pro and BLE pads,
+  remembered and reconnected, together with the speaker. An old Bluetooth 2.x/3.0 dongle runs Classic pads only;
+  a counterfeit CSR8510 runs a speaker or a pad well, not both
+- Guition 7" with the 2026 "New Panel" (label "V2" on the back) on a v1.x chip: the 7" image recognises the
+  panel at start-up
+- Apps can use the board's free header pins and hardware timers, with their interrupts on the core they choose
+  (IRQ): each event handled in an app thread, or by the app's own code inside the interrupt (about 3 µs from
+  the edge)
 - M5Stack Tab5: the battery charges and shows in the status bar, the clip-on Tab5 Keyboard works as a launcher
   keyboard, and Settings → Update offers the Wi-Fi chip's 2.12.13 firmware (needed for BLE on a C6 that an
   Arduino updater moved to 2.x)
@@ -182,7 +196,7 @@ from the same SD card. Which boards can be added, and how: [docs/BOARD_SUPPORT.m
 | Board id (`-DLX_BOARD=`) | `guition_p4_43` (default) | `guition_p4_7` | `m5stack_tab5` |
 | SoC | ESP32-P4, dual RISC-V at 360 MHz, chip revision v1.x (v3.x: board id `guition_p4_43_v3`) | same (v3.x: `guition_p4_7_v3`, 400 MHz) | same |
 | Memory | 32 MB hex PSRAM at 200 MHz, 16 MB flash | same | same |
-| Display | 480×800 ST7701 MIPI-DSI, used in landscape as 800×480 | 1024×600 JD9165 MIPI-DSI, landscape (v3.x boards: the 2026 "New Panel", its own setup) | 720×1280 MIPI-DSI (ILI9881C, ST7123 or ST7121, detected at start), used in landscape as 1280×720 |
+| Display | 480×800 ST7701 MIPI-DSI, used in landscape as 800×480 | 1024×600 JD9165 MIPI-DSI, landscape (the 2026 "New Panel" on v3.x boards and some v1.x ones: recognised at start-up) | 720×1280 MIPI-DSI (ILI9881C, ST7123 or ST7121, detected at start), used in landscape as 1280×720 |
 | Touch | GT911 capacitive | GT911 capacitive | GT911, or the touch built into the ST7123 / ST7121 panel |
 | Radio | ESP32-C6 over SDIO (Wi-Fi; BLE firmware present) | same, newer C6 firmware | ESP32-C6 over SDIO, M5Stack's C6 firmware |
 | Audio | ES8311 codec at a fixed 48 kHz | ES8311 codec at 48 kHz, NS4150 speaker amplifier | ES8388 codec at 48 kHz |
@@ -244,8 +258,8 @@ chip generation only, so these have their own image. On the ESP Tool page, the l
 shows the chip revision, for example "revision v1.0" or "revision v3.2"; `esptool.py --chip esp32p4
 -p COMx chip_id` shows it too. If you flashed the wrong one, the screen stays dark: flash the other
 file. After the first install, Settings → Update picks the right image by itself. The 7" v3 image also
-drives the 2026 "New Panel" these boards have (label "V2" on the back); a 7" with that panel and a v1.x
-chip is not supported.
+drives the 2026 "New Panel" these boards have (label "V2" on the back). A 7" with that panel and a v1.x
+chip runs the plain 7" image, which recognises the panel at start-up.
 
 ### 2. Build the launcher yourself (optional)
 
@@ -263,7 +277,8 @@ unless `IDF_PATH` is already set:
 . .\tools\idf_env.ps1
 ```
 
-Connect the board's USB-Serial-JTAG port, and use your own COM port below.
+Connect the board's DevLink port and use its COM port below. Most boards use USB-Serial-JTAG;
+the Elecrow AIO uses the CH340 UART bridge (`--transport auto` detects it, e.g. `/dev/ttyUSB0`).
 
 ```powershell
 cd launcher
@@ -281,8 +296,12 @@ switch to the other board, add `reconfigure` once: `idf.py -B <folder> -DLX_BOAR
 The boards with a v3.x chip have their own board ids, `guition_p4_43_v3` and `guition_p4_7_v3` (same board code,
 built for v3 silicon; the 7" one also sets up the 2026 panel and runs the C6 link at 10 MHz).
 
-> On Windows, `papp_dev.py` needs the same COM port, so close any serial monitor first. Text logs go to
-> UART0. USB-Serial-JTAG belongs to DevLink.
+> On Windows, `papp_dev.py` needs the same COM port, so close any serial monitor first. The AIO's
+> CH340 carries DevLink and UART0 console output; while DevLink is connected, logs are framed so
+> they don't interfere with commands.
+
+On Linux, the Elecrow AIO can be addressed directly with `python tools/papp_dev.py --port /dev/ttyUSB0 info`.
+The tool uses reset-safe DTR/RTS handling when it opens the CH340 port.
 
 ### 3. Build the apps (optional)
 
@@ -376,7 +395,7 @@ own and are read as they are.
 | Quake | `id1/pak0.pak` to `/sd/roms/quake/id1/` | `pak0.pak`, the shareware episode |
 | Duke Nukem 3D | `DUKE3D.GRP` to `/sd/roms/duke3d/duke3d.grp` | not included (commercial); tested with the Atomic Edition file |
 | Game Boy Advance | the games to `/sd/roms/gba/`; optional BIOS `gba_bios.bin` there (a built-in replacement runs most games) | not included |
-| Neo Geo | `neogeo.zip` (BIOS) and the games to `/sd/roms/neogeo/` | `gngeo_data.zip`, the emulator's own data; the BIOS is not included |
+| Neo Geo | `neogeo.zip` (BIOS) and the games to `/sd/roms/neogeo/` | `gngeo_data.zip`, the emulator's own data, and `gamenames.txt`, the full game names the list shows; the BIOS is not included |
 
 Doom's `prboom.wad` is built into the app; you don't need to copy it.
 
@@ -647,6 +666,7 @@ Include only `papp/papp.h`. The full API, with examples, is in
 | `USBH` | 1 | Raw USB host access: control, bulk and interrupt transfers to devices the launcher's pad drivers don't hold | `papp_usbh()` |
 | `PWR` | 1 | Battery voltage, current and charge; pause charging (Tab5) | `papp_pwr()` |
 | `HIDD` | 1 | The board's USB-C as the app's own USB HID device (keyboard, mouse); DevLink is away meanwhile | `papp_hidd()` |
+| `IRQ` | 1 | The board's free header pins and hardware timers, with interrupts on the core you choose: handled in a thread, or by your own `PAPP_FAST` function inside the interrupt | `papp_irq()`, `papp_irq_thread` |
 
 Interfaces are versioned independently. New functions are only ever appended and the version bumped, and a
 breaking change gets a new id, so older apps keep working. Interfaces can be required or optional: when an

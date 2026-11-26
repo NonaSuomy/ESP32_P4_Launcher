@@ -254,7 +254,8 @@ function-pointer-table speed and no symbol strings on the device.
 | `UI  ` | Launcher dialogs | **file picker** (extension filter, start dir), message box, menu, volume, **Wi-Fi picker** (v4: the network chosen becomes the board's saved one; the app never sees the password), on-screen keyboard, progress, toast | rendered by the launcher on the overlay layer |
 | `PWR ` | Power / board | battery %, charging, backlight, LED | optional |
 | `NET ` | Network | Wi-Fi (up with the saved network, info, scan, join for the run, SoftAP, events), DNS, TCP/UDP sockets with poll, TLS client, HTTP/1.1 client | v1 (launcher 0.29); the first call keeps Wi-Fi on for the run; `docs/NET_BLE_PROPOSAL.md` |
-| `BLE ` | Bluetooth LE | scan, connect, GATT client (discover, read, write, subscribe), GATT server (one table, values kept by the launcher, notify/indicate), advertising, events | v1 (launcher 0.29), Guition boards and Tab5; NimBLE runs only during the app's run; `docs/NET_BLE_PROPOSAL.md` |
+| `BLE ` | Bluetooth LE | scan, connect, GATT client (discover, read, write, subscribe), GATT server (one table, values kept by the launcher, notify/indicate), advertising, events | v1 (launcher 0.29), Guition boards and Tab5; the stack (Bluedroid since 0.35, NimBLE before) runs only while used; §7.10; `docs/NET_BLE_PROPOSAL.md` |
+| `IRQ ` | Pins, timers, interrupts | free-pin mask, pin config/read/write, pin and timer interrupts on a chosen core, deferred (`wait`) or direct (app's FAST function in the interrupt) | v1 (launcher 0.35); §7.9 |
 | `BTHD`, `USBD`, `CAM ` | Reserved | BLE HID, USB device/MSC, MIPI-CSI camera | later phases |
 
 ---
@@ -382,6 +383,11 @@ now it's in one SDK place backed by a real `FS.stat`). FATFS LFN config stays ma
 - **Overlay** (in-app menu): resume, volume, brightness, screenshot, app-registered items
   (e.g. "Save state" / "Load state" via `SYS.register_menu_item`), quit.
 - **Developer mode**: the DevLink service (§7.8).
+- **Start at boot**: Settings → "At boot" picks an app with the search screen ("None" turns it off);
+  the path is in `/sd/config/autostart.txt`. After boot a "Starting X" screen counts 2.5 s; a touch
+  held 300 ms, a pad button or a key opens a box "Quit to launcher" / "Start X". Skipped after a crash
+  notice or a panic/watchdog reset, so a crashing app can't lock the board in a loop; moving the app
+  to another folder updates the file.
 - **Self-update**: launcher A/B OTA from `/sd/update/launcher.bin` (the OTA partitions are no longer
   needed for emulators once they are PAPPs).
 
@@ -392,8 +398,9 @@ it**: put an app on the SD card, run it, watch its logs, see the screen, press b
 reports, iterate. It replaces and extends the reference `PAPU`/`RUNR` serial protocol. It is always on
 in development builds and can be switched off in release builds.
 
-**Transport**: USB-Serial-JTAG (the same cable used for flashing; no extra hardware). Later the same
-protocol over TCP (Wi-Fi) — the framing is transport-independent.
+**Transport**: USB-Serial-JTAG on most boards. The Elecrow AIO selects UART0 for its CH340 bridge;
+when a host is connected, console logs are sent as DevLink frames so they cannot corrupt commands.
+The framing is transport-independent.
 
 **Framing** (binary, CRC-protected, so logs and data never get mixed up):
 
@@ -423,6 +430,161 @@ exits or a timeout, returning the app's exit code as the process exit code. This
 edit → build → deploy → observe loop scriptable end to end, which is what allows autonomous work.
 
 ---
+
+### 7.9 Pins, timers and interrupts (IRQ)
+
+Apps get the board's free header pins and the P4's hardware timers, with interrupts on the core they pick
+(`components/lx_loader/lx_svc_irq.c`, interface in `papp_abi.h`, test `apps/irq_test`).
+
+**Which pins.** Each board says which GPIOs are free for apps: `bsp_app_gpio_mask()` (weak, 0 = none), asked
+at every app start so a board can leave out pins an add-on it found uses (the Guition 4.3" GPIO gamepad).
+Only pins on a header or port that nothing on the board uses; strapping pins (34-38: BOOT and the console)
+and the USB-Serial-JTAG pins stay out. From the boards' schematics:
+
+| Board | Free pins (header) |
+|---|---|
+| Guition 4.3" | 28-33, 49-52 (JP1); with the GPIO gamepad fitted only 31 |
+| Guition 7" | 1-5, 32, 33, 45-47 ("Expand IO" JP1; its GPIO 20 is the amplifier enable) |
+| M5Stack Tab5 | 2-7, 16-19, 45, 47, 48, 51, 52 (M5-Bus), 49 (Ext.Port1; G0/G1/G50 are the keyboard's), 53, 54 (Grove Port A) |
+| Waveshare 3.5" | 2-5, 30-33, 46-48, 51, 52 (J6) |
+| Elecrow kit | 45, 46 (I2C2, shared with the camera connector), 47, 48 (UART connector, level-shifted) |
+
+**Interrupt per core.** The P4's GPIO block has four interrupt lines, each with its own per-pin enable bit and
+status register; IDF's GPIO ISR service uses line 0 only (IDF-7995), e.g. for esp_hosted's SPI handshake. Apps
+get line 1 on core 0 and line 2 on core 1, with dispatchers of ours, so app pins never meet IDF's. Timers are
+gptimers (1 MHz). An interrupt is allocated on the core of the task that allocates it, so every allocation and
+free runs on a short-lived task pinned to that core; that task runs only while its core is in no interrupt,
+so a pin or timer removed there is never in the middle of its handler.
+
+**Deferred and direct.** Deferred (default): the dispatcher queues an event (time, count, level, events
+dropped before it) in the handle's ring and gives its semaphore; an app thread takes it with `wait()`
+(`papp_irq_thread` makes one that calls a function per event). Direct: the app's function runs inside the
+interrupt. Everything an interrupt touches is IRAM code and internal RAM, so it works while the caches are
+off (flash writes; `code_alloc` maps memory): a direct handler is accepted only if it is in the app's FAST
+region and that region is in SRAM, and it gets what it may call in a `papp_irq_ctx_t` (pin read/write, signal
+another handle, re-arm a timer, all IRAM). The timers need `CONFIG_GPTIMER_ISR_CACHE_SAFE` and
+`CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM` (launcher sdkconfig.defaults). Level interrupts disable themselves after
+firing until `enable()`.
+
+**Measured on the Tab5** (`irq_test`, the pin toggled by the app as an output sees its own edges; the
+Guition 7" with a v1.x chip gives the same, the v3.2 7" ~3 µs on an idle core too):
+
+| | Core busy | Core idle | `PAPP_IRQ_AWAKE` |
+|---|---|---|---|
+| pin write → direct handler | 3 µs (max ~10) | 20 µs (max ~70) | 3 µs (max ~40) |
+| pin write → deferred event | 3 µs | 27 µs (max ~110) | |
+| event → waiting thread | ~30 µs | ~130 µs | |
+| 1 ms timer, interval at the interrupt | | 960-1045 µs | 984-1016 µs |
+| 50 µs direct timer, 1 s, code_alloc every 2 ms | 19,765-19,812 of 20,000 (longest gap 100 µs) | | |
+
+On v1.x chips an interrupt that finds its core in the idle task starts about 17 µs late (not on the v3.2
+chip). It is not the sleep (WFI): an
+idle hook that keeps the idle task spinning changes nothing, while any task above it removes it.
+`PAPP_IRQ_AWAKE` therefore runs a priority-1 task on that core that spins while such an interrupt is
+attached, giving the core up for a tick every 100 ms so the idle task still runs (task watchdog, freeing
+deleted tasks); app threads (priority 3 and up) are not affected. Edges closer together than the latency merge
+into one interrupt (GPIO status is one bit per pin).
+
+**Teardown.** `lx_svc_irq_end_run` runs first in `lx_svc_end_run` (after the app's threads are gone, before
+its memory is freed): every interrupt detached and freed on its core, the dispatchers freed, timers deleted,
+configured pins reset to inputs without pulls. Checked with `irq_test leave` (left attached) and `hang`
+(forced stop with two threads in `wait()`, a 50 µs direct timer and a toggling pin).
+
+### 7.10 Bluetooth: Bluedroid, USB dongles, speaker, gamepads
+
+The Bluedroid boards (Guition, Tab5, Elecrow; `CONFIG_BT_BLUEDROID_ENABLED` in `sdkconfig.board`) build the
+dual-mode stack, because Bluetooth audio (A2DP) is Classic and NimBLE is LE only. It costs about 0.5 MB of
+image; its memory comes from PSRAM first.
+
+**One stack, two users** (`components/lx_loader/lx_bt.c`). Bluedroid has global state, so one core owns it:
+`lx_bt_acquire(user, need_classic)` / `lx_bt_release(user)`, users = the app's BLE interface, the speaker and
+the gamepads. Bluedroid takes one GAP BLE and one GATT client callback, so `lx_bt.c` registers its own and
+fans every event out to slots (`lx_bt_ble_handlers`: app, pads, scan, test); each slot filters its own.
+Start and stop run as jobs on the "lx_bt" task (internal stack: Bluedroid must not start on a PSRAM stack).
+The stack stops when the last user lets go. Controller, chosen at start:
+
+- a **USB Bluetooth dongle** if one is plugged in and has LE (Classic + LE: needed for the speaker);
+- else the **C6** over esp_hosted VHCI (LE only; the C6 filter answers the two commands its controller
+  lacks). `need_classic` then fails: the speaker says it needs a dongle.
+
+**USB transport** (`lx_bt_usb.c`, a third client of the USB host after HID and XInput). Bluetooth USB class
+E0/01/01: HCI commands as class control requests, events on the interrupt IN endpoint (reassembled from its
+16-byte packets), ACL on the bulk pair; SCO is not used. Before Bluedroid starts, the transport resets the
+dongle and reads its features. Bluedroid with BLE built in asserts on a dongle without LE (Bluetooth
+1.x-3.0), so for one the transport answers LE itself: LE commands and Write LE Host Support complete with
+zeros, the features say LE, page 1 is answered here. Such a dongle runs Classic only (speaker, Classic pads;
+BLE pads never connect). An old one (genuine CSR, about Bluetooth 1.2: no SSP, legacy PIN pairing) refuses
+Read Local Supported Commands and Read Local Extended Features with a Command Status, where Bluedroid waits
+for a Command Complete and asserts on a failed one: refused controller / information / status commands are
+answered as done (no supported commands, extended page 0 = its own features). The board takes the master
+role on every link it accepts (Accept Connection Request, role 0): Bluedroid accepts the first incoming link
+as slave, and a second one then put the board in two piconets. Counterfeit CSR8510 dongles (0A12:0001, HCI revision = LMP subversion 0x1d86) say
+their last features page is 0 while setting the extended-features bit; Bluedroid reads LE host support from
+page 1, so the transport reports page 1 and answers it itself (SSP, LE, LE + BR/EDR host bits). An unplugged
+dongle gets every further command refused at once, so the stack shuts down without timeouts. Realtek dongles
+need a firmware download, not done yet.
+
+**Speaker** (`lx_bt_speaker.c`, Settings → Speaker on the home screen). Scan (general inquiry, ~13 s; audio
+devices by class of device first), pick, pair (SSP "just works", legacy PIN 0000), A2DP source with
+Bluedroid's SBC encoder. The chosen speaker is kept in `/sd/config/bt_speaker.txt` (`addr=`, `name=`, `on=`);
+while it is on and a dongle is present the launcher keeps the stack and calls it after 10, 20, 40, then every
+60 s. The board is connectable but not discoverable, so a speaker switched on later can reconnect by itself. The home
+status bar shows the Bluetooth symbol and the speaker's name while it is connected, and the "System ready"
+line says "connected" / "disconnected" for 5 s on a change. While audio
+streams, `lx_audio_set_tap` hands the mixer's 48 kHz blocks to the speaker (linear resampling to the A2DP rate,
+usually 44.1 kHz; at most 60 ms queued: the codec clock runs a bit fast, so a deeper ring only adds delay; master volume applied in software) and the codec plays silence, which
+still paces the mixer. Tested: counterfeit CSR8510 A10 with an A2DP speaker on the Guition 7"; with a
+DualShock 4 and the speaker together, an old genuine CSR (Bluetooth ~1.2, 8 ACL buffers): pad ~230 reports/s,
+longest gap < 100 ms, sound steady (its basic-rate radio keeps the audio channel congested, as expected).
+
+**Gamepads** (`lx_bt_pads.c`, same Settings screen: the scan lists controllers too). Classic pads (DualShock 4,
+DualSense, Switch Pro) go through Bluedroid's HID host and call the board when switched on. BLE pads (Xbox
+Wireless, 8BitDo BLE mode) use a small HID-over-GATT client: encrypt, read the report map, PnP ID and report
+references, subscribe; reports (prefixed with the report id when the map has ids) go to `lx_input_hidpad`,
+so a Bluetooth pad is a player like a USB one. Bluedroid has no background LE connections, so one low-duty
+direct connection request (scan window 12.5 %) stays pending, rotating over the saved BLE pads, ~30 s each.
+Saved in `/sd/config/bt_pads.txt` (`addr name`, BLE: `addr le<type> name`); bonds in Bluedroid's NVS store.
+
+**Speaker and pads together.** Nothing is switched off while a device is connected. The one conflict: while
+the CSR8510 pages an absent speaker it carries no LE data at all, so every BLE pad's reports stop for the whole
+page (links stay up). With a pad connected a call therefore pages 2.56 s instead of 5.12 s, comes every 30,
+60, then 120 s, and only once no pad input has changed for 20 s (`lx_input_hidpad_still_ms`: buttons, or a
+stick / trigger moved past its noise): a missing speaker never freezes a game. A speaker switched on reconnects
+by itself anyway (the board stays connectable). AFH: the Classic and LE channel maps leave out the Wi-Fi channel
+±11 MHz (checked every 10 s, from `lx_net_channel`, which does not wait for the C6 the way `lx_net_info` does).
+
+**BLE pad encryption.** A bonded pad asks for security when it connects and Bluedroid encrypts the link by
+itself; asking as well gets the request queued, and when it runs on the already encrypted link it fails ("No
+key available") and Bluedroid deletes the bond. So `lx_bt_pads.c` asks only when pairing, or for a saved pad
+that started nothing within 5 s. Bluedroid's per-notification warnings (reports before the client registers
+again, 60+ a second per pad) are turned off (`BT_APPL`, `BT_GATT` at error level): on the console they blocked
+its task and stalled the pads' set-up. `CONFIG_BT_BLE_SMP_REMOVE_BOND_ON_PAIR_FAIL_AS_CENTRAL` is off (Bluedroid
+deleted a pad's bond on any failed encryption, a timeout at start-up included): a saved pad's keys go after 3
+failures in a row (`lx_bt_pads.c`), an app's outgoing link keeps the old rule (`lx_svc_ble_bd.c`).
+
+**CSR8510 quirks** (`lx_bt_usb.c`). It reports no LE buffers (LE Read Buffer Size = 0): its 10 ACL buffers are
+shared, and Bluedroid then gives all LE links together one transmit credit. The dongle sometimes holds an LE
+packet for seconds, and with one credit every pad's requests (MTU, service search, pairing) waited. The
+transport splits the buffers by adjusting the two replies: 4 for LE, 6 for Classic (given all 10 to
+Classic, the speaker's stream stopped for good when a DualShock 4 connected, and the dongle reset with
+hardware error 0x28). It does not run a speaker and a Classic pad together reliably: while the speaker
+streams it hears no pad calling (PS button), however long its page scan; a speaker joining a connected pad
+often dropped the pad's link (supervision timeout) or reset the dongle (0x28). Use another dongle for both.
+Sniff mode stays off: the "sniff allowed" bit is cleared from the link policies Bluedroid writes. An LE link it sets up while
+it pages comes up broken (encrypted, nothing sent gets through), so a pad's connection request is cancelled
+before each speaker call and none is made while it pages. `bt status` shows `acl_unacked` (packets the dongle
+has not completed, per link) to spot a stuck one.
+
+**Test aids.** DevLink `bt` (`papp_dev.py bt status|scan --wait|results|pair ADDR|speaker ADDR [NAME]|speaker
+on|off|forget-speaker|forget-pads`; `pair ADDR` of a saved pad pairs it again): `status` = JSON with each pad's
+reports, longest gap, stalls (gaps >= 100 ms) and stalls while in use (within 2 s of an input change) since the
+last read. A launcher built with `-DLX_BT_TESTPAD=1` (`lx_bt_testpad.c`) poses as a BLE gamepad on its C6
+("LX Test Pad XXXX", report every 15 ms once the host has subscribed, as a real pad: esp_hidd notifies
+before that, and a pad streaming during the host's service search slowed its answers past the 20 s set-up
+limit; 50 s playing with X = counter, 40 s resting; after two failed
+encryptions in a row it drops its keys, as a pad put in pairing mode would) for testing pads without one in hand.
+A Windows PC cannot stand in for the speaker: the counterfeit CSR8510 reports hardware error 0x28 a few seconds
+into any link with the PC's Intel adapter, and Bluedroid resets it.
 
 ## 8. App lifecycle & robustness
 

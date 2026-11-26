@@ -158,44 +158,9 @@ static dev_t *find_dev(hid_host_device_handle_t h)
 
 /* ── Gamepad report parsing ─────────────────────────────────────────────── */
 
-static uint32_t hat_to_dpad(uint8_t hat)
-{
-    static const uint32_t map[8] = {
-        PAPP_BTN_UP, PAPP_BTN_UP | PAPP_BTN_RIGHT, PAPP_BTN_RIGHT, PAPP_BTN_DOWN | PAPP_BTN_RIGHT,
-        PAPP_BTN_DOWN, PAPP_BTN_DOWN | PAPP_BTN_LEFT, PAPP_BTN_LEFT, PAPP_BTN_UP | PAPP_BTN_LEFT,
-    };
-    return hat <= 7 ? map[hat] : 0;
-}
-
-static uint32_t axes_to_dpad(uint8_t x, uint8_t y, uint8_t lo, uint8_t hi)
-{
-    uint32_t d = 0;
-    if (y < lo) d |= PAPP_BTN_UP;
-    else if (y > hi) d |= PAPP_BTN_DOWN;
-    if (x < lo) d |= PAPP_BTN_LEFT;
-    else if (x > hi) d |= PAPP_BTN_RIGHT;
-    return d;
-}
-
-static uint32_t ps_buttons(uint8_t hat_btn, uint8_t b2, uint8_t b3)
-{
-    uint32_t b = 0;
-    if (hat_btn & 0x10) b |= PAPP_BTN_X;        /* Square   */
-    if (hat_btn & 0x20) b |= PAPP_BTN_A;        /* Cross    */
-    if (hat_btn & 0x40) b |= PAPP_BTN_B;        /* Circle   */
-    if (hat_btn & 0x80) b |= PAPP_BTN_Y;        /* Triangle */
-    if (b2 & 0x01) b |= PAPP_BTN_L1;
-    if (b2 & 0x02) b |= PAPP_BTN_R1;
-    if (b2 & 0x04) b |= PAPP_BTN_L2;
-    if (b2 & 0x08) b |= PAPP_BTN_R2;
-    if (b2 & 0x10) b |= PAPP_BTN_SELECT;
-    if (b2 & 0x20) b |= PAPP_BTN_START;
-    if (b2 & 0x40) b |= PAPP_BTN_L3;
-    if (b2 & 0x80) b |= PAPP_BTN_R3;
-    if (b3 & 0x01) b |= PAPP_BTN_HOME;
-    if (b3 & 0x02) b |= PAPP_BTN_MISC;
-    return b;
-}
+#define hat_to_dpad  lx_pad_hat
+#define axes_to_dpad lx_pad_axes_dpad
+#define ps_buttons   lx_pad_ps_buttons
 
 static bool centred(uint8_t v, uint8_t lo, uint8_t hi) { return v >= lo && v <= hi; }
 
@@ -225,34 +190,11 @@ static pad_fmt_t detect_format(const dev_t *d, const uint8_t *p, int len)
 #define AX(v)  ((int16_t)(((int)(v) - 128) * 256))
 #define TRIG(v) ((uint16_t)((v) * 257))
 
-/* Default button order of generic pads; a saved mapping can change any of it */
-static const uint32_t k_hid_buttons[] = {
-    PAPP_BTN_X, PAPP_BTN_A, PAPP_BTN_B, PAPP_BTN_Y, PAPP_BTN_L1, PAPP_BTN_R1, PAPP_BTN_L2,
-    PAPP_BTN_R2, PAPP_BTN_SELECT, PAPP_BTN_START, PAPP_BTN_L3, PAPP_BTN_R3, PAPP_BTN_HOME,
-    PAPP_BTN_MISC,
-};
-
 static void parse_hid(dev_t *d, const uint8_t *p, int len)
 {
-    hid_state_t s;
-    if (!hid_layout_decode(&d->layout, p, (size_t)len, &s)) return;
-    uint32_t b = s.hat >= 0 ? hat_to_dpad((uint8_t)s.hat) : 0;
-    for (size_t i = 0; i < sizeof(k_hid_buttons) / sizeof(k_hid_buttons[0]); i++)
-        if (s.buttons & (1u << i)) b |= k_hid_buttons[i];
-    if (!d->layout.hat.size) {
-        if (s.axis[HID_AX_Y] < -16000) b |= PAPP_BTN_UP;
-        else if (s.axis[HID_AX_Y] > 16000) b |= PAPP_BTN_DOWN;
-        if (s.axis[HID_AX_X] < -16000) b |= PAPP_BTN_LEFT;
-        else if (s.axis[HID_AX_X] > 16000) b |= PAPP_BTN_RIGHT;
-    }
-    /* Right stick is Z/Rz when present, then Rx/Ry are the triggers */
-    bool zrz = d->layout.axis[HID_AX_Z].size && d->layout.axis[HID_AX_RZ].size;
-    bool trig = zrz && d->layout.axis[HID_AX_RX].size && d->layout.axis[HID_AX_RY].size;
-    lx_input_pad_update(d->player, b, s.axis[HID_AX_X], s.axis[HID_AX_Y],
-                        zrz ? s.axis[HID_AX_Z] : s.axis[HID_AX_RX],
-                        zrz ? s.axis[HID_AX_RZ] : s.axis[HID_AX_RY],
-                        trig ? (uint16_t)(s.axis[HID_AX_RX] + 32768) : 0,
-                        trig ? (uint16_t)(s.axis[HID_AX_RY] + 32768) : 0);
+    lx_pad_state_t s;
+    if (lx_pad_layout(&d->layout, p, (size_t)len, &s))
+        lx_input_pad_update(d->player, s.b, s.lx, s.ly, s.rx, s.ry, s.lt, s.rt);
 }
 
 static void parse_pad(dev_t *d, const uint8_t *p, int len)
@@ -568,7 +510,8 @@ esp_err_t lx_input_usb_start(void)
 {
     s_connect_q = xQueueCreate(8, sizeof(hid_host_device_handle_t));
     s_restart_q = xQueueCreate(8, sizeof(hid_host_device_handle_t));
-    if (xTaskCreatePinnedToCore(usb_lib_task, "usb_host", 4096, xTaskGetCurrentTaskHandle(), 5, NULL, 0) != pdPASS)
+    /* USB host events (also a Bluetooth dongle's): above lwIP (18), a Wi-Fi download must not hold them up */
+    if (xTaskCreatePinnedToCore(usb_lib_task, "usb_host", 4096, xTaskGetCurrentTaskHandle(), 19, NULL, 0) != pdPASS)
         return ESP_ERR_NO_MEM;
     uint32_t err = ESP_ERR_TIMEOUT;
     xTaskNotifyWait(0, 0, &err, pdMS_TO_TICKS(3000));

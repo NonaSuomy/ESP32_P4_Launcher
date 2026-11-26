@@ -4,6 +4,7 @@
  * their own files. Capability bits are set as each device comes up.
  */
 #include "board_internal.h"
+#include "esp_bit_defs.h"
 #include "board_pins.h"
 
 #include "esp_log.h"
@@ -127,4 +128,11 @@ esp_err_t bsp_sdcard_mount(const char *mount_point)
 bool bsp_sdcard_mounted(void)
 {
     return s_sd_mounted;
+}
+
+/* Pins for apps (IRQ interface): the 2x13 "Expand IO" header JP1 (Guition schematic V1.0; each one driven
+ * and read back on a board). GPIO 20 is on the header too but is the NS4150 amplifier enable. */
+uint64_t bsp_app_gpio_mask(void)
+{
+    return BIT64(1) | BIT64(2) | BIT64(3) | BIT64(4) | BIT64(5) | BIT64(32) | BIT64(33) | BIT64(45) | BIT64(46) | BIT64(47);
 }

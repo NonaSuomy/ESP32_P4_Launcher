@@ -98,20 +98,7 @@ static bool ci_contains(const char *hay, const char *needle)
     return false;
 }
 
-/* "Super_Mario Bros (U).nes" -> "Super Mario Bros (U)" */
 static bool s_real_names;               /* file manager: show names as they are */
-
-static void pretty(const char *name, bool is_dir, char *out, size_t len)
-{
-    snprintf(out, len, "%s", name);
-    if (s_real_names) return;
-    if (!is_dir) {
-        char *dot = strrchr(out, '.');
-        if (dot && dot != out) *dot = 0;
-    }
-    for (char *p = out; *p; p++)
-        if (*p == '_') *p = ' ';
-}
 
 /* ── Line files (favorites, recents) ───────────────────────────────────── */
 
@@ -187,6 +174,65 @@ static void lines_write(const lines_t *l, const char *path, const char *first, c
 /* ── Browser state ─────────────────────────────────────────────────────── */
 
 enum { TAB_ALL, TAB_FAV, TAB_RECENT, TAB_COUNT };
+/* ── Display names ──────────────────────────────────────────────────────
+ * "<root>/gamenames.txt": lines "mslug=Metal Slug", the ROM's file name
+ * without extension = the name shown, sorted and searched (the Neo Geo set
+ * uses short MAME names; same file as RetroESP32_P4's). */
+#define NAMES_FILE "gamenames.txt"
+static lines_t s_names;                 /* line[i] = key, then its name after the 0 that replaced "=" */
+
+static int names_cmp(const void *a, const void *b)
+{
+    return strcasecmp(*(char *const *)a, *(char *const *)b);
+}
+
+static void names_load(const char *root)
+{
+    char path[PATH_LEN];
+    snprintf(path, sizeof(path), "%s/" NAMES_FILE, root);
+    lines_load(&s_names, path);
+    int n = 0;
+    for (int i = 0; i < s_names.n; i++) {
+        char *eq = strchr(s_names.line[i], '=');
+        if (!eq || eq == s_names.line[i] || !eq[1]) continue;
+        *eq = 0;
+        s_names.line[n++] = s_names.line[i];
+    }
+    s_names.n = n;
+    if (n > 1) qsort(s_names.line, n, sizeof(char *), names_cmp);
+    if (n) ESP_LOGI(TAG, "%d display names from %s", n, path);
+}
+
+static const char *names_find(const char *file)
+{
+    if (!s_names.n) return NULL;
+    char key[64];
+    snprintf(key, sizeof(key), "%s", file);
+    char *dot = strrchr(key, '.');
+    if (dot && dot != key) *dot = 0;
+    const char *k = key;
+    char **hit = bsearch(&k, s_names.line, s_names.n, sizeof(char *), names_cmp);
+    return hit ? *hit + strlen(*hit) + 1 : NULL;
+}
+
+/* "Super_Mario Bros (U).nes" -> "Super Mario Bros (U)"; "mslug.zip" -> "Metal Slug" with gamenames.txt */
+static void pretty(const char *name, bool is_dir, char *out, size_t len)
+{
+    snprintf(out, len, "%s", name);
+    if (s_real_names) return;
+    if (!is_dir) {
+        const char *full = names_find(name);
+        if (full) {
+            snprintf(out, len, "%s", full);
+            return;
+        }
+        char *dot = strrchr(out, '.');
+        if (dot && dot != out) *dot = 0;
+    }
+    for (char *p = out; *p; p++)
+        if (*p == '_') *p = ' ';
+}
+
 static const char *const TAB_NAME[TAB_COUNT] = { "All", "Favorites", "Recent" };
 
 enum { E_DIR = 1, E_SAVE_KNOWN = 2, E_SAVE = 4 };
@@ -224,6 +270,7 @@ void lx_ui_reset(void)
     heap_caps_free(S.pool);
     lines_free(&S.favs);
     lines_free(&S.recents);
+    lines_free(&s_names);
     memset(&S, 0, sizeof(S));
 }
 
@@ -344,7 +391,11 @@ static int ent_cmp(const void *a, const void *b)
 {
     const ent_t *x = a, *y = b;
     if ((x->flags & E_DIR) != (y->flags & E_DIR)) return (y->flags & E_DIR) - (x->flags & E_DIR);
-    return strcasecmp(base_name(x->name), base_name(y->name));
+    if (!s_names.n) return strcasecmp(base_name(x->name), base_name(y->name));
+    char a1[PATH_LEN], b1[PATH_LEN];
+    pretty(base_name(x->name), x->flags & E_DIR, a1, sizeof(a1));
+    pretty(base_name(y->name), y->flags & E_DIR, b1, sizeof(b1));
+    return strcasecmp(a1, b1);
 }
 
 static bool add_ent(const char *name, uint8_t flags, bool pooled)
@@ -1220,6 +1271,7 @@ int lx_ui_pick_file(const papp_pick_cfg_t *cfg, papp_pick_result_t *out, volatil
         }
     s_real_names = cfg->flags & PAPP_PICK_FILES_F;
     if (s_real_names) last[0] = 0;
+    else names_load(S.root);
     if (last[0]) {
         snprintf(S.dir, sizeof(S.dir), "%s", last);
         *strrchr(S.dir, '/') = 0;

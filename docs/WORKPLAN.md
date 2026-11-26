@@ -230,7 +230,7 @@ Goal: remove the big unknowns before writing production code. Each spike ends wi
 ## Phase 1 — BSP layer + bring-up on the reference board (2–3 pw)
 
 **1.0 DevLink service** (3 d, done first — it accelerates everything after it) — framed protocol over
-USB-Serial-JTAG, log routing, file commands (`LS/PUT/GET/RM/MKDIR`), `RUN/STOP/STATUS`, `INFO`,
+USB-Serial-JTAG (and UART0 on the Elecrow AIO), log routing, file commands (`LS/PUT/GET/RM/MKDIR`), `RUN/STOP/STATUS`, `INFO`,
 `REBOOT`, crash record; host tool `tools/papp_dev.py` with `deploy`. `SHOT` and `INPUT` are added in
 Phase 2 once the compositor and input manager exist. See ARCHITECTURE §7.8.
 

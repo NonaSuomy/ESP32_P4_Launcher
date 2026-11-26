@@ -7,6 +7,7 @@
  */
 #include "bsp.h"
 #include "lx_app.h"
+#include "lx_bt.h"
 #include "lx_devlink.h"
 #include "lx_comp.h"
 #include "lx_audio.h"
@@ -129,6 +130,7 @@ void app_main(void)
         if (lx_audio_init() != ESP_OK) ESP_LOGE(TAG, "audio mixer init failed");
     }
     if (lx_net_init() != ESP_OK) ESP_LOGE(TAG, "network init failed");
+    lx_bt_init();               /* USB Bluetooth dongles + the Bluetooth speaker (after the USB host) */
     if (home_start() != ESP_OK)
         ESP_LOGE(TAG, "home screen failed to start");
     ESP_LOGI(TAG, "ready");
