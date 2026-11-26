@@ -1,6 +1,6 @@
 name: Store catalogue
 
-# A merged community PR (or a change to the Store descriptions or the gamepad list) is published
+# A merged community PR (or a change to the Store descriptions, the gamepad list or the Neo Geo names) is published
 # to the Store's "apps" release by itself. The project's own apps are kept as published
 # (they need ESP-IDF to build): see tools/make_apps_release.py --keep-apps.
 on:
@@ -10,6 +10,7 @@ on:
       - "community/**"
       - "apps/store.json"
       - "SDcard/config/gamepads.txt"
+      - "SDcard/roms/neogeo/gamenames.txt"
   workflow_dispatch:
 
 permissions:

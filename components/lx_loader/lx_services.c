@@ -785,12 +785,13 @@ static const papp_iface_hdr_t *const s_registry[] = {
     &lx_if_thrd.hdr,
     &lx_if_ui.hdr,
     &lx_if_net.hdr,
-#if CONFIG_BT_NIMBLE_ENABLED && CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE
+#if (CONFIG_BT_NIMBLE_ENABLED && CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE) || (CONFIG_BT_BLUEDROID_ENABLED && CONFIG_ESP_HOSTED_ENABLE_BT_BLUEDROID)
     &lx_if_ble.hdr,
 #endif
     &lx_if_usbh.hdr,
     &lx_if_pwr.hdr,
     &lx_if_hidd.hdr,
+    &lx_if_irq.hdr,
 };
 
 void lx_svc_init(lx_app_log_sink_t log_sink)
@@ -799,6 +800,7 @@ void lx_svc_init(lx_app_log_sink_t log_sink)
     s_track_lock = xSemaphoreCreateMutex();
     lx_svc_net_init();
     lx_svc_ble_init();
+    lx_svc_irq_init();
 }
 
 const papp_iface_hdr_t *lx_svc_find(uint32_t id, uint16_t min_version)
@@ -819,11 +821,13 @@ void lx_svc_begin_run(void)
     memset(s_files, 0, sizeof(s_files));
     memset(s_file_bufs, 0, sizeof(s_file_bufs));
     s_ptrs = NULL; s_ptr_cap = 0; s_ptr_used = 0; s_ptr_live = 0;
+    lx_svc_irq_begin_run();
 }
 
 void lx_svc_end_run(uint32_t *leaked_allocs, uint32_t *leaked_bytes, uint32_t *leaked_files)
 {
     uint32_t na = 0, nb = 0, nf = 0;
+    lx_svc_irq_end_run();       /* first: no interrupt may run app code or touch its memory after this */
     for (uint32_t i = 0; i < s_ptr_cap; i++) {
         if (s_ptrs[i] > PTR_TOMB) {
             void *p = (void *)s_ptrs[i];

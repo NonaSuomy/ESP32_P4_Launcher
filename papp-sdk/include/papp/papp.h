@@ -237,6 +237,19 @@ const papp_if_pwr_t *papp_pwr(void);
 /* The USB HID device (papp_abi.h has the calls): NULL on launchers and boards without it. */
 const papp_if_hidd_t *papp_hidd(void);
 
+/* GPIO pins, hardware timers and their interrupts (papp_abi.h has the calls and the rules for a direct
+ * handler): NULL on launchers before 0.35. A deferred interrupt is taken with wait(), or with
+ * papp_irq_thread(): a thread on the interrupt's core (prio PAPP_PRIO_*) that calls fn for each event
+ * until the interrupt is detached or the app is asked to exit; join it after detach.
+ *   const papp_if_irq_t *irq = papp_irq();
+ *   irq->gpio_config(5, PAPP_GPIO_INPUT, PAPP_GPIO_PULL_UP);
+ *   papp_irq_cfg_t c = { .core = 1 };  papp_irq_t *h;
+ *   if (irq->gpio_attach(5, PAPP_IRQ_FALLING, &c, &h) == PAPP_E_OK)
+ *       papp_irq_thread(h, on_press, NULL, PAPP_PRIO_HIGH); */
+const papp_if_irq_t *papp_irq(void);
+typedef void (*papp_irq_fn_t)(void *arg, const papp_irq_event_t *ev);
+papp_thread_t *papp_irq_thread(papp_irq_t *h, papp_irq_fn_t fn, void *arg, uint8_t prio);
+
 #define PAPP_BLE_UUID16(v) { 2, { (uint8_t)((v) & 0xFF), (uint8_t)((v) >> 8) } }
 
 /* Advertising data: appends one AD structure to buf (31 bytes at most); false if it doesn't fit */

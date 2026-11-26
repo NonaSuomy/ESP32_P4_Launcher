@@ -17,6 +17,7 @@ TESTS = [
     ("libc_test", [], 30),
     ("hid_test", [], 30),
     ("thread_test", ["all"], 40),
+    ("irq_test", [], 60),              # toggles the lowest free header pin: nothing may be wired to it
 ]
 
 
