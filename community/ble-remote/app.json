@@ -1,0 +1,7 @@
+{
+  "author": "NonaSuomy",
+  "description": "Touchscreen BLE HID keyboard, mouse and gamepad to test with BLE Input Test",
+  "category": "tools",
+  "license": "Apache-2.0 (app); LVGL MIT",
+  "source": "https://github.com/giltal/ESP32_P4_Launcher/tree/main/apps/ble_remote"
+}

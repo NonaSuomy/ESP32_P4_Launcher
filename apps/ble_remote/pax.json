@@ -1,0 +1,24 @@
+{
+  "name": "ble_remote",
+  "title": "BLE Remote",
+  "version": "0.1.0",
+  "description": "Touchscreen Bluetooth LE HID keyboard, mouse and gamepad for testing with BLE Input Test.",
+  "author": "PAX workspace",
+  "category": "Tool",
+  "license": "Apache-2.0 (app); LVGL MIT",
+  "controls": [
+    "Advertise as PAX BLE Remote and connect from another P4 running BLE Input Test",
+    "Keyboard: touch keys to send USB HID key press and release reports",
+    "Mouse: drag on the pad; tap left or right click and scroll controls",
+    "Gamepad: hold the D-pad or action buttons to send HID reports",
+    "Close the app to stop advertising and release all controls"
+  ],
+  "changelog": "0.1.0: first native PAPP2 BLE HID peripheral with touchscreen keyboard, mouse and gamepad controls.",
+  "native_papp2": {
+    "build_script": "build_papp2.py",
+    "entry_source": "main.c",
+    "description": "Direct PAPP2 BLE HID peripheral. Uses report-reference descriptors, LE Secure Connections bonding and HID protocol mode."
+  },
+  "publish": true,
+  "dev_build": false
+}
