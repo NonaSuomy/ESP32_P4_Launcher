@@ -1,5 +1,5 @@
 /*
- * ES8311 codec + I2S0 (NS4150 amplifier on BOARD_AUDIO_PA), configured once at BOARD_AUDIO_RATE (16-bit stereo) and
+ * ES8311 codec + I2S0 (NS4150 amplifier on GPIO 20, or 11 on a _Y board: board_pins.h), configured once at BOARD_AUDIO_RATE (16-bit stereo) and
  * never reconfigured. Output only for now; the PA is switched by esp_codec_dev.
  */
 #include "board_internal.h"
@@ -61,11 +61,12 @@ esp_err_t bsp_audio_init(void)
     const audio_codec_ctrl_if_t *ctrl_if = audio_codec_new_i2c_ctrl(&i2c_cfg);
     const audio_codec_data_if_t *data_if = audio_codec_new_i2s_data(&i2s_cfg);
     const audio_codec_gpio_if_t *gpio_if = audio_codec_new_gpio();
+    int pa = board_is_y() ? BOARD_AUDIO_PA_Y : BOARD_AUDIO_PA_I_W;
     es8311_codec_cfg_t es_cfg = {
         .ctrl_if = ctrl_if,
         .gpio_if = gpio_if,
         .codec_mode = ESP_CODEC_DEV_WORK_MODE_DAC,
-        .pa_pin = BOARD_AUDIO_PA,
+        .pa_pin = pa,
         .use_mclk = true,
         .hw_gain = { .pa_voltage = 5.0, .codec_dac_voltage = 3.3 },
         .mclk_div = MCLK_MULTIPLE,
@@ -90,7 +91,7 @@ esp_err_t bsp_audio_init(void)
     esp_codec_dev_set_out_vol(s_codec, 60);
 
     board_set_cap(BSP_CAP_AUDIO);
-    ESP_LOGI(TAG, "ES8311 ready, %d Hz 16-bit stereo", BOARD_AUDIO_RATE);
+    ESP_LOGI(TAG, "ES8311 ready, %d Hz 16-bit stereo, amplifier on GPIO %d", BOARD_AUDIO_RATE, pa);
     return ESP_OK;
 }
 

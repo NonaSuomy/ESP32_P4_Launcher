@@ -44,6 +44,7 @@ static lx_audio_stream_t s_streams[LX_AUDIO_MAX_STREAMS];
 static SemaphoreHandle_t s_lock, s_wake;
 static int s_rate, s_master = 60;
 static volatile bool s_hold;        /* every stream silent: launcher overlay */
+static volatile lx_audio_tap_t s_tap;   /* output to a Bluetooth speaker instead */
 static int32_t s_mix[BLOCK_FRAMES * 2];
 static int16_t s_out[BLOCK_FRAMES * 2];
 
@@ -99,6 +100,11 @@ static void mixer_task(void *arg)
             int32_t v = s_mix[i];
             s_out[i] = v > 32767 ? 32767 : v < -32768 ? -32768 : v;
         }
+        lx_audio_tap_t tap = s_tap;
+        if (tap) {
+            tap(s_out, BLOCK_FRAMES);
+            memset(s_out, 0, sizeof(s_out));
+        }
         bsp_audio_write(s_out, BLOCK_FRAMES, 200);   /* paces the loop */
     }
 }
@@ -131,6 +137,12 @@ void lx_audio_master_volume(int percent)
 void lx_audio_hold(bool hold)
 {
     s_hold = hold;
+}
+
+void lx_audio_set_tap(lx_audio_tap_t tap)
+{
+    s_tap = tap;
+    if (s_wake) xSemaphoreGive(s_wake);
 }
 
 int lx_audio_master_volume_get(void)
