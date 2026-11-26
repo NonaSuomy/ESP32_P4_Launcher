@@ -1,0 +1,11 @@
+menu "P4 Launcher DevLink"
+
+config LX_DEVLINK_UART
+	bool "Use UART0 for DevLink"
+	default n
+	help
+	  Use UART0 instead of USB-Serial-JTAG for the DevLink protocol. Enable this
+	  on boards whose USB-UART bridge (for example, CH340) is wired to UART0.
+	  The UART console remains available until a DevLink host connects.
+
+endmenu

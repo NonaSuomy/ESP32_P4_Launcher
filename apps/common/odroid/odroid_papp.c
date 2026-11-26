@@ -689,12 +689,7 @@ int select(int n, fd_set *r, fd_set *w, fd_set *e, struct timeval *tv)
     return 0;
 }
 
-/* Directory access: the SDK has no directory listing yet (Atari 800's H:
- * device is the only user); report "not found". */
-DIR *opendir(const char *path)       { errno = ENOENT; return NULL; }
-struct dirent *readdir(DIR *d)       { return NULL; }
-int closedir(DIR *d)                 { return 0; }
-int rmdir(const char *path)          { errno = ENOSYS; return -1; }
+/* opendir/readdir/closedir/rmdir come from the SDK's libc_glue.c (FS v2). */
 
 /* ── System ────────────────────────────────────────────────────────────── */
 

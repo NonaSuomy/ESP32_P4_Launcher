@@ -80,6 +80,7 @@ esp_err_t lx_net_ap_start(const char *ssid, const char *password, uint8_t channe
                           volatile bool *abort);
 void      lx_net_ap_stop(void);
 void      lx_net_info(lx_net_info_t *out);
+int       lx_net_channel(void);       /* Wi-Fi channel in use, 0 = none; no call to the C6 (lx_net_info waits for it) */
 
 /* Network self-test for DevLink: route, ping, TCP, DNS; text grows while busy */
 void lx_net_diag_start(int mode);           /* 1 all, 2 link and gateway ping, 3 also scan */
