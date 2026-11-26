@@ -1,0 +1,7 @@
+{
+  "author": "ScratchEverywhere / PAX",
+  "description": "Scratch 3 block editor and player with touch, gamepad, keyboard and project support",
+  "category": "education",
+  "license": "LGPL-3.0-only",
+  "source": "https://github.com/ScratchEverywhere/ScratchEverywhere/tree/0bcc42bc1f216be2f75cbdaf9a5cf344dbf33b00"
+}
