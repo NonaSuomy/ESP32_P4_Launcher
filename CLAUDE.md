@@ -106,7 +106,8 @@ components/lx_input/      input manager: USB HID gamepads/keyboards, XInput (Xbo
                           /sd/config/gamepads_mine.txt (Map controller) wins over /sd/config/gamepads.txt (shared database,
                           SDcard/config/gamepads.txt, downloaded by the Store); NVS "padmap" = pre-0.23, read-only fallback
 components/lx_update/     self-update from /sd/update/launcher.bin + rollback confirm; online update (latest.json);
-                          lx_appstore = app catalogue for the Store (apps.json on the "apps" release; icons cached in /sd/launcher/store)
+                          lx_appstore = app catalogue for the Store (apps.json on the "apps" release; icons cached in /sd/launcher/store;
+                          codec modules: an app's "needs" installs them in /sd/launcher/codecs, a fetch updates the ones there)
 components/lx_net/        Wi-Fi station, NTP, time zone via the ESP32-C6 (esp_hosted 2.12.13 on the Guition boards, Tab5 and waveshare_p4_rpi_dsi, 1.4 on the Waveshare 3.5");
                           lx_c6 = the C6's firmware: version (DevLink info c6_fw) and update from /sd/update/c6.bin or the release;
                           saved network = /sd/config/wifi.txt (ssid=/password= lines; NVS "net" = pre-0.24, moved to the card at boot)

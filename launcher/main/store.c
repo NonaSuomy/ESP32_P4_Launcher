@@ -707,9 +707,16 @@ static void detail_show(void)
     char buf[320], size[16] = "";
     const char *cat = it->category != CAT_ALL ? k_cat_name[it->category] : it->community ? "Community" : "App";
     if (a) {
+        char codec[32] = "";
+        long cb = lx_appstore_codec_bytes(a);           /* installed with it */
         size_text(a->size, size, sizeof(size));
-        snprintf(buf, sizeof(buf), "%s%s   " LV_SYMBOL_RIGHT "  version %s,  %s", cat,
-                 a->community && it->category != CAT_ALL ? ", community" : "", a->version, size);
+        if (cb) {
+            size_text(cb, codec + 3, sizeof(codec) - 13);
+            memcpy(codec, " + ", 3);
+            strcat(codec, " codec");
+        }
+        snprintf(buf, sizeof(buf), "%s%s   " LV_SYMBOL_RIGHT "  version %s,  %s%s", cat,
+                 a->community && it->category != CAT_ALL ? ", community" : "", a->version, size, codec);
     } else {
         snprintf(buf, sizeof(buf), "%s   " LV_SYMBOL_RIGHT "  version %s%s", cat, it->version,
                  s_cat_ok ? ",  not in the Store" : "");

@@ -11,6 +11,7 @@
 
 #define LX_APPSTORE_MAX 64
 #define LX_APPSTORE_COMMUNITY "Community"     /* folder of the community apps */
+#define LX_APPSTORE_CODEC_DIR "/sd/launcher/codecs"  /* <name>.papp: what CODC loads */
 
 typedef struct {
     char id[32];
@@ -27,6 +28,7 @@ typedef struct {
     char author[32];            /* community apps */
     char description[124];      /* one line for the Store */
     char category[16];          /* emulators, games, tools, productivity; "" = not given */
+    char needs[32];             /* codec modules it uses, "h264,..." ("" = none): installed with it */
 } lx_appstore_app_t;
 
 typedef enum {
@@ -44,13 +46,18 @@ const lx_appstore_app_t *lx_appstore_app(int i);     /* changes while a fetch ru
 
 /* Downloads app i to papp_path (checked against its SHA-256, then put in place of
  * the old file) and its icon to icon_path. folder_icon_path, when not NULL and not
- * on the card yet, gets the icon of the app's folder. Directories are created. */
+ * on the card yet, gets the icon of the app's folder. Directories are created.
+ * The codec modules the app needs (catalogue "codecs") go to LX_APPSTORE_CODEC_DIR
+ * when the card has no copy or another one. */
 void lx_appstore_install(int i, const char *papp_path, const char *icon_path, const char *folder_icon_path);
 
 lx_appstore_state_t lx_appstore_state(void);
 void lx_appstore_reset(void);           /* result read: back to IDLE */
 int lx_appstore_percent(void);
 const char *lx_appstore_error(void);
+
+/* Bytes of the codec modules app a needs that the card doesn't have yet (by file size) */
+long lx_appstore_codec_bytes(const lx_appstore_app_t *a);
 
 /* The last fetch replaced /sd/config/gamepads.txt (the controller mapping database) */
 bool lx_appstore_gamepads_updated(void);

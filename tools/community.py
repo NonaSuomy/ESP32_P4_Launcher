@@ -12,12 +12,15 @@ community/<dir>/
   icon.png         square PNG, 64 to 256 pixels (88x88 is best), transparency OK
   app.json         {"author", "description", "license", "source" (optional),
                     "category" (optional: games, tools, productivity, education or emulators; the Store also
-                    lists the app there, besides Community)}
+                    lists the app there, besides Community),
+                    "needs" (optional: the launcher codec modules it uses, e.g. ["h264"]; the Store
+                    installs them with it)}
   screenshot.png   optional
 
 Folders whose name starts with "_" (community/_template) are skipped.
 """
 CATEGORIES = ("games", "tools", "productivity", "education", "emulators")
+CODECS = ("h264",)               # the launcher codec modules the Store has (make_apps_release.py)
 
 import argparse
 import hashlib
@@ -169,6 +172,8 @@ def load(folder, fetch=True):
         errors.append("app.json: \"source\" must be an https:// link")
     if "category" in meta and meta["category"] not in CATEGORIES:
         errors.append("app.json: \"category\" must be one of " + ", ".join(CATEGORIES))
+    if "needs" in meta and (not isinstance(meta["needs"], list) or any(n not in CODECS for n in meta["needs"])):
+        errors.append("app.json: \"needs\" must be a list of codecs: " + ", ".join(CODECS))
 
     icon = os.path.join(folder, "icon.png")
     if not os.path.isfile(icon):

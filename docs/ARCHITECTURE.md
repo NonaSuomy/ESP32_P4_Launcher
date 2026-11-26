@@ -620,7 +620,10 @@ so H.264 is FFmpeg's decoder: too big for the 3 MB launcher slot, hence a module
   - **Codec modules** (`/sd/launcher/codecs/<codec>.papp`, e.g. `h264.papp`): PAPP v2 images built with
     `papp_build --module`; their entry `_papp_start(PAPP_MODULE_ARGC, argv)` (module_crt0.c: runs the
     constructors, no main) fills `argv[0]` with a `papp_codec_module_t` (magic `CMOD`, `max_cores`, name and the
-    decoder functions). The launcher loads one on an app's first `open` of its codec (`lx_module_load` in
+    decoder functions). The Store installs them (launcher 0.37.1): the catalogue's `codecs` section lists them
+    (`codec_<name>.papp` on the apps release), an app's `"needs": ["h264"]` (apps/store.json, or a community
+    app.json) puts them on the card with the app, and reading the catalogue updates copies already there. The
+    launcher loads one on an app's first `open` of its codec (`lx_module_load` in
     lx_app.c: the app loader's `load_image` into launcher memory, on a helper task with an internal stack because
     of `esp_mmu_map`) and unloads it when the app ends. Its imports resolve to the same interfaces as the app's, so
     its memory and threads are the app's (tracked, reclaimed at teardown: its decoders are not closed then, the

@@ -7,6 +7,7 @@
  * apps.json: {"format":1, "folders":{"Emulators":{"icon":url}, ...},
  *             "apps":[{"id","name","version","folder","dir","file","url","size","sha256","icon"}],
  *             "gamepads":{"url","size","sha256"}, "gamenames":{"url","size","sha256"},
+ *             "codecs":{"h264":{"url","size","sha256","version"}, ...},
  *             "community":[{the app fields, "author","description","license","source"}]}
  * gamepads is the controller mapping database (SDcard/config/gamepads.txt in the
  * repository): fetching the catalogue also brings the card's copy up to date.
@@ -14,6 +15,8 @@
  * same way, on cards that have a /sd/roms/neogeo folder.
  * community lists apps shared without their source (community/ in the repository),
  * not reviewed: they come after the project's apps and always go to the Community folder.
+ * codecs are the CODC modules (/sd/launcher/codecs/<name>.papp): an app's "needs":["h264"]
+ * installs them with it, and reading the catalogue updates the ones already on the card.
  * category and description (launcher 0.26+) are what the Store shows. The apps' icons
  * are kept in /sd/launcher/store/<id>.png for the Store's list.
  */
@@ -44,6 +47,7 @@ static const char *TAG = "lx_appstore";
 #define NEOGEO_DIR    "/sd/roms/neogeo"
 #define GAMENAMES_FILE NEOGEO_DIR "/gamenames.txt"
 #define ICON_DIR      "/sd/launcher/store"
+#define MAX_CODECS    4
 
 static volatile lx_appstore_state_t s_state;
 static volatile int s_percent;
@@ -53,6 +57,8 @@ static int s_count;
 static EXT_RAM_BSS_ATTR struct { char name[24]; char icon[192]; } s_folders[MAX_FOLDERS];
 static int s_nfolders;
 static volatile bool s_pads_updated;
+static EXT_RAM_BSS_ATTR struct { char name[16], url[192], sha256[65]; long size; } s_codecs[MAX_CODECS];
+static int s_ncodecs;
 
 static struct {
     int index;
@@ -93,13 +99,18 @@ static void file_sha(const char *path, char hex[65])
     hex[0] = 0;
     FILE *f = fopen(path, "rb");
     if (!f) return;
-    uint8_t buf[512], hash[32];
+    uint8_t *buf = heap_caps_aligned_alloc(64, CHUNK, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL), hash[32];
+    if (!buf) {                         /* "" = download it again */
+        fclose(f);
+        return;
+    }
     mbedtls_sha256_context ctx;
     mbedtls_sha256_init(&ctx);
     mbedtls_sha256_starts(&ctx, 0);
     size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) mbedtls_sha256_update(&ctx, buf, n);
+    while ((n = fread(buf, 1, CHUNK, f)) > 0) mbedtls_sha256_update(&ctx, buf, n);   /* aligned: no sector-at-a-time reads */
     fclose(f);
+    free(buf);
     mbedtls_sha256_finish(&ctx, hash);
     mbedtls_sha256_free(&ctx);
     for (int i = 0; i < 32; i++) sprintf(hex + i * 2, "%02x", hash[i]);
@@ -121,9 +132,70 @@ static bool data_sync(cJSON *g, const char *path, const char *what)
     return ok;
 }
 
-/* The controller database, and the Neo Geo names where there is a Neo Geo folder */
+static bool codec_name_ok(const char *n)
+{
+    if (!n[0] || strlen(n) >= sizeof(s_codecs[0].name)) return false;
+    for (; *n; n++)
+        if (!((*n >= 'a' && *n <= 'z') || (*n >= '0' && *n <= '9') || *n == '_')) return false;
+    return true;
+}
+
+/* The catalogue's codec modules into s_codecs */
+static void parse_codecs(cJSON *j)
+{
+    s_ncodecs = 0;
+    cJSON *m;
+    cJSON_ArrayForEach(m, cJSON_GetObjectItem(j, "codecs")) {
+        if (s_ncodecs >= MAX_CODECS || !m->string || !codec_name_ok(m->string)) continue;
+        cJSON *size = cJSON_GetObjectItem(m, "size");
+        snprintf(s_codecs[s_ncodecs].name, sizeof(s_codecs[0].name), "%s", m->string);
+        copy_str(s_codecs[s_ncodecs].url, sizeof(s_codecs[0].url), m, "url");
+        copy_str(s_codecs[s_ncodecs].sha256, sizeof(s_codecs[0].sha256), m, "sha256");
+        s_codecs[s_ncodecs].size = cJSON_IsNumber(size) ? (long)size->valuedouble : 0;
+        if (s_codecs[s_ncodecs].url[0] && strlen(s_codecs[s_ncodecs].sha256) == 64 && s_codecs[s_ncodecs].size > 0)
+            s_ncodecs++;
+    }
+}
+
+/* Codec module i onto the card if it isn't there or differs; only_update: leave a missing one out.
+ * True when the card's copy is the catalogue's */
+static bool codec_sync(int i, bool only_update, bool progress)
+{
+    char path[80], have[65];
+    struct stat st;
+    snprintf(path, sizeof(path), LX_APPSTORE_CODEC_DIR "/%s.papp", s_codecs[i].name);
+    bool there = stat(path, &st) == 0;
+    if (only_update && !there) return true;
+    if (there && st.st_size == s_codecs[i].size) {
+        file_sha(path, have);
+        if (strcasecmp(have, s_codecs[i].sha256) == 0) return true;
+    }
+    bool ok = download(s_codecs[i].url, path, s_codecs[i].sha256, s_codecs[i].size, progress);
+    ESP_LOGI(TAG, "codec %s %s", s_codecs[i].name, ok ? "installed" : "did not download");
+    return ok;
+}
+
+long lx_appstore_codec_bytes(const lx_appstore_app_t *a)
+{
+    long bytes = 0;
+    char needs[sizeof(a->needs)], path[80];
+    struct stat st;
+    snprintf(needs, sizeof(needs), "%s", a ? a->needs : "");
+    for (char *save, *n = strtok_r(needs, ",", &save); n; n = strtok_r(NULL, ",", &save))
+        for (int i = 0; i < s_ncodecs; i++) {
+            if (strcmp(s_codecs[i].name, n) != 0) continue;
+            snprintf(path, sizeof(path), LX_APPSTORE_CODEC_DIR "/%s.papp", n);
+            if (stat(path, &st) != 0 || st.st_size != s_codecs[i].size) bytes += s_codecs[i].size;
+        }
+    return bytes;
+}
+
+/* The controller database, and the Neo Geo names where there is a Neo Geo folder; codec
+ * modules already on the card are brought up to date */
 static void data_files_sync(cJSON *j)
 {
+    parse_codecs(j);
+    for (int i = 0; i < s_ncodecs; i++) codec_sync(i, true, false);
     s_pads_updated = data_sync(cJSON_GetObjectItem(j, "gamepads"), GAMEPADS_FILE, "gamepad database");
     struct stat st;
     if (stat(NEOGEO_DIR, &st) == 0 && S_ISDIR(st.st_mode))
@@ -147,6 +219,13 @@ static bool parse_app(cJSON *a, bool community)
     copy_str(e->sha256, sizeof(e->sha256), a, "sha256");
     copy_str(e->description, sizeof(e->description), a, "description");
     copy_str(e->category, sizeof(e->category), a, "category");
+    cJSON *need;
+    cJSON_ArrayForEach(need, cJSON_GetObjectItem(a, "needs")) {
+        if (!cJSON_IsString(need) || !codec_name_ok(need->valuestring) ||
+            strlen(e->needs) + strlen(need->valuestring) + 2 > sizeof(e->needs)) continue;
+        if (e->needs[0]) strcat(e->needs, ",");
+        strcat(e->needs, need->valuestring);
+    }
     cJSON *size = cJSON_GetObjectItem(a, "size");
     e->size = cJSON_IsNumber(size) ? (long)size->valuedouble : 0;
     if (community) {
@@ -331,6 +410,21 @@ static void install_task(void *arg)
     const char *fi = folder_icon_url(e->folder);
     if (fi && s_job.folder_icon[0] && stat(s_job.folder_icon, &st) != 0)
         download(fi, s_job.folder_icon, NULL, 0, false);
+    char needs[sizeof(e->needs)];
+    snprintf(needs, sizeof(needs), "%s", e->needs);
+    for (char *save, *n = strtok_r(needs, ",", &save); n; n = strtok_r(NULL, ",", &save)) {
+        int i = 0;
+        while (i < s_ncodecs && strcmp(s_codecs[i].name, n) != 0) i++;
+        s_percent = 0;
+        if (i == s_ncodecs || !codec_sync(i, false, true)) {
+            char text[160];                 /* fail() keeps what fits */
+            snprintf(text, sizeof(text), "%s is installed, but its %s codec did not download (%s).", e->name, n,
+                     i == s_ncodecs ? "not in the catalogue" : s_why);
+            fail(text);
+            vTaskDelete(NULL);
+            return;
+        }
+    }
     s_state = LX_APPSTORE_DONE;
     vTaskDelete(NULL);
 }

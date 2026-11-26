@@ -25,6 +25,7 @@ apps.json:
              "category", "description"}],
    "gamepads": {"url", "size", "sha256"},
    "gamenames": {"url", "size", "sha256"},
+   "codecs": {"h264": {"url", "size", "sha256", "version"}},
    "community": [{the app fields, plus "author", "license", "source"}]}
 category and description: the Store's (launcher 0.26+), from apps/store.json for the project's
 apps and from app.json for community ones (category optional there). category is emulators,
@@ -35,6 +36,9 @@ gamepads: the controller mapping database, SDcard/config/gamepads.txt; the launc
 replaces /sd/config/gamepads.txt with it when the Store reads the catalogue.
 gamenames: the Neo Geo game names, SDcard/roms/neogeo/gamenames.txt; the launcher (0.35.2+)
 replaces /sd/roms/neogeo/gamenames.txt with it, on cards that have that folder.
+codecs: the CODC modules (build/codecs/<name>/<name>.papp, built by apps/codecs/<name>/build.py), uploaded
+as codec_<name>.papp. An app with "needs": ["h264"] (apps/store.json, or a community app.json) gets them
+installed with it in /sd/launcher/codecs (launcher 0.37.1+); reading the catalogue updates copies already there.
 community: the apps under community/ (shared without source, checked by tools/community.py),
 in the "Community" folder. Their files are uploaded as c_<dir>.papp and c_<dir>.png, or the
 app's own url is used. Launchers before 0.25 ignore this list.
@@ -65,6 +69,7 @@ COMMUNITY_FOLDER = "Community"
 PAPP_MAGIC = 0x32504150          # "PAP2"
 MANIFEST_MAGIC = 0x464E414D      # "MANF"
 MF_HIDDEN = 1 << 1
+CODECS = ("h264",)               # build/codecs/<name>/<name>.papp; the test modules (dummy) stay out
 # What the catalogue is made of besides the built apps: these must match origin/main when publishing
 SYNCED = ["community", "apps/store.json", "SDcard/config/gamepads.txt", "SDcard/roms/neogeo/gamenames.txt"]
 
@@ -95,9 +100,10 @@ def check_live(catalogue):
         return []
     ver = lambda v: tuple(int(x) for x in (v.split(".") + ["0", "0"])[:3] if x.isdigit())
     problems = []
-    for key in ("apps", "community"):
-        mine = {a["id"]: a["version"] for a in catalogue.get(key, [])}
-        for a in live.get(key, []):
+    for key in ("apps", "community", "codecs"):
+        as_list = lambda c: [dict(id=k, **v) for k, v in c.items()] if key == "codecs" else c
+        mine = {a["id"]: a["version"] for a in as_list(catalogue.get(key, {} if key == "codecs" else []))}
+        for a in as_list(live.get(key, {} if key == "codecs" else [])):
             if a["id"] not in mine:
                 problems.append(f"{a['id']} {a['version']} is published but would be removed")
             elif ver(mine[a["id"]]) < ver(a["version"]):
@@ -155,17 +161,45 @@ def main():
             raise SystemExit(f"{app_id}: description in apps/store.json is longer than 120 characters")
         return info
 
+    def needs_of(app_id, info):
+        needs = info.get("needs", [])
+        if not isinstance(needs, list) or any(n not in codecs for n in needs):
+            if args.keep_apps and isinstance(needs, list):  # CI: a codec not published yet comes with the next full publish
+                print(f"note: {app_id} needs {needs}, published codecs are {sorted(codecs)}: left out")
+                return [n for n in needs if n in codecs]
+            raise SystemExit(f"{app_id}: needs {needs}, the codecs are {sorted(codecs)} "
+                             "(build one with apps/codecs/<name>/build.py)")
+        return needs
+
+    codecs = {}
     if args.keep_apps:
         if base != BASE:
             raise SystemExit("--keep-apps keeps the published files: it can't be used with --base")
         with urllib.request.urlopen(BASE + "apps.json", timeout=30) as r:
             live = json.load(r)
         folders = {k: v for k, v in live.get("folders", {}).items() if k != COMMUNITY_FOLDER}
+        codecs = live.get("codecs", {})
         for entry in live.get("apps", []):
             info = store_info(entry["id"])
             entry["category"], entry["description"] = info["category"], info["description"]
+            entry.pop("needs", None)
+            if needs_of(entry["id"], info):
+                entry["needs"] = needs_of(entry["id"], info)
             apps.append(entry)
             print(f"{entry['name']:16s} {entry['version']:8s} {entry['folder'] or '(main page)'} (as published)")
+    else:
+        for name in CODECS:
+            papp = os.path.join(ROOT, "build", "codecs", name, name + ".papp")
+            if not os.path.isfile(papp):
+                print(f"note: no codec {name} (python apps/codecs/{name}/build.py)")
+                continue
+            m = dict(version=open(os.path.join(ROOT, "apps", "codecs", name, "version.txt")).read().strip())
+            asset = f"codec_{name}.papp"
+            shutil.copyfile(papp, os.path.join(args.out, asset))
+            files.append(asset)
+            codecs[name] = dict(url=base + asset, size=os.path.getsize(papp), sha256=sha256(papp),
+                                version=m["version"])
+            print(f"codec {name:10s} {m['version']:8s} {os.path.getsize(papp):,} bytes")
     # build/apps (apps/build_all.py) and build/education (apps/education/build.py, which build_all runs too)
     builds = [] if args.keep_apps else [os.path.join(ROOT, "build", d) for d in ("apps", "education")]
     for built, name in [(b, n) for b in builds if os.path.isdir(b) for n in sorted(os.listdir(b))]:
@@ -184,6 +218,8 @@ def main():
                      sha256=sha256(papp))
         info = store_info(m["id"])
         entry["category"], entry["description"] = info["category"], info["description"]
+        if needs_of(m["id"], info):
+            entry["needs"] = needs_of(m["id"], info)
         shutil.copyfile(papp, os.path.join(args.out, name + ".papp"))
         files.append(name + ".papp")
         icon = os.path.join(built, name, "icon.png")
@@ -231,6 +267,8 @@ def main():
             entry["source"] = meta["source"]
         if meta.get("category"):
             entry["category"] = meta["category"]
+        if needs_of(app["id"], meta):
+            entry["needs"] = needs_of(app["id"], meta)
         if app.get("path"):
             asset = f"c_{app['dir']}.papp"
             shutil.copyfile(app["path"], os.path.join(args.out, asset))
@@ -247,6 +285,8 @@ def main():
         print(f"{app['name']:16s} {app['version']:8s} community, by {entry['author']}")
 
     catalogue = dict(format=1, folders=folders, apps=apps)
+    if codecs:
+        catalogue["codecs"] = codecs
     if community:
         catalogue["community"] = community
     if os.path.isfile(GAMEPADS):
