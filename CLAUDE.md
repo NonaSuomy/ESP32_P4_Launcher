@@ -4,7 +4,7 @@ Launcher firmware for ESP32-P4 boards that loads **relocatable PAPP v2 apps** fr
 PSRAM and runs them with a DLL-style interface layer. Successor to the PAPP concept in
 `C:\ESPIDFprojects\RetroESP32_P4` (reference project: drivers, ports, history).
 
-Design: `docs/ARCHITECTURE.md`. Plan + status: `docs/WORKPLAN.md`. Which boards qualify (supported / community / retired): `docs/BOARD_SUPPORT.md`.
+Design: `docs/ARCHITECTURE.md`. Plan + status: `docs/WORKPLAN.md` (history). Features and upgrades to pick from next: `docs/ROADMAP.md`. Which boards qualify (supported / community / retired): `docs/BOARD_SUPPORT.md`.
 
 ## Layout
 

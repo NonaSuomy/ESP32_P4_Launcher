@@ -1,5 +1,7 @@
 # ESP32-P4 Launcher — Work Plan
 
+> History of the early phases and milestones (up to 0.21). What could come next is in `docs/ROADMAP.md`.
+
 > Companion to [`ARCHITECTURE.md`](ARCHITECTURE.md). Draft v0.1, 2026-10-29.
 > Estimates are in **person-weeks (pw)** for one developer familiar with the reference project.
 > Target board for Phases 0–7: the reference Guition ESP32-P4 4.3″ (LCD), with the HDMI variant as a
