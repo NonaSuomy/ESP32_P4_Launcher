@@ -20,6 +20,7 @@ papp_import_t __papp_imports[] = {
     { PAPP_IF_PWR, 1, PAPP_IMPORT_OPTIONAL, 0 },             /* battery and charging */
     { PAPP_IF_HIDD, 1, PAPP_IMPORT_OPTIONAL, 0 },            /* USB HID device on the device port */
     { PAPP_IF_IRQ, 1, PAPP_IMPORT_OPTIONAL, 0 },             /* GPIO pins, timers, interrupts (0.35+) */
+    { PAPP_IF_CODC, 1, PAPP_IMPORT_OPTIONAL, 0 },            /* hardware JPEG (0.37+) */
 };
 
 #define SYS ((const papp_if_sys_t *)__papp_imports[0].iface)
@@ -36,6 +37,7 @@ papp_import_t __papp_imports[] = {
 #define PWR  ((const papp_if_pwr_t *)__papp_imports[11].iface)
 #define HIDD ((const papp_if_hidd_t *)__papp_imports[12].iface)
 #define IRQ  ((const papp_if_irq_t *)__papp_imports[13].iface)
+#define CODC ((const papp_if_codc_t *)__papp_imports[14].iface)
 
 const papp_if_sys_t *papp_if_sys(void) { return SYS; }
 const papp_if_mem_t *papp_if_mem(void) { return MEM; }
@@ -119,6 +121,10 @@ int   papp_disp_blit(papp_surface_t *s, const papp_blit_t *b)
 int   papp_disp_fill(papp_surface_t *s, int x, int y, int w, int h, uint16_t color)
 {
     return DISP->hdr.version >= 4 ? DISP->fill(s, x, y, w, h, color) : PAPP_E_UNSUPPORTED;
+}
+int   papp_disp_blit_yuv(papp_surface_t *s, const papp_yuv_t *f)
+{
+    return DISP->hdr.version >= 5 ? DISP->blit_yuv(s, f) : PAPP_E_UNSUPPORTED;
 }
 int   papp_disp_present(papp_surface_t *s)                    { return DISP->present(s, 0); }
 int   papp_disp_touch(papp_surface_t *s, papp_touch_point_t *pts, int max)
@@ -281,6 +287,7 @@ const papp_if_usbh_t *papp_usbh(void) { return USBH; }
 const papp_if_pwr_t *papp_pwr(void) { return PWR; }
 const papp_if_hidd_t *papp_hidd(void) { return HIDD; }
 const papp_if_irq_t  *papp_irq(void)  { return IRQ; }
+const papp_if_codc_t *papp_codc(void) { return CODC; }
 
 /* papp_irq_thread: a thread on the interrupt's core that calls fn per event until h is detached or the
  * app is asked to exit */

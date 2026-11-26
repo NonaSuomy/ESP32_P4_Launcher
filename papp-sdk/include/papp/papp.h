@@ -104,6 +104,11 @@ int             papp_disp_touch(papp_surface_t *s, papp_touch_point_t *pts, int 
  * launcher 0.29.1 (DISP v4): draw it yourself then. */
 int             papp_disp_blit(papp_surface_t *s, const papp_blit_t *b);
 int             papp_disp_fill(papp_surface_t *s, int x, int y, int w, int h, uint16_t color);
+/* A decoded video frame (planar YUV 4:2:0, FFmpeg's yuv420p) turned into RGB565 and scaled by the PPA into
+ * the buffer from papp_disp_lock: see papp_yuv_t. PAPP_E_UNSUPPORTED before launcher 0.37 (DISP v5).
+ * For video, make the surface the frame's size and blit at scale 1: present() then scales it to the screen
+ * in the background while the next frame decodes. A 640x360 frame takes ~18 ms here (most of it PSRAM). */
+int             papp_disp_blit_yuv(papp_surface_t *s, const papp_yuv_t *f);
 
 /* ── Audio ──────────────────────────────────────────────────────────────────
  * Open a stream at the rate/format your engine produces; the launcher
@@ -247,6 +252,9 @@ const papp_if_hidd_t *papp_hidd(void);
  *   if (irq->gpio_attach(5, PAPP_IRQ_FALLING, &c, &h) == PAPP_E_OK)
  *       papp_irq_thread(h, on_press, NULL, PAPP_PRIO_HIGH); */
 const papp_if_irq_t *papp_irq(void);
+/* The hardware JPEG engine (papp_abi.h has the calls): decode and encode RGB565 pictures, MJPEG frames.
+ * NULL on launchers before 0.37. */
+const papp_if_codc_t *papp_codc(void);
 typedef void (*papp_irq_fn_t)(void *arg, const papp_irq_event_t *ev);
 papp_thread_t *papp_irq_thread(papp_irq_t *h, papp_irq_fn_t fn, void *arg, uint8_t prio);
 

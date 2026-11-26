@@ -1,0 +1,3 @@
+dependencies:
+  # CODC: the built-in MP3 and AAC decoders (lx_svc_codec.c). Espressif Modified MIT licence.
+  espressif/esp_audio_codec: "2.5.0"

@@ -1,9 +1,9 @@
 idf_component_register(
-    SRCS "lx_app.c" "lx_services.c" "lx_svc_disp.c" "lx_svc_audio.c" "lx_svc_input.c" "lx_svc_thrd.c" "lx_svc_ui.c" "lx_svc_net.c" "lx_svc_ble.c" "lx_svc_ble_bd.c" "lx_bt.c" "lx_bt_usb.c" "lx_bt_speaker.c" "lx_bt_pads.c" "lx_bt_testpad.c" "lx_lpram.c" "lx_svc_usbh.c" "lx_svc_pwr.c" "lx_svc_irq.c"
+    SRCS "lx_app.c" "lx_services.c" "lx_svc_disp.c" "lx_svc_audio.c" "lx_svc_input.c" "lx_svc_thrd.c" "lx_svc_ui.c" "lx_svc_net.c" "lx_svc_ble.c" "lx_svc_ble_bd.c" "lx_bt.c" "lx_bt_usb.c" "lx_bt_speaker.c" "lx_bt_pads.c" "lx_bt_testpad.c" "lx_lpram.c" "lx_svc_usbh.c" "lx_svc_pwr.c" "lx_svc_irq.c" "lx_svc_codec.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
     REQUIRES papp_abi esp_mm
-    PRIV_REQUIRES lx_common bsp lx_comp lx_audio lx_input esp_timer heap esp_system lx_ui lx_net lwip mbedtls esp_hw_support bt espressif__esp_hosted usb lx_usbd esp_driver_gpio esp_driver_gptimer esp_hid
+    PRIV_REQUIRES lx_common bsp lx_comp lx_audio lx_input esp_timer heap esp_system lx_ui lx_net lwip mbedtls esp_hw_support bt espressif__esp_hosted usb lx_usbd esp_driver_gpio esp_driver_gptimer esp_hid esp_driver_jpeg espressif__esp_audio_codec
 )
 
 # BLE: esp_hosted 2.x starts the C6's controller on request; 1.4 (Tab5) runs it from the C6's boot

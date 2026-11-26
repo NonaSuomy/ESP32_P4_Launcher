@@ -33,6 +33,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "lx_app";
 
@@ -340,6 +341,77 @@ static const papp_manifest_t *app_manifest(const app_t *a)
         return NULL;
     const papp_manifest_t *m = (const papp_manifest_t *)(a->buf + h->manifest_off);
     return m->magic == PAPP_MANIFEST_MAGIC ? m : NULL;
+}
+
+/* ── Modules (codec modules from the SD card, lx_svc_codec.c) ───────────── */
+
+/* A module is loaded like an app image, into the launcher's memory, but runs on the app's threads. Loading
+ * maps memory (esp_mmu_map, which turns the caches off for a moment): it runs on a helper task with an
+ * internal stack, as app threads may have PSRAM stacks. */
+typedef struct {
+    const char *path;
+    app_t *a;
+    char *err;
+    size_t err_len;
+    esp_err_t e;
+    SemaphoreHandle_t done;
+} module_job_t;
+
+static void module_load_task(void *p)
+{
+    module_job_t *j = p;
+    j->e = ESP_ERR_NO_MEM;
+    app_t *a = calloc(1, sizeof(*a));
+    if (a) {
+        strlcpy(a->path, j->path, sizeof(a->path));
+        FILE *f = fopen(j->path, "rb");
+        if (!f) j->e = fail(j->err, j->err_len, ESP_ERR_NOT_FOUND, "cannot open %s", j->path);
+        else {
+            void *iobuf = lx_file_fast_io(f);
+            j->e = load_image(a, f, j->err, j->err_len);
+            fclose(f);
+            heap_caps_free(iobuf);
+        }
+        if (j->e != ESP_OK) { app_free(a); a = NULL; }
+    } else fail(j->err, j->err_len, ESP_ERR_NO_MEM, "out of memory");
+    j->a = a;
+    xSemaphoreGive(j->done);
+    vTaskDelete(NULL);
+}
+
+static void module_free_task(void *p)
+{
+    module_job_t *j = p;
+    app_free(j->a);
+    xSemaphoreGive(j->done);
+    vTaskDelete(NULL);
+}
+
+static bool module_job(TaskFunction_t fn, module_job_t *j)
+{
+    j->done = xSemaphoreCreateBinary();
+    bool ok = j->done && xTaskCreate(fn, "lx_module", 8192, j, uxTaskPriorityGet(NULL), NULL) == pdPASS;
+    if (ok) xSemaphoreTake(j->done, portMAX_DELAY);
+    if (j->done) vSemaphoreDelete(j->done);
+    return ok;
+}
+
+esp_err_t lx_module_load(const char *path, lx_module_t **out, papp_start_fn_t *entry, char *err, size_t err_len)
+{
+    module_job_t j = { .path = path, .err = err, .err_len = err_len };
+    if (!module_job(module_load_task, &j))
+        return fail(err, err_len, ESP_ERR_NO_MEM, "no memory for the loading task");
+    if (j.e != ESP_OK) return j.e;
+    *out = (lx_module_t *)j.a;
+    *entry = (papp_start_fn_t)((uint8_t *)j.a->exec + j.a->hdr.entry_off);
+    return ESP_OK;
+}
+
+void lx_module_unload(lx_module_t *m)
+{
+    if (!m) return;
+    module_job_t j = { .a = (app_t *)m };
+    if (!module_job(module_free_task, &j)) app_free(j.a);     /* (no memory for a task: unmap from here) */
 }
 
 /* ── Running ────────────────────────────────────────────────────────────── */

@@ -58,6 +58,12 @@ esp_err_t lx_app_stop(uint32_t grace_ms);
  * presented since the last request): then the caller stops the app. */
 bool lx_app_overlay_request(void);
 
+/* A codec module (a PAPP image of the launcher's own, run on the app's threads): loaded, relocated and its
+ * imports resolved; the caller runs entry. Unload it after the app's threads are gone. */
+typedef struct lx_module lx_module_t;
+esp_err_t lx_module_load(const char *path, lx_module_t **out, papp_start_fn_t *entry, char *err, size_t err_len);
+void      lx_module_unload(lx_module_t *m);
+
 lx_app_state_t lx_app_state(void);
 const char    *lx_app_path(void);          /* "" when idle */
 uint32_t       lx_app_exec_base(void);     /* 0 when idle  */

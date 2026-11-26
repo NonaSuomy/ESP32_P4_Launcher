@@ -62,6 +62,17 @@ typedef struct {
 } lx_blit_t;
 esp_err_t     lx_comp_blit(lx_surface_t *s, const lx_blit_t *b);
 esp_err_t     lx_comp_fill(lx_surface_t *s, int x, int y, int w, int h, uint16_t color);
+/* A planar YUV 4:2:0 frame (I420) turned into RGB565 and scaled by the PPA into the buffer lock() returns,
+ * replacing what is there; the scaled frame must lie inside the surface. */
+typedef struct {
+    const uint8_t *y, *u, *v;
+    int w, h;                   /* even */
+    int stride_y, stride_uv;    /* bytes, 0 = w, w / 2 */
+    int x, y0;                  /* top left of the scaled frame */
+    int scale_x16, scale_y16;   /* sixteenths: 16 = 1.0 */
+    bool bt709, full_range;
+} lx_yuv_t;
+esp_err_t     lx_comp_blit_yuv(lx_surface_t *s, const lx_yuv_t *f);
 /* Touch points mapped into surface coordinates; points outside it are dropped. */
 int           lx_comp_touch_read(lx_surface_t *s, bsp_touch_point_t *pts, int max);
 

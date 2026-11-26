@@ -248,7 +248,8 @@ typedef struct {
 /* ── DISP interface ─────────────────────────────────────────────────────── */
 
 #define PAPP_IF_DISP      PAPP_FOURCC('D', 'I', 'S', 'P')
-#define PAPP_IF_DISP_VER  4      /* v2: touch_read(NULL) = display coordinates; v3: present_ext; v4: blit */
+#define PAPP_IF_DISP_VER  5      /* v2: touch_read(NULL) = display coordinates; v3: present_ext; v4: blit;
+                                    v5: blit_yuv */
 
 enum { PAPP_PIXFMT_RGB565 = 1 };
 
@@ -302,6 +303,22 @@ typedef struct {
     uint32_t    reserved[2];             /* 0 */
 } papp_blit_t;
 
+/* DISP v5 blit_yuv: a decoded video frame (planar YUV 4:2:0, as FFmpeg's yuv420p / I420), turned into
+ * RGB565 and scaled by the PPA straight into the surface: no colour conversion or scaling on the CPU. */
+#define PAPP_YUV_BT709       (1u << 0)   /* BT.709 colours (HD video); else BT.601 (SD video, JPEG)  */
+#define PAPP_YUV_FULL_RANGE  (1u << 1)   /* 0..255 (JPEG); else 16..235 (video)                     */
+typedef struct {
+    const uint8_t *y, *u, *v;            /* the planes: u and v at half the width and height        */
+    uint16_t    w, h;                    /* even, at least 2 x 2                                     */
+    uint16_t    stride_y, stride_uv;     /* bytes per line; 0 = w, w / 2                             */
+    int16_t     dx, dy;                  /* top left of the drawn (scaled) frame on the surface: it must
+                                            lie wholly inside the surface (PAPP_E_ARG otherwise)    */
+    uint16_t    scale_x, scale_y;        /* as papp_blit_t: 256 = 1.0 (0 = 1.0), steps of 1/16      */
+    uint8_t     flags;                   /* PAPP_YUV_*                                               */
+    uint8_t     reserved8[3];
+    uint32_t    reserved[2];             /* 0 */
+} papp_yuv_t;
+
 typedef struct {
     uint16_t x, y;               /* surface coordinates                      */
     uint16_t size;
@@ -331,6 +348,10 @@ typedef struct {
     int             (*blit)(papp_surface_t *s, const papp_blit_t *b);
     /* v4: the PPA fills a rectangle of that buffer with an RGB565 colour (clipped). 0 = ok */
     int             (*fill)(papp_surface_t *s, int x, int y, int w, int h, uint16_t color);
+    /* v5: a YUV 4:2:0 frame (papp_yuv_t) drawn by the PPA into the buffer lock() returned, replacing
+     * what was there. As with blit, finish the CPU's drawing first; drawing on top of it after is fine.
+     * 0 = ok, PAPP_E_ARG, PAPP_E_NOMEM. */
+    int             (*blit_yuv)(papp_surface_t *s, const papp_yuv_t *f);
 } papp_if_disp_t;
 
 /* ── AUDI interface ─────────────────────────────────────────────────────── */
@@ -1120,6 +1141,145 @@ typedef struct {
     void (*detach)(papp_irq_t *h);           /* interrupt off and freed; a waiter gets E_EXIT  */
     int  (*core)(papp_irq_t *h);             /* the core its interrupt runs on                 */
 } papp_if_irq_t;
+
+/* ── CODC interface ─────────────────────────────────────────────────────── */
+/* Decoders for video and audio, and the P4's hardware JPEG engine.
+ *
+ * Decoders (open / send / receive / close) work on a container's packets: the app reads the file (MP4, MKV, MP3,
+ * ADTS ...) and hands each packet over; what comes out is a YUV 4:2:0 picture (for DISP v5 blit_yuv) or 16-bit
+ * PCM (for AUDI). The launcher picks the implementation: hardware where the chip has it (JPEG; a future chip's
+ * H.264 decoder would slot in here with no change to apps), else software built into the launcher (MP3, AAC) or
+ * a codec module loaded from the SD card on first use (/sd/launcher/codecs/<codec>.papp, e.g. h264.papp: FFmpeg's
+ * decoder). PAPP_E_UNSUPPORTED from open = no decoder for it here (a missing module: the Store installs them).
+ * Everything an app opened is closed when it ends, and modules are unloaded then.
+ *
+ * Cores: cfg.cores = 2 lets a video decoder work on two frames at once on both cores (about 1.7x faster for
+ * H.264, one frame more delay); 1 keeps it on one thread; 0 = the decoder's choice (2 for video). Its threads
+ * run at cfg.prio (PAPP_PRIO_*).
+ *
+ * The JPEG calls: the hardware engine, RGB565 pictures in the app's own buffers (the launcher copies through
+ * DMA buffers of its own). One picture at a time across the app's threads (a second caller waits). */
+
+#define PAPP_IF_CODC      PAPP_FOURCC('C', 'O', 'D', 'C')
+#define PAPP_IF_CODC_VER  1
+
+#define PAPP_E_EOF        (-15)          /* receive: the stream has ended (after send(NULL)), all output given */
+#define PAPP_PTS_NONE     INT64_MIN      /* an output with no pts of its own (see receive_audio)               */
+
+enum {                                   /* papp_dec_cfg_t.codec                                         */
+                                         /* 1: not used (JPEG pictures: jpeg_decode, the hardware)       */
+    PAPP_CODEC_H264  = 2,                /* video: Annex B (start codes), or AVC packets with .extra = the
+                                            MP4's avcC box                                               */
+    PAPP_CODEC_MP3   = 3,                /* audio: MPEG-1/2 layer III frames (any split: the decoder finds
+                                            the frames)                                                  */
+    PAPP_CODEC_AAC   = 4,                /* audio: ADTS, or raw frames with .extra = the MP4's
+                                            AudioSpecificConfig                                          */
+};
+
+typedef struct {
+    uint8_t     codec;                   /* PAPP_CODEC_*                                                  */
+    uint8_t     cores;                   /* 0 = the decoder's choice, 1, 2                                */
+    uint8_t     prio;                    /* PAPP_PRIO_* of the decoder's threads                          */
+    uint8_t     flags;                   /* 0                                                             */
+    const void *extra;                   /* codec set-up from the container (copied), or NULL             */
+    uint32_t    extra_len;
+    uint32_t    reserved[4];             /* 0 */
+} papp_dec_cfg_t;
+
+typedef struct {                         /* a decoded picture: the decoder's memory, valid until the next
+                                            receive_frame, flush or close                                */
+    const uint8_t *y, *u, *v;            /* planar YUV 4:2:0                                              */
+    uint16_t    w, h;
+    uint16_t    stride_y, stride_uv;
+    int64_t     pts;                     /* as sent with its packet                                       */
+    uint8_t     yuv_flags;               /* PAPP_YUV_*: pass to blit_yuv                                  */
+    uint8_t     keyframe;
+    uint8_t     reserved8[2];
+    uint32_t    reserved[2];
+} papp_dec_frame_t;
+
+typedef struct {
+    int64_t     pts;
+    uint32_t    rate;                    /* Hz                                                            */
+    uint8_t     channels;                /* 1, 2: the PCM is interleaved                                  */
+    uint8_t     reserved8[3];
+    uint32_t    reserved[2];
+} papp_dec_audio_t;
+
+#define PAPP_DEC_AUDIO_MAX  4608         /* samples per channel one receive_audio can give: room for this */
+
+typedef struct {
+    uint8_t     available;               /* open would work now                                           */
+    uint8_t     hardware;                /* done by the chip                                              */
+    uint8_t     module;                  /* a codec module from the SD card                               */
+    uint8_t     max_cores;               /* 0: not known before its module is loaded                      */
+    char        name[40];                /* e.g. "FFmpeg 7.1.1 h264", "esp_audio_codec 2.5.0 mp3"         */
+} papp_codec_info_t;
+
+typedef struct papp_dec papp_dec_t;
+
+typedef struct {
+    papp_iface_hdr_t hdr;
+    /* A JPEG's size from its header: PAPP_E_OK, or PAPP_E_ARG (not a JPEG the engine takes:
+     * progressive and arithmetic-coded JPEGs are not). */
+    int (*jpeg_info)(const void *jpg, size_t len, uint16_t *w, uint16_t *h);
+    /* Decodes into out: RGB565, the picture's w x h, stride_px pixels per line (0 = its width),
+     * out_size bytes at most. *w / *h (may be NULL) get the size. PAPP_E_OK, PAPP_E_ARG, PAPP_E_LIMIT
+     * (out too small), PAPP_E_NOMEM, PAPP_E_IO (a damaged picture), PAPP_E_UNSUPPORTED (width or height
+     * not a multiple of 8: the engine cannot; decode those in software). */
+    int (*jpeg_decode)(const void *jpg, size_t len, uint16_t *out, int stride_px, size_t out_size,
+                       uint16_t *w, uint16_t *h);
+    /* Encodes an RGB565 picture (w x h, stride_px, 0 = w) at quality 1..100 (0 = 80) into out:
+     * returns the JPEG's length in bytes, or PAPP_E_ARG, PAPP_E_LIMIT (out too small), PAPP_E_NOMEM,
+     * PAPP_E_IO. */
+    int (*jpeg_encode)(const uint16_t *pixels, int w, int h, int stride_px, int quality, void *out,
+                       size_t out_size);
+
+    /* What decodes codec here (loads nothing). PAPP_E_OK, PAPP_E_ARG (unknown codec). */
+    int (*codec_info)(int codec, papp_codec_info_t *out);
+    /* A decoder (loads its module on first use, which takes a moment). PAPP_E_OK, PAPP_E_UNSUPPORTED,
+     * PAPP_E_ARG (bad extra), PAPP_E_NOMEM, PAPP_E_LIMIT (8 decoders open already). */
+    int (*open)(const papp_dec_cfg_t *cfg, papp_dec_t **out);
+    /* One packet (copied; pts is handed back with its output). data NULL = the end of the stream: what is
+     * left comes out, then receive answers PAPP_E_EOF. PAPP_E_OK, PAPP_E_LIMIT (output is waiting: receive
+     * it, then send this packet again), PAPP_E_IO (damaged: dropped, carry on). */
+    int (*send)(papp_dec_t *d, const void *data, size_t len, int64_t pts);
+    /* The next picture: 1 = *f filled, 0 = none yet (send more), PAPP_E_EOF, PAPP_E_ARG (an audio decoder). */
+    int (*receive_frame)(papp_dec_t *d, papp_dec_frame_t *f);
+    /* The next audio: samples per channel (> 0) into pcm, 16-bit, interleaved when stereo: pcm has room for
+     * max samples x 2 channels (max = PAPP_DEC_AUDIO_MAX is always enough). 0 = none yet (send more),
+     * PAPP_E_EOF, PAPP_E_LIMIT (max too small), PAPP_E_ARG (a video decoder). info->pts = the pts of the
+     * packet it came from; when one packet gives several, the first has it and the rest PAPP_PTS_NONE
+     * (count the samples). */
+    int (*receive_audio)(papp_dec_t *d, int16_t *pcm, size_t max, papp_dec_audio_t *info);
+    /* Forget what is in flight (after a seek: send a keyframe next). A decoder is used by one thread at a
+     * time (its own threads, cores = 2, are the decoder's business). */
+    void (*flush)(papp_dec_t *d);
+    void (*close)(papp_dec_t *d);
+} papp_if_codc_t;
+
+/* A codec module (/sd/launcher/codecs/<codec>.papp, built with papp_build --module): a PAPP image whose entry
+ * hands the launcher this table. It runs in the app's run (its memory and threads are the app's, through the
+ * same interfaces) and is unloaded when the app ends. Its functions have the CODC decoder's meanings. */
+#define PAPP_CODEC_MODULE_MAGIC  PAPP_FOURCC('C', 'M', 'O', 'D')
+#define PAPP_CODEC_MODULE_VER    1
+typedef struct {
+    uint32_t    magic;                   /* PAPP_CODEC_MODULE_MAGIC                                      */
+    uint16_t    version;                 /* PAPP_CODEC_MODULE_VER                                        */
+    uint8_t     max_cores;
+    uint8_t     reserved;
+    const char *name;
+    bool (*supports)(int codec);
+    int  (*open)(const papp_dec_cfg_t *cfg, void **ctx);
+    int  (*send)(void *ctx, const void *data, size_t len, int64_t pts);
+    int  (*receive_frame)(void *ctx, papp_dec_frame_t *f);
+    int  (*receive_audio)(void *ctx, int16_t *pcm, size_t max, papp_dec_audio_t *info);
+    void (*flush)(void *ctx);
+    void (*close)(void *ctx);
+} papp_codec_module_t;
+/* The launcher calls a module's entry as _papp_start(PAPP_MODULE_ARGC, argv) with argv[0] pointing at a
+ * `const papp_codec_module_t *` for it to fill; it returns 0. */
+#define PAPP_MODULE_ARGC  (-0x4D4F44)
 
 /* ── Entry point ────────────────────────────────────────────────────────── */
 

@@ -72,7 +72,13 @@ components/lx_loader/     App Manager: loader, relocation, imports, services (SY
                           gptimers, interrupts on the app's core: GPIO line 1 = core 0, line 2 = core 1 (IDF's ISR service has line 0),
                           allocated/freed on a task pinned to the core; deferred (event ring, wait) or direct (app's PAPP_FAST code in
                           the ISR, FAST must be in SRAM); PAPP_IRQ_AWAKE = priority-1 spinner on the core (an idle core on a v1.x chip takes
-                          ~17 us longer to enter an ISR; not on v3.x); ARCHITECTURE §7.9
+                          ~17 us longer to enter an ISR; not on v3.x); ARCHITECTURE §7.9;
+                          CODC (lx_svc_codec.c) = decoders (open/send/receive_frame|receive_audio/flush/close, cores 1|2): MP3 + AAC
+                          built in (esp_audio_codec 2.5.0, ~200 KB), H.264 = codec module /sd/launcher/codecs/h264.papp (apps/codecs/h264:
+                          FFmpeg 7.1.1, LGPL; papp_build --module, module_crt0.c, libc_glue -DPAPP_MODULE = own reent per thread),
+                          loaded by lx_module_load (lx_app.c) on the first open, unloaded at teardown; + hardware JPEG info/decode/
+                          encode in RGB565 (bounce buffers, engines per run; decode needs sizes that are multiples of 8); DISP v5 blit_yuv = I420 frame -> PPA YUV420 (packed
+                          "U Y Y / V Y Y" lines, repacked by the CPU) -> RGB565 scaled into the surface (lx_comp_blit_yuv); §7.11
 components/fatfs/         copy of IDF 5.5.6's fatfs with exFAT on (FF_FS_EXFAT 1, + FF_USE_LABEL fix): overrides IDF's;
                           diskio_sdmmc.c: a 4-bit SD transfer that times out moves the card to 1-bit (CMD12 + ACMD6, no
                           re-init or controller reset: the C6 shares it) until reboot (v3.2 7" with bad D1-D3);
@@ -119,7 +125,9 @@ apps/                     Test/demo apps (hello, libc_test, gfx_demo: DISP test,
                           periph = "gution-p4" for ESP32P4_Gution4_7project/tools/ble_client.py;
                           ppa_test: DISP v4 blit/fill self-check against a CPU model (--libc), exit code = failures;
                           irq_test: IRQ test (--libc), args all|leave|hang [pin]: toggles a free pin (no wiring, it sees its own
-                          edges) — all test apps are
+                          edges); codec_test: blit_yuv vs a CPU model + JPEG round trips and timings + the decoders on /sd/codec_test
+                          media (make_media.py, transcode.ps1 = Windows Media Foundation encodes MP3/M4A/MP4, mp4_to_packets.py)
+                          (--libc), arg secs — all test apps are
                           PAPP_MF_HIDDEN: shown on the home screen only with Settings → Show developer apps)
 apps/education/<app>/     Education apps for students (ids edu.*): `python apps/education/build.py` (build_all runs it too)
                           builds them into build/education and copies .papp + icon to SDcard/apps/Education/<app>/ (committed;

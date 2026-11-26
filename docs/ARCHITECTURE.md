@@ -245,9 +245,10 @@ function-pointer-table speed and no symbol strings on the device.
 | `MEM ` | Memory | `alloc(size, caps, align)`, `realloc`, `free`, `stats` | caps are **abstract**: `FAST` (internal), `DMA`, `LARGE` (PSRAM); v2 (launcher 0.29.1) `code_alloc` / `code_free` / `code_sync`: executable PSRAM for JITs (64 KB-aligned block mapped a second time with EXEC; the app writes code through the data address and runs it at the returned one after `code_sync` = cache write-back + I-cache invalidate + `fence.i`); since 0.29.2 `code_sync` also takes executable internal SRAM (the app's FAST region, e.g. a JIT's hot code buffer; older launchers return `PAPP_E_ARG`); leftover blocks are freed at exit |
 | `THRD` | Threads & sync | thread create/join/exit (stack size + location, prio class, core), mutex, recursive mutex, semaphore, queue, event flags, timers | all tracked; v1 (launcher 0.5.0) has threads, mutexes, semaphores, queues; event flags + timers to come |
 | `FS  ` | Files | open/read/write/seek/tell/close/stat/truncate, opendir/readdir, mkdir/remove/rename, `app_dir()`, `data_dir()` | sandboxed paths (§7.6) |
-| `DISP` | Display / compositor | `info()`, surface create/destroy, `lock_back_buffer`, `present(async, vsync)`, palette for 8bpp, scale mode, dirty rects, direct-native mode; v3 `present_ext` (app's own buffer; since launcher 0.29.1 copied into the surface's spare buffer); since 0.29.1 a present on a 2-buffer surface returns at once and a launcher task scales and flips while the app draws its next frame (1-buffer surfaces stay synchronous); v4 `blit` (PPA into the surface: RGB565 / ARGB8888 / A8 pictures, scaled in 1/16 steps, quarter turns, mirrors via an SRM pass into a launcher buffer, then blended with colour key and alpha) and `fill` (PPA fill) | §7.3 |
+| `DISP` | Display / compositor | `info()`, surface create/destroy, `lock_back_buffer`, `present(async, vsync)`, palette for 8bpp, scale mode, dirty rects, direct-native mode; v3 `present_ext` (app's own buffer; since launcher 0.29.1 copied into the surface's spare buffer); since 0.29.1 a present on a 2-buffer surface returns at once and a launcher task scales and flips while the app draws its next frame (1-buffer surfaces stay synchronous); v4 `blit` (PPA into the surface: RGB565 / ARGB8888 / A8 pictures, scaled in 1/16 steps, quarter turns, mirrors via an SRM pass into a launcher buffer, then blended with colour key and alpha) and `fill` (PPA fill); v5 (launcher 0.37) `blit_yuv` (planar YUV 4:2:0 video frame -> RGB565, scaled, by the PPA; §7.11) | §7.3 |
 | `GFX ` | 2D acceleration | PPA SRM (scale/rotate/mirror/convert), PPA blend (alpha, colour key), PPA fill, 2D-DMA copy, async + sync | generalises `sprite_blit` / `fb_copy` |
-| `IMG ` | Image codecs | PNG decode, **HW JPEG decode** (P4 has a JPEG codec) to a chosen format | no colour-order hacks; returns real RGB565 |
+| `CODC` | Codecs | Decoders: open / send / receive / flush / close on a container's packets, out comes YUV 4:2:0 (for `blit_yuv`) or 16-bit PCM; MP3 + AAC built in (esp_audio_codec 2.5.0), H.264 = codec module from the SD card (`/sd/launcher/codecs/h264.papp`, FFmpeg), cores 1 or 2; JPEG info / decode / encode in RGB565 on the P4's JPEG engine | v1 (launcher 0.37); §7.11; H.264 hardware encode later |
+| `IMG ` | Image codecs | PNG decode | not planned now (JPEG is in `CODC`) |
 | `AUDI` | Audio | stream open (rate, channels, format, latency), write/push, pull callback, pause, `get_queued` | launcher mixes + resamples |
 | `INPT` | Input | gamepad state (player N, standard layout + analog axes + triggers), keyboard state, event queue (key/text/button/axis/touch/mouse/device-added), rumble (reserved) | §7.5 |
 | `KV  ` | Settings | per-app key/value (int, string, blob); read-only global prefs (volume, brightness, language) | replaces NVS-path hacks |
@@ -585,6 +586,65 @@ limit; 50 s playing with X = counter, 40 s resting; after two failed
 encryptions in a row it drops its keys, as a pad put in pairing mode would) for testing pads without one in hand.
 A Windows PC cannot stand in for the speaker: the counterfeit CSR8510 reports hardware error 0x28 a few seconds
 into any link with the PC's Intel adapter, and Bluedroid resets it.
+
+### 7.11 Video, audio and JPEG: DISP v5 `blit_yuv`, CODC
+
+The P4 has no video decoder: its H.264 block only encodes. So the decoders are software behind one interface
+(CODC), which picks the implementation: hardware where a chip has it (JPEG now; a later chip's H.264 decoder
+would slot in with no change to apps), else code built into the launcher, else a **codec module** from the SD
+card. Espressif's `esp_h264` decoder is Baseline only (tinyH264, ~9 fps at 640x480), useless for ordinary MP4s,
+so H.264 is FFmpeg's decoder: too big for the 3 MB launcher slot, hence a module.
+
+- **`blit_yuv` (DISP v5, `lx_comp_blit_yuv`)**: a decoder's planar YUV 4:2:0 frame (I420 / FFmpeg's yuv420p:
+  three planes with strides) is repacked by the CPU into the P4's own YUV420 layout and turned into RGB565 and
+  scaled by the PPA's SRM straight into the surface's buffer. The P4 layout is packed, 12 bits a pixel, every
+  line holding Y pairs after one chroma sample: U on even lines, V on odd ones (line 2k = `U Y Y U Y Y ..`,
+  line 2k+1 = `V Y Y ..`); `codec_test` confirms it against a CPU model. BT.601 / BT.709, limited or full
+  range. The scaled frame must lie inside the surface (no clipping), at even coordinates. Before the SRM the
+  surface buffer is written back (`esp_cache_msync` C2M): the SRM only invalidates its output, which would drop
+  the CPU's drawing in the lines it shares with the frame. Cost on the v3.2 7": 640x360 ~9 ms repack + ~6.5 ms
+  SRM to 800x450; 1280x720 ~38 + ~17 ms. Both are bound by PSRAM (about 100 MB/s for a copy; the repack reads
+  and writes ~1.5 bytes a pixel), so neither a word-wide loop nor running it from IRAM changed it. For video:
+  make the surface the frame's size, blit at scale 1, and let present() scale in the background.
+- **CODC v1 decoders (`lx_svc_codec.c`)**: `open(cfg)` (codec, cores 0/1/2, thread priority, the container's
+  set-up data: an MP4's avcC or AudioSpecificConfig), `send(packet, pts)` (copied; `PAPP_E_LIMIT` = output is
+  waiting, receive it and send the packet again; `NULL` = end of stream), `receive_frame` (planar 4:2:0 in the
+  decoder's memory, valid until the next call, with pts, keyframe and `PAPP_YUV_*` flags for `blit_yuv`) /
+  `receive_audio` (PCM, interleaved stereo; the first output of a packet carries its pts, the rest
+  `PAPP_PTS_NONE`), `flush` (seek), `close`; `codec_info` says what is there without loading anything. Up to 8
+  decoders per app, all closed when it ends. A decoder is used by one thread at a time.
+  - Built in: **MP3 and AAC** (AAC-LC + HE-AAC; ADTS, or raw MP4 frames with the AudioSpecificConfig) on
+    esp_audio_codec 2.5.0's simple decoder, which finds frames in any split of the data (Espressif Modified MIT
+    licence; ~200 KB of the launcher image). 10 s of 44.1 kHz stereo: MP3 ~480 ms, AAC ~360 ms on one core
+    (3.6-4.8 %). Built-in decoders run inside service calls.
+  - **Codec modules** (`/sd/launcher/codecs/<codec>.papp`, e.g. `h264.papp`): PAPP v2 images built with
+    `papp_build --module`; their entry `_papp_start(PAPP_MODULE_ARGC, argv)` (module_crt0.c: runs the
+    constructors, no main) fills `argv[0]` with a `papp_codec_module_t` (magic `CMOD`, `max_cores`, name and the
+    decoder functions). The launcher loads one on an app's first `open` of its codec (`lx_module_load` in
+    lx_app.c: the app loader's `load_image` into launcher memory, on a helper task with an internal stack because
+    of `esp_mmu_map`) and unloads it when the app ends. Its imports resolve to the same interfaces as the app's, so
+    its memory and threads are the app's (tracked, reclaimed at teardown: its decoders are not closed then, the
+    module is just unmapped) and its code runs on the app's threads outside `SVC_ENTER`, like app code. It has a
+    newlib of its own: `libc_glue.c` built with `-DPAPP_MODULE` keeps the module's `struct _reent` per thread in
+    a table keyed by `thread_self` (the THRD TLS slot holds the app's). A crash inside a module is not decoded by
+    `papp_dev.py crash` (the record knows the app's image only): the load line in the log gives its address.
+  - **H.264 module** (`apps/codecs/h264`): FFmpeg 7.1.1's decoder (LGPL 2.1+; all profiles FFmpeg decodes as
+    8-bit 4:2:0), Annex B in pieces of any size (FFmpeg's parser cuts access units) or MP4 access units with the
+    avcC; cores = 2 is frame threading (pthreads on THRD: `pthread_shim.c`, 32 KB internal stacks). Every FFmpeg
+    call runs on a thread of the decoder's own (the "runner", the caller waits on a semaphore): FFmpeg needs ~20 KB
+    of stack in places (the Annex B parser, VLC tables at open) and an app's main thread has 16 KB. One FFmpeg file
+    is patched (`patches/libavcodec/h264_slice.c`: a 34 KB `H264SliceContext` swap on the stack done in pieces);
+    `aom_film_grain.c` is in the file list for an upstream h264-only build bug. ~1 MB image at -O2 (-O3: 1.5 MB, no
+    faster), loads in ~0.35 s. 640x360 Main profile (Windows Media Foundation's encoder, CABAC): 36 fps on one
+    core, 43-45 fps on two, v3.2 and v1.x alike; frame threading overlaps little for this clip (pinning the
+    workers to separate cores changed nothing): profiling it is open.
+- **CODC v1 JPEG**: `jpeg_info`, `jpeg_decode` (RGB565 into the app's buffer with a stride) and
+  `jpeg_encode` (RGB565, 4:2:0, quality 1..100) on `esp_driver_jpeg`. The engine's output buffer must be
+  cache-line aligned and sized and the decoder writes whole MCUs (16x16 for 4:2:0), so the launcher decodes and
+  encodes through its own buffers (`jpeg_alloc_*_mem`, grown as needed) and copies. Engines are made on the first
+  call and deleted, with the buffers, in `lx_svc_end_run`; one picture at a time (a mutex). The decoder refuses
+  sizes that are not multiples of 8 (`PAPP_E_UNSUPPORTED`; decode those in software). 640x360: decode ~14 ms
+  (72 fps), 1280x720 ~51 ms (software MJPEG in the media player: ~37 ms at 640x360).
 
 ## 8. App lifecycle & robustness
 

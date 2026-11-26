@@ -792,12 +792,14 @@ static const papp_iface_hdr_t *const s_registry[] = {
     &lx_if_pwr.hdr,
     &lx_if_hidd.hdr,
     &lx_if_irq.hdr,
+    &lx_if_codc.hdr,
 };
 
 void lx_svc_init(lx_app_log_sink_t log_sink)
 {
     s_log_sink = log_sink;
     s_track_lock = xSemaphoreCreateMutex();
+    lx_svc_codec_init();
     lx_svc_net_init();
     lx_svc_ble_init();
     lx_svc_irq_init();
@@ -868,6 +870,7 @@ void lx_svc_end_run(uint32_t *leaked_allocs, uint32_t *leaked_bytes, uint32_t *l
     lx_svc_ble_end_run();       /* advertising, connections, GATT table, host */
     lx_svc_usbh_end_run();      /* USB devices the app left open */
     lx_svc_pwr_end_run();       /* charging back on if the app stopped it */
+    lx_svc_codec_end_run();     /* JPEG engines and their buffers */
     lx_usbd_end_run();          /* USB-C back to the launcher's USB link */
     lx_ui_reset();              /* a browser the app was killed in */
     *leaked_allocs = na; *leaked_bytes = nb; *leaked_files = nf;

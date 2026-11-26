@@ -96,8 +96,10 @@ def app_version(sources, version_dir=None):
 
 def build(name, sources, includes=(), libc=False, out_dir=None, link_base=0, extra_cflags=(),
           fast_link_base=0, libc_glue=True, app_cflags=(), per_file_cflags=None, extra_ldflags=(),
-          icon_dir=None, jobs=None, extra_libs=(), version_dir=None):
-    """extra_cflags: every file; app_cflags: the app's sources only (not the SDK
+          icon_dir=None, jobs=None, extra_libs=(), version_dir=None, module=False):
+    """module=True: a codec module (/sd/launcher/codecs/<codec>.papp) instead of an app: module_crt0.c
+    calls the module's papp_module_table() instead of main, libc_glue keeps the module's own per-thread
+    newlib state (-DPAPP_MODULE). extra_cflags: every file; app_cflags: the app's sources only (not the SDK
     runtime); per_file_cflags: {source: [flags]} appended last. libc_glue=False
     links newlib without the SDK's libc_glue.c (the app brings its own)."""
     gcc = find_tool("riscv32-esp-elf-gcc")
@@ -106,13 +108,13 @@ def build(name, sources, includes=(), libc=False, out_dir=None, link_base=0, ext
     os.makedirs(obj_dir, exist_ok=True)
 
     rt = os.path.join(SDK, "runtime")
-    runtime = [os.path.join(rt, "crt0.c"), os.path.join(rt, "papp_api.c")]
+    runtime = [os.path.join(rt, "module_crt0.c" if module else "crt0.c"), os.path.join(rt, "papp_api.c")]
     if libc and libc_glue:
         runtime.append(os.path.join(rt, "libc_glue.c"))
     elif not libc:
         runtime.append(os.path.join(rt, "mini_libc.c"))
 
-    cflags = CFLAGS + ["-I" + i for i in includes] + list(extra_cflags)
+    cflags = CFLAGS + ["-I" + i for i in includes] + list(extra_cflags) + (["-DPAPP_MODULE"] if module else [])
     if not libc:
         cflags += ["-ffreestanding", "-fno-tree-loop-distribute-patterns"]
 
@@ -179,11 +181,12 @@ def main():
     ap.add_argument("--src", nargs="+", required=True)
     ap.add_argument("--inc", nargs="*", default=[])
     ap.add_argument("--libc", action="store_true", help="link newlib (stdio, malloc, math)")
+    ap.add_argument("--module", action="store_true", help="a codec module, not an app")
     ap.add_argument("--out")
     ap.add_argument("--link-base", type=lambda s: int(s, 0), default=0,
                     help="link at this address instead of 0 (tests only, no .papp)")
     args = ap.parse_args()
-    build(args.name, args.src, args.inc, args.libc, args.out, args.link_base)
+    build(args.name, args.src, args.inc, args.libc, args.out, args.link_base, module=args.module)
 
 
 if __name__ == "__main__":

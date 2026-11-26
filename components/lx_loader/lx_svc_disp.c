@@ -93,6 +93,21 @@ static int disp_fill(papp_surface_t *s, int x, int y, int w, int h, uint16_t col
     return disp_err(err);
 }
 
+static int disp_blit_yuv(papp_surface_t *s, const papp_yuv_t *f)
+{
+    if (!s || !f) return PAPP_E_ARG;
+    lx_yuv_t ly = {
+        .y = f->y, .u = f->u, .v = f->v, .w = f->w, .h = f->h, .stride_y = f->stride_y, .stride_uv = f->stride_uv,
+        .x = f->dx, .y0 = f->dy,
+        .scale_x16 = f->scale_x ? f->scale_x / 16 : 16, .scale_y16 = f->scale_y ? f->scale_y / 16 : 16,
+        .bt709 = (f->flags & PAPP_YUV_BT709) != 0, .full_range = (f->flags & PAPP_YUV_FULL_RANGE) != 0,
+    };
+    SVC_ENTER();
+    esp_err_t err = lx_comp_blit_yuv((lx_surface_t *)s, &ly);
+    SVC_LEAVE();
+    return disp_err(err);
+}
+
 static int disp_touch_read(papp_surface_t *s, papp_touch_point_t *pts, int max)
 {
     bsp_touch_point_t raw[BSP_TOUCH_MAX_POINTS];
@@ -119,4 +134,5 @@ const papp_if_disp_t lx_if_disp = {
     .present_ext     = disp_present_ext,
     .blit            = disp_blit,
     .fill            = disp_fill,
+    .blit_yuv        = disp_blit_yuv,
 };

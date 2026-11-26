@@ -43,6 +43,8 @@ static ppa_client_handle_t s_blend;        /* lx_comp_blit, registered on first 
 static ppa_client_handle_t s_fill;         /* lx_comp_fill */
 static void *s_tmp;                        /* lx_comp_blit: the scaled/turned picture */
 static size_t s_tmp_size;
+static uint8_t *s_yuv;                     /* lx_comp_blit_yuv: the frame in the PPA's YUV420 layout */
+static size_t s_yuv_size;
 static lx_surface_t *s_surface;           /* v1: one surface at a time */
 static bool s_fb_clean[2];                /* fb holds only black outside the surface rect */
 static int s_dw, s_dh;                    /* landscape display size */
@@ -191,6 +193,9 @@ static void destroy_locked(lx_surface_t *s)
     heap_caps_free(s_tmp);
     s_tmp = NULL;
     s_tmp_size = 0;
+    heap_caps_free(s_yuv);
+    s_yuv = NULL;
+    s_yuv_size = 0;
     if (s->frames > 1) {
         int64_t dt = esp_timer_get_time() - s->t_first;
         ESP_LOGI(TAG, "surface %dx%d: %lu frames, %.1f fps, PPA %.2f + flip wait %.2f ms/frame", s->w, s->h,
@@ -358,6 +363,92 @@ esp_err_t lx_comp_blit(lx_surface_t *s, const lx_blit_t *b)
     }
     err = ppa_do_blend(s_blend, &op);
     if (err != ESP_OK) ESP_LOGE(TAG, "PPA blend failed: %s", esp_err_to_name(err));
+out:
+    xSemaphoreGive(s_lock);
+    return err;
+}
+
+/* The P4's YUV420 (the PPA's, the JPEG engine's and the camera's) is packed, 12 bits a pixel: every line holds
+ * its Y samples in pairs, each pair after one chroma sample of those two columns: U on even lines, V on odd ones
+ * ("O_UYY_E_VYY"): line 2k = U Y Y U Y Y ..., line 2k+1 = V Y Y V Y Y ... */
+/* Bound by PSRAM's speed (it reads and writes about 1.5 bytes a pixel each): 640x360 ~9 ms, 1280x720 ~38 ms */
+static __attribute__((optimize("O2"))) void pack_yuv420(const lx_yuv_t *f, uint8_t *out)
+{
+    int sy = f->stride_y ? f->stride_y : f->w, suv = f->stride_uv ? f->stride_uv : f->w / 2;
+    int line = f->w * 3 / 2;
+    for (int r = 0; r < f->h; r++) {
+        const uint8_t *y = f->y + (size_t)r * sy;
+        const uint8_t *c = ((r & 1) ? f->v : f->u) + (size_t)(r >> 1) * suv;
+        uint8_t *o = out + (size_t)r * line;
+        int i = 0, n = f->w / 2;            /* pixel pairs */
+        if (!(((uintptr_t)y | (uintptr_t)c | (uintptr_t)o) & 3)) {
+            /* eight pixels a step, in words: in Y Y Y Y, Y Y Y Y and C C C C; out C Y Y C, Y Y C Y, Y C Y Y */
+            const uint32_t *y32 = (const uint32_t *)y, *c32 = (const uint32_t *)c;
+            uint32_t *o32 = (uint32_t *)o;
+            for (; i + 4 <= n; i += 4) {
+                uint32_t ya = *y32++, yb = *y32++, cc = *c32++;
+                o32[0] = (cc & 0xFF) | (ya & 0xFFFF) << 8 | (cc & 0xFF00) << 16;
+                o32[1] = ya >> 16 | (cc & 0xFF0000) | (yb & 0xFF) << 24;
+                o32[2] = (yb >> 8 & 0xFF) | (cc >> 24) << 8 | (yb >> 16) << 16;
+                o32 += 3;
+            }
+            y = (const uint8_t *)y32;
+            c = (const uint8_t *)c32;
+            o = (uint8_t *)o32;
+        }
+        for (; i < n; i++) {
+            o[0] = *c++; o[1] = y[0]; o[2] = y[1];
+            o += 3; y += 2;
+        }
+    }
+}
+
+esp_err_t lx_comp_blit_yuv(lx_surface_t *s, const lx_yuv_t *f)
+{
+    if (!s || !s_lock || !f || !f->y || !f->u || !f->v || f->w < 2 || f->h < 2 || (f->w & 1) || (f->h & 1) ||
+        (f->stride_y && f->stride_y < f->w) || (f->stride_uv && f->stride_uv < f->w / 2) ||
+        f->x < 0 || f->y0 < 0 || (f->x & 1) || (f->y0 & 1))
+        return ESP_ERR_INVALID_ARG;
+    int qx = f->scale_x16 < 1 ? 16 : f->scale_x16 > 255 ? 255 : f->scale_x16;
+    int qy = f->scale_y16 < 1 ? 16 : f->scale_y16 > 255 ? 255 : f->scale_y16;
+    int ow = (qx >> 4) * f->w + (qx & 15) * f->w / 16;      /* as the driver works it out */
+    int oh = (qy >> 4) * f->h + (qy & 15) * f->h / 16;
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    if (s != s_surface || ow < 1 || oh < 1 || f->x + ow > s->w || f->y0 + oh > s->h) goto out;
+    size_t need = ((size_t)f->w * f->h * 3 / 2 + 63) & ~(size_t)63;
+    if (need > s_yuv_size) {
+        heap_caps_free(s_yuv);
+        s_yuv = heap_caps_aligned_alloc(64, need, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA);
+        s_yuv_size = s_yuv ? need : 0;
+        err = ESP_ERR_NO_MEM;
+        if (!s_yuv) goto out;
+    }
+    pack_yuv420(f, s_yuv);
+    esp_cache_msync(s_yuv, need, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+
+    /* The SRM only invalidates its output when it is done: write the CPU's drawing in the surface out
+     * first, or the invalidate drops it from the lines the frame shares with it */
+    uint16_t *buf = s->buf[s->cur];
+    size_t bytes = ((size_t)s->w * s->h * 2 + 63) & ~(size_t)63;
+    esp_cache_msync(buf, bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+
+    ppa_srm_oper_config_t op = {
+        .in = { .buffer = s_yuv, .pic_w = f->w, .pic_h = f->h, .block_w = f->w, .block_h = f->h,
+                .srm_cm = PPA_SRM_COLOR_MODE_YUV420,
+                .yuv_range = f->full_range ? PPA_COLOR_RANGE_FULL : PPA_COLOR_RANGE_LIMIT,
+                .yuv_std = f->bt709 ? PPA_COLOR_CONV_STD_RGB_YUV_BT709 : PPA_COLOR_CONV_STD_RGB_YUV_BT601 },
+        .out = { .buffer = buf, .buffer_size = bytes, .pic_w = s->w, .pic_h = s->h,
+                 .block_offset_x = f->x, .block_offset_y = f->y0, .srm_cm = PPA_SRM_COLOR_MODE_RGB565 },
+        .rotation_angle = PPA_SRM_ROTATION_ANGLE_0,
+        .scale_x = qx / 16.0f,
+        .scale_y = qy / 16.0f,
+        .alpha_update_mode = PPA_ALPHA_NO_CHANGE,
+        .mode = PPA_TRANS_MODE_BLOCKING,
+    };
+    err = ppa_do_scale_rotate_mirror(s_srm, &op);
+    if (err != ESP_OK) ESP_LOGE(TAG, "blit_yuv: PPA SRM failed: %s", esp_err_to_name(err));
 out:
     xSemaphoreGive(s_lock);
     return err;

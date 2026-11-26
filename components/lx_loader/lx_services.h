@@ -50,6 +50,9 @@ int  lx_svc_usbh_end_run(void);             /* -> devices the app left open */
 extern const papp_if_pwr_t lx_if_pwr;
 void lx_svc_pwr_end_run(void);              /* lx_svc_pwr.c: charging back on */
 extern const papp_if_irq_t lx_if_irq;
+extern const papp_if_codc_t lx_if_codc;
+void lx_svc_codec_init(void);                /* lx_svc_codec.c: the hardware JPEG engine */
+void lx_svc_codec_end_run(void);
 void lx_svc_irq_init(void);                 /* lx_svc_irq.c: GPIO pins and timers for apps */
 void lx_svc_irq_begin_run(void);
 int  lx_svc_irq_end_run(void);              /* -> interrupts the app left attached */

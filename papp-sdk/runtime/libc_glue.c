@@ -28,6 +28,7 @@ extern int errno;
 static struct _reent s_reent;              /* main thread (and launchers without THRD) */
 static papp_mutex_t *s_libc_lock;          /* see Locks below */
 
+#ifndef PAPP_MODULE
 struct _reent *__getreent(void)
 {
     const papp_if_thrd_t *thrd = papp_if_thrd();
@@ -63,6 +64,61 @@ void papp_rt_thread_end(void)
     papp_free(r);
     *slot = NULL;
 }
+#else
+/* A codec module (papp_build --module) has a newlib of its own but runs on the app's threads, whose TLS slot
+ * holds the app's struct _reent: the module keeps its own per thread, found by thread handle. Its memory is
+ * the app's and goes when the app ends. */
+#define MOD_THREADS 16
+static struct { papp_thread_t *t; struct _reent *r; } s_mod_reent[MOD_THREADS];
+
+struct _reent *__getreent(void)
+{
+    const papp_if_thrd_t *thrd = papp_if_thrd();
+    papp_thread_t *self = thrd ? thrd->thread_self() : NULL;
+    if (!self) return &s_reent;            /* the app's main thread */
+    int free_i = -1;
+    for (int i = 0; i < MOD_THREADS; i++) {
+        papp_thread_t *t = __atomic_load_n(&s_mod_reent[i].t, __ATOMIC_ACQUIRE);
+        if (t == self) return s_mod_reent[i].r;
+        if (!t && free_i < 0) free_i = i;
+    }
+    struct _reent *r = papp_alloc(sizeof(*r), PAPP_MEM_ANY, 0);
+    if (!r) return &s_reent;
+    _REENT_INIT_PTR(r);
+    for (int i = free_i < 0 ? 0 : free_i; i < MOD_THREADS; i++) {
+        papp_thread_t *none = NULL;
+        if (__atomic_compare_exchange_n(&s_mod_reent[i].t, &none, (papp_thread_t *)1, false,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            s_mod_reent[i].r = r;
+            __atomic_store_n(&s_mod_reent[i].t, self, __ATOMIC_RELEASE);
+            return r;
+        }
+    }
+    return r;                              /* table full: this call's own (errno not kept) */
+}
+
+void papp_rt_init(void)
+{
+    _REENT_INIT_PTR(&s_reent);
+    const papp_if_thrd_t *thrd = papp_if_thrd();
+    if (thrd) s_libc_lock = thrd->mutex_create(true);
+}
+
+/* A module's own thread ends (threads the module did not start keep their entry until the app ends) */
+void papp_rt_thread_end(void)
+{
+    papp_thread_t *self = papp_if_thrd()->thread_self();
+    for (int i = 0; i < MOD_THREADS && self; i++)
+        if (__atomic_load_n(&s_mod_reent[i].t, __ATOMIC_ACQUIRE) == self) {
+            struct _reent *r = s_mod_reent[i].r;
+            s_mod_reent[i].r = NULL;
+            __atomic_store_n(&s_mod_reent[i].t, NULL, __ATOMIC_RELEASE);
+            _reclaim_reent(r);
+            papp_free(r);
+            return;
+        }
+}
+#endif
 
 /* ── Heap: everything goes to the launcher MEM interface (tracked per app) ── */
 
