@@ -1,0 +1,10 @@
+{
+  "author": "PAX port / FFmpeg developers",
+  "description": "Play video and music from SD or HTTP(S) using FFmpeg on the P4.",
+  "license": "LGPL-2.1",
+  "source": "https://github.com/FFmpeg/FFmpeg/tree/3a0867c2bfda4a4d4309ca1a8cbdc6175e67f587",
+  "category": "tools",
+  "url": "https://raw.githubusercontent.com/NonaSuomy/ESP32_P4_Launcher/2daa44b0ce0532f5f9a3ad628b87db57c19c0cf9/papp-assets/mediaplayer.papp",
+  "sha256": "459146b05e8ceb0d85b6d2c76b8b943bd5abc2966817a78114a8357d6daa9e79",
+  "size": 4165656
+}
