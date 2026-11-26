@@ -94,7 +94,7 @@ static char s_last[160];        /* last launched .papp */
 static lv_display_t *s_disp;
 static uint16_t *s_frame;
 static lv_obj_t *s_home, *s_settings;
-static lv_obj_t *s_clk_area;            /* home clock: opens the clock setup (RTC boards) */
+static lv_obj_t *s_clk_area;            /* home clock: opens the clock setup (every board) */
 static void on_clk_open(lv_event_t *ev);
 static lv_obj_t *s_clock, *s_date, *s_sd_free, *s_sd_apps, *s_grid, *s_count, *s_title;
 static lv_obj_t *s_sd_title;     /* "SD Card (4-bit)"; orange "(1-bit)" = 4-bit failed (D1-D3 contact) */
@@ -622,7 +622,7 @@ static void build_home(void)
     lv_obj_t *sub = label(s_home, &lv_font_montserrat_16, C_DIM, "ESP32-P4  Application Hub");
     lv_obj_set_pos(sub, 22, 62);
 
-    if (bsp_info()->caps & BSP_CAP_RTC) {               /* the clock opens its setup */
+    {                                                   /* the clock opens its setup (time zone: every board) */
         s_clk_area = lv_obj_create(s_home);
         lv_obj_remove_style_all(s_clk_area);
         lv_obj_set_pos(s_clk_area, 340 + s_dx / 2, 4);
@@ -1241,12 +1241,20 @@ static void clk_focus(void)
     focus_set(s_clk_box[CF_HOUR]);
 }
 
+/* the note under the fields until something else is said there */
+static void clk_note_default(void)
+{
+    lv_label_set_text(s_clk_note, !lx_net_tz_get() ? "Choose your time zone first, then set the local time." :
+                                  (bsp_info()->caps & BSP_CAP_RTC) ? "" :
+                                  "No clock chip on this board: Wi-Fi sets the time at every start.");
+}
+
 static void on_clk_open(lv_event_t *ev)
 {
     if (s_focused) lv_obj_remove_state(s_focused, LV_STATE_FOCUSED);
     lv_dropdown_set_selected(s_clk_tz, lx_net_tz_get());
     clk_load();
-    lv_label_set_text(s_clk_note, lx_net_tz_get() ? "" : "Choose your time zone first, then set the local time.");
+    clk_note_default();
     lv_screen_load(s_clk_scr);
     clk_focus();
 }
@@ -1261,7 +1269,7 @@ static void on_clk_tz(lv_event_t *ev)
     lx_net_tz_set(lv_dropdown_get_selected(s_clk_tz));
     lv_dropdown_set_selected(s_wifi_tz, lv_dropdown_get_selected(s_clk_tz));
     clk_load();                                     /* the same moment in the new zone */
-    lv_label_set_text(s_clk_note, "");
+    clk_note_default();
 }
 
 static void clk_after_sync(lv_timer_t *t)
@@ -1293,8 +1301,9 @@ static void on_clk_save(lv_event_t *ev)
     time_t t = mktime(&tm);
     struct timeval tv = { .tv_sec = t };
     settimeofday(&tv, NULL);
-    esp_err_t err = bsp_rtc_set(t);
-    ESP_LOGI(TAG, "clock set by hand, RTC %s", esp_err_to_name(err));
+    bool rtc = bsp_info()->caps & BSP_CAP_RTC;
+    esp_err_t err = rtc ? bsp_rtc_set(t) : ESP_OK;     /* no RTC: kept until power-off */
+    ESP_LOGI(TAG, "clock set by hand, RTC %s", rtc ? esp_err_to_name(err) : "none");
     update_status(NULL);
     if (err == ESP_OK) show_home();
     else lv_label_set_text(s_clk_note, "The clock is set, but the RTC did not take it.");
@@ -1341,10 +1350,12 @@ static void build_clock_screen(void)
         x += w + gap;
     }
     lv_obj_t *hint = label(s_clk_scr, &lv_font_montserrat_16, C_DIM,
-                           "Left / right picks a field, up / down changes it, A goes to Save. Touch: tap the top or bottom of a field.");
-    lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, y + 136);
+                           "Left / right picks a field, up / down changes it, A goes to Save.\n"
+                           "Touch: tap the top or bottom of a field.");
+    lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);     /* one line is wider than the 4.3" */
+    lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, y + 132);
     s_clk_note = label(s_clk_scr, &lv_font_montserrat_16, C_ACCENT, "");
-    lv_obj_align(s_clk_note, LV_ALIGN_TOP_MID, 0, y + 166);
+    lv_obj_align(s_clk_note, LV_ALIGN_TOP_MID, 0, y + 178);
 
     int by = 400 + s_dy;
     s_clk_sync = wifi_button(s_clk_scr, 24, by, 260, LV_SYMBOL_REFRESH " Sync from internet", on_clk_sync);
