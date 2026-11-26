@@ -1,0 +1,7 @@
+{
+  "author": "NonaSuomy",
+  "description": "Scan for PAX BLE Remote and view live HID keyboard, mouse and gamepad reports",
+  "category": "tools",
+  "license": "Apache-2.0",
+  "source": "https://github.com/giltal/ESP32_P4_Launcher/tree/main/apps/ble_input_test"
+}

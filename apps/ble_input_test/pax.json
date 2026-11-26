@@ -1,0 +1,23 @@
+{
+  "name": "ble_input_test",
+  "title": "BLE Input Test",
+  "version": "0.1.0",
+  "description": "Scan for the PAX BLE Remote, connect over HID and show live keyboard, mouse and gamepad reports.",
+  "author": "PAX workspace",
+  "category": "Tool",
+  "license": "Apache-2.0",
+  "controls": [
+    "The app scans for a nearby device named PAX BLE Remote and connects automatically",
+    "Live HID keyboard, mouse and gamepad notifications appear on screen",
+    "Tap Scan Again to reconnect",
+    "Launcher Home or Back exits the app"
+  ],
+  "changelog": "0.1.0: first native PAPP2 BLE HID input tester.",
+  "publish": true,
+  "dev_build": false,
+  "native_papp2": {
+    "build_script": "build_papp2.py",
+    "entry_source": "main.c",
+    "description": "Native PAPP2 BLE central that scans for PAX BLE Remote, connects to its HID service and displays incoming report notifications."
+  }
+}
