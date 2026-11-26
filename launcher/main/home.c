@@ -1350,8 +1350,8 @@ static void build_clock_screen(void)
         x += w + gap;
     }
     lv_obj_t *hint = label(s_clk_scr, &lv_font_montserrat_16, C_DIM,
-                           "Left / right picks a field, up / down changes it, A goes to Save.\n"
-                           "Touch: tap the top or bottom of a field.");
+                           "Left / right picks a field or the time zone, up / down changes it.\n"
+                           "A goes to Save. Touch: tap the top or bottom of a field.");
     lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);     /* one line is wider than the 4.3" */
     lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, y + 132);
     s_clk_note = label(s_clk_scr, &lv_font_montserrat_16, C_ACCENT, "");
@@ -2758,7 +2758,9 @@ static void poll_keys(void)
             if (ok || back) lv_obj_send_event(s_crash_ok, LV_EVENT_CLICKED, NULL);
             continue;
         }
-        if (dy && s_clk_scr && clk_field_of(s_focused) >= 0) {
+        if (dx < 0 && s_clk_scr && s_focused == s_clk_box[CF_DAY]) {
+            focus_set(s_clk_tz);                    /* up / down belong to the field: left of Day = zone */
+        } else if (dy && s_clk_scr && clk_field_of(s_focused) >= 0) {
             clk_step(clk_field_of(s_focused), -dy);
         } else if (ok && s_clk_scr && clk_field_of(s_focused) >= 0) {
             focus_set(s_clk_save);                  /* up / down change the field: A goes on to Save */
