@@ -26,6 +26,11 @@ then times out (0x107, card status 0x...d00) until a reboot. The recovery:
 2. Send ACMD6 for 1 bit.
 3. Set the host slot to 1 bit.
 
+A timeout on a card that is already 1-bit (fallen back, or wired that way) gets the same STOP and
+wait, then the transfer is repeated on the same bus; a failed multi-block write is repeated sector by
+sector. A card wired 1-bit from boot (the Elecrow AIO) always writes sector by sector (CMD24): its
+CMD25 writes keep leaving it in the receive state (from NonaSuomy's #68).
+
 It does neither a card re-init (CMD0) nor a controller reset: the controller is shared with the C6
 on SDIO slot 1. A reset hit the C6's running transfers and hung the board. A re-init left the
 controller "hardware locked" (0x1000) for every later command.
