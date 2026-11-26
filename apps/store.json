@@ -30,6 +30,7 @@
  "game.duke3d":     {"category": "games", "description": "Duke Nukem 3D (Chocolate Duke3D). Needs DUKE3D.GRP in /sd/roms/duke3d"},
  "game.opentyrian": {"category": "games", "description": "Vertical shoot 'em up. Needs the free Tyrian 2.1 data in /sd/tyrian/data"},
  "game.quake":      {"category": "games", "description": "id Software's Quake. Needs id1/pak0.pak in /sd/roms/quake (shareware works)"},
+ "test.codec":      {"category": "tools", "description": "Checks the launcher's MP3, AAC, H.264 and JPEG decoders; results in the DevLink log"},
  "tool.calc":       {"category": "tools", "description": "Scientific calculator with function graphs and currency conversion (live rates)"},
  "tool.clock":      {"category": "tools", "description": "Clock, alarms, stopwatch, timer and world clock; touch or pad"},
  "tool.files":      {"category": "tools", "description": "File manager for the SD card: browse, copy, move, rename and delete"}

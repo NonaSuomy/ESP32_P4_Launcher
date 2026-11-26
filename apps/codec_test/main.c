@@ -15,8 +15,7 @@
 #include "papp/papp.h"
 #include "dec_tests.h"
 
-PAPP_MANIFEST(.id = "test.codec", .name = "Codec test", .version = PAPP_APP_VERSION, .main_stack = 16384,
-              .flags = PAPP_MF_HIDDEN);
+PAPP_MANIFEST(.id = "test.codec", .name = "Codec test", .version = PAPP_APP_VERSION, .main_stack = 16384);
 
 #define SW 800
 #define SH 480
