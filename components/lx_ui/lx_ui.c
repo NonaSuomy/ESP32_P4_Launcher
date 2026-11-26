@@ -257,6 +257,7 @@ static struct {
     lines_t     favs, recents;
     char        search[SEARCH_LEN];
     int         sel, top;
+    int         off;             /* pixels the list sits above row `top`: a finger is moving it */
     bool        kb;              /* on-screen keyboard shown */
     lx_canvas_t cv;
 } S;
@@ -445,6 +446,7 @@ static void apply_filter(void)
     }
     S.sel = sel;
     S.top = 0;
+    S.off = 0;
 }
 
 static void select_name(const char *name)
@@ -526,7 +528,7 @@ static void button(int x, int y, int w, int h, const char *label, bool hot)
 /* Footer buttons (touch targets), right-aligned */
 typedef struct { const char *label; int act; int x, w; } fbtn_t;
 enum { A_NONE, A_UP, A_DOWN, A_LEFT, A_RIGHT, A_OK, A_BACK, A_FAV, A_SEARCH, A_TABP, A_TABN, A_RUN,
-       A_CHAR, A_DEL, A_CLEAR, A_PGUP, A_PGDN, A_TAP, A_ABORT };
+       A_CHAR, A_DEL, A_CLEAR, A_PGUP, A_PGDN, A_TAP, A_SCROLL, A_ABORT };
 static fbtn_t s_fbtn[] = { { "Y Search", A_SEARCH, 0, 0 }, { "X Fav", A_FAV, 0, 0 }, { "B Back", A_BACK, 0, 0 } };
 #define N_FBTN (sizeof(s_fbtn) / sizeof(s_fbtn[0]))
 
@@ -544,6 +546,38 @@ static void draw_list_body(void)
 {
     lx_canvas_t *c = &S.cv;
     lx_fill(c, 0, 0, c->w, c->h, C_BG);
+
+    /* Rows first: a list a finger is moving sits part of a row up, and the header and the footer are
+     * drawn over its two ends */
+    int rows = list_rows(), y0 = list_top();
+    if (S.kb) S.off = 0;
+    if (S.sel < S.top + (S.off > 0)) { S.top = S.sel; S.off = 0; }
+    if (S.sel >= S.top + rows) { S.top = S.sel - rows + 1; S.off = 0; }
+    if (S.top < 0) S.top = 0;
+    if (S.nview == 0) {
+        const char *msg = S.search[0] ? "No matches" :
+                          S.tab == TAB_FAV ? "No favorites yet (X adds one)" :
+                          S.tab == TAB_RECENT ? "Nothing played yet" : "No files here";
+        lx_text(c, MARGIN + 40, y0 + 16, msg, C_DIM, 2);
+    }
+    char disp[PATH_LEN];
+    for (int r = 0; r < rows + (S.off > 0) && S.top + r < S.nview; r++) {
+        int i = S.top + r;
+        ent_t *e = &S.ents[S.view[i]];
+        int y = y0 + r * ROW_H - S.off;
+        if (i == S.sel) lx_fill(c, 0, y, c->w, ROW_H, C_SEL);
+        bool dir = e->flags & E_DIR;
+        if (is_fav(e)) lx_text(c, MARGIN, y + 4, "*", C_FAV, 2);
+        if (has_save(e)) lx_text(c, MARGIN + CW, y + 4, "S", C_SAVE, 2);
+        pretty(base_name(e->name), dir, disp, sizeof(disp));
+        if (dir) {
+            char d[PATH_LEN + 4];
+            snprintf(d, sizeof(d), "[%s]", disp);
+            text_clip(MARGIN + 3 * CW, y + 4, d, C_DIR, (c->w - 2 * MARGIN) / CW - 3);
+        } else {
+            text_clip(MARGIN + 3 * CW, y + 4, disp, C_TEXT, (c->w - 2 * MARGIN) / CW - 3);
+        }
+    }
 
     /* Header: title + location, tabs on the right */
     lx_fill(c, 0, 0, c->w, HDR_H, C_HDR);
@@ -570,36 +604,6 @@ static void draw_list_body(void)
         lx_text(c, MARGIN, HDR_H + 4, bar, C_TEXT, 2);
         snprintf(bar, sizeof(bar), "%d match%s", S.nview, S.nview == 1 ? "" : "es");
         lx_text(c, c->w - MARGIN - lx_text_width(bar, 2), HDR_H + 4, bar, C_DIM, 2);
-    }
-
-    /* Rows */
-    int rows = list_rows(), y0 = list_top();
-    if (S.sel < S.top) S.top = S.sel;
-    if (S.sel >= S.top + rows) S.top = S.sel - rows + 1;
-    if (S.top < 0) S.top = 0;
-    if (S.nview == 0) {
-        const char *msg = S.search[0] ? "No matches" :
-                          S.tab == TAB_FAV ? "No favorites yet (X adds one)" :
-                          S.tab == TAB_RECENT ? "Nothing played yet" : "No files here";
-        lx_text(c, MARGIN + 40, y0 + 16, msg, C_DIM, 2);
-    }
-    char disp[PATH_LEN];
-    for (int r = 0; r < rows && S.top + r < S.nview; r++) {
-        int i = S.top + r;
-        ent_t *e = &S.ents[S.view[i]];
-        int y = y0 + r * ROW_H;
-        if (i == S.sel) lx_fill(c, 0, y, c->w, ROW_H, C_SEL);
-        bool dir = e->flags & E_DIR;
-        if (is_fav(e)) lx_text(c, MARGIN, y + 4, "*", C_FAV, 2);
-        if (has_save(e)) lx_text(c, MARGIN + CW, y + 4, "S", C_SAVE, 2);
-        pretty(base_name(e->name), dir, disp, sizeof(disp));
-        if (dir) {
-            char d[PATH_LEN + 4];
-            snprintf(d, sizeof(d), "[%s]", disp);
-            text_clip(MARGIN + 3 * CW, y + 4, d, C_DIR, (c->w - 2 * MARGIN) / CW - 3);
-        } else {
-            text_clip(MARGIN + 3 * CW, y + 4, disp, C_TEXT, (c->w - 2 * MARGIN) / CW - 3);
-        }
     }
 
     /* Footer: position + buttons */
@@ -631,10 +635,93 @@ static struct {
     bool    touch_down;
     bool    touch_held;          /* a finger down when the screen opened: ignored until lifted */
     int     tx0, ty0, tx, ty;
+    bool    drag_ok;             /* the file list is up: a finger moves it (elsewhere a swipe is a page) */
+    bool    dragging;
+    bool    no_tap;              /* this touch stopped a coasting list: its release picks nothing */
+    int     px0;                 /* where the list was when the finger came down */
+    int     y_prev;              /* finger speed: last sample */
+    int64_t t_prev;
+    float   vel;                 /* list speed, pixels a second, + = toward the end */
+    int     dir;                 /* which way it was last going */
+    int64_t coast_t;
 } I;
 
 #define REPEAT_DELAY_US 350000
 #define REPEAT_RATE_US   70000
+
+/* ── The list under a finger ───────────────────────────────────────────── */
+
+#define DRAG_START     16        /* pixels a finger moves before the list goes with it */
+#define FLING_MIN     200        /* pixels a second at lift-off, under which the list just stops */
+#define FLING_MAX   12000
+#define COAST_MIN     160        /* coasting slower than this, it settles on a whole row */
+#define COAST_TAU    0.33f       /* seconds for a coasting list to lose 63% of its speed */
+#define SETTLE_SPEED  400
+
+static int scroll_px(void) { return S.top * ROW_H + S.off; }
+
+/* Puts the list at px, kept inside its ends; the selection stays on a row that is wholly shown.
+ * False if it was there already. */
+static bool scroll_to(int px)
+{
+    int rows = list_rows(), max = (S.nview - rows) * ROW_H;
+    if (max < 0) max = 0;
+    if (px > max) px = max;
+    if (px < 0) px = 0;
+    if (px == scroll_px()) return false;
+    S.top = px / ROW_H;
+    S.off = px % ROW_H;
+    int lo = S.top + (S.off > 0), hi = S.top + rows - 1;
+    if (hi > S.nview - 1) hi = S.nview - 1;
+    if (S.sel < lo) S.sel = lo;
+    if (S.sel > hi) S.sel = hi;
+    return true;
+}
+
+/* A finger is down at I.tx, I.ty: true if the list moved under it */
+static bool list_drag(int64_t now)
+{
+    int dy = I.ty - I.ty0;
+    if (!I.dragging) {
+        if (I.ty0 < list_top() || I.ty0 >= S.cv.h - FTR_H) return false;    /* began on the header or footer */
+        if (abs(dy) < DRAG_START || abs(dy) < abs(I.tx - I.tx0)) return false;
+        I.dragging = true;
+    }
+    if (I.ty != I.y_prev || now - I.t_prev > 60000) {       /* its speed, for when it lifts */
+        float v = (float)(I.y_prev - I.ty) * 1e6f / (float)(now - I.t_prev + 1);
+        I.vel = I.vel * 0.4f + v * 0.6f;
+        I.y_prev = I.ty;
+        I.t_prev = now;
+    }
+    return scroll_to(I.px0 - dy);
+}
+
+/* No finger: the list coasts on from a flick, then comes to rest on a whole row. True if it moved. */
+static bool list_coast(int64_t now)
+{
+    if (I.vel == 0 && S.off == 0) return false;
+    float dt = (float)(now - I.coast_t) / 1e6f;
+    if (dt < 0.004f) return false;
+    if (dt > 0.1f) dt = 0.1f;
+    I.coast_t = now;
+    float speed = I.vel < 0 ? -I.vel : I.vel;
+    if (speed >= COAST_MIN) {
+        I.dir = I.vel < 0 ? -1 : 1;
+        int step = (int)(speed * dt + 0.5f);
+        if (step < 1) step = 1;
+        I.vel -= I.vel * dt / COAST_TAU;
+        if (!scroll_to(scroll_px() + I.dir * step)) I.vel = 0;     /* at an end */
+        return true;
+    }
+    I.vel = 0;
+    if (S.off == 0) return false;
+    int dir = I.dir ? I.dir : S.off >= ROW_H / 2 ? 1 : -1;
+    int goal = (S.top + (dir > 0)) * ROW_H, step = (int)(SETTLE_SPEED * dt + 0.5f), px = scroll_px();
+    if (step < 1) step = 1;
+    px = dir > 0 ? (px + step > goal ? goal : px + step) : (px - step < goal ? goal : px - step);
+    if (!scroll_to(px)) S.off = 0;
+    return true;
+}
 
 static int pad_action(int bit)
 {
@@ -724,22 +811,48 @@ static bool poll_action(act_t *a)
         if (n > 0 && I.touch_held) {
             /* the touch that opened the screen (an app's edge tap): its release is no tap here */
         } else if (n > 0) {
-            if (!I.touch_down) { I.tx0 = p[0].x; I.ty0 = p[0].y; }
+            if (!I.touch_down) {
+                I.tx0 = p[0].x;
+                I.ty0 = p[0].y;
+                I.no_tap = I.drag_ok && I.vel != 0;
+                I.dragging = false;
+                I.vel = 0;
+                I.dir = 0;
+                I.px0 = scroll_px();
+                I.y_prev = p[0].y;
+                I.t_prev = now;
+            }
             I.touch_down = true;
             I.tx = p[0].x;
             I.ty = p[0].y;
-        } else if (n == 0 && I.touch_down) {
-            I.touch_down = false;
-            int dx = I.tx - I.tx0, dy = I.ty - I.ty0;
-            if (abs(dy) > 60 && abs(dy) > abs(dx)) {
-                *a = (act_t){ .act = dy < 0 ? A_PGDN : A_PGUP };
+            if (I.drag_ok && list_drag(now)) {
+                *a = (act_t){ .act = A_SCROLL };
                 return true;
             }
-            if (abs(dx) < 24 && abs(dy) < 24) {
+        } else if (n == 0 && I.touch_down) {
+            I.touch_down = false;
+            I.coast_t = now;
+            int dx = I.tx - I.tx0, dy = I.ty - I.ty0;
+            if (I.drag_ok && (I.dragging || I.no_tap)) {
+                /* the list goes on by itself if the finger was still moving when it left */
+                float speed = I.vel < 0 ? -I.vel : I.vel;
+                if (!I.dragging || speed < FLING_MIN || now - I.t_prev > 120000) I.vel = 0;
+                else if (speed > FLING_MAX) I.vel = I.vel < 0 ? -FLING_MAX : FLING_MAX;
+                I.dragging = false;
+            } else if (I.drag_ok && abs(dy) >= 24) {
+                /* up or down, but not on the list: nothing */
+            } else if (abs(dy) > 60 && abs(dy) > abs(dx)) {
+                *a = (act_t){ .act = dy < 0 ? A_PGDN : A_PGUP };
+                return true;
+            } else if (abs(dx) < 24 && abs(dy) < 24) {
                 *a = (act_t){ .act = A_TAP, .x = I.tx0, .y = I.ty0 };
                 return true;
             }
         }
+    }
+    if (I.drag_ok && !I.touch_down && list_coast(now)) {
+        *a = (act_t){ .act = A_SCROLL };
+        return true;
     }
     return false;
 }
@@ -1289,10 +1402,13 @@ int lx_ui_pick_file(const papp_pick_cfg_t *cfg, papp_pick_result_t *out, volatil
             draw_list_body();
             frame_end();
         }
+        I.drag_ok = true;                   /* a finger on the list moves it, and a flick sends it on */
         act_t a = wait_action(abort);
+        I.drag_ok = false;
         int rows = list_rows();
         ent_t *e = S.nview ? &S.ents[S.view[S.sel]] : NULL;
         int act = a.act;
+        if (act != A_SCROLL) I.vel = 0;
 
         if (act == A_TAP) {
             act = A_NONE;
@@ -1308,7 +1424,7 @@ int lx_ui_pick_file(const papp_pick_cfg_t *cfg, papp_pick_result_t *out, volatil
                 for (size_t k = 0; k < N_FBTN; k++)
                     if (a.x >= s_fbtn[k].x && a.x < s_fbtn[k].x + s_fbtn[k].w) act = s_fbtn[k].act;
             } else if (a.y >= list_top()) {                     /* rows */
-                int i = S.top + (a.y - list_top()) / ROW_H;
+                int i = S.top + (a.y - list_top() + S.off) / ROW_H;
                 if (i < S.nview) {
                     if (i == S.sel) act = A_OK;
                     else S.sel = i;
