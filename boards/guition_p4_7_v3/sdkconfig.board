@@ -1,5 +1,5 @@
 # Guition JC1060P470C 7" with a rev v3.x chip — board-specific sdkconfig fragment
-# (builds guition_p4_7's sources; v3.x chip and the 2026 "New Panel", BOARD_PANEL_NEW)
+# (builds guition_p4_7's sources; v3.x chip, always the 2026 "New Panel")
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_HEX=y
 CONFIG_SPIRAM_SPEED_200M=y
@@ -20,17 +20,28 @@ CONFIG_ESP_HOSTED_SDIO_RX_Q_SIZE=12
 # The speaker amp's current peaks dip the 3.3 V rail on weak USB supplies
 CONFIG_ESP_BROWNOUT_DET_LVL_SEL_5=y
 
-# BLE for apps (BLE interface): NimBLE host on the P4, controller on the C6 over esp_hosted (VHCI).
-# The host only runs while a BLE app does; its memory comes from PSRAM.
+# Bluetooth: Bluedroid (dual mode) on the P4. BLE for apps (BLE interface) with the controller on the C6
+# over esp_hosted (VHCI); Classic (A2DP to speakers) needs a USB Bluetooth dongle (the C6 is LE only).
+# The stack only runs while it is used; its memory comes from PSRAM first.
 CONFIG_BT_ENABLED=y
 CONFIG_BT_CONTROLLER_DISABLED=y
-CONFIG_BT_NIMBLE_ENABLED=y
-CONFIG_BT_NIMBLE_TRANSPORT_UART=n
-CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE=y
-CONFIG_ESP_HOSTED_NIMBLE_HCI_VHCI=y
-CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
-CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
-CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=256
-CONFIG_BT_NIMBLE_NVS_PERSIST=n
-CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=6144
-CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
+CONFIG_BT_BLUEDROID_ENABLED=y
+CONFIG_ESP_HOSTED_ENABLE_BT_BLUEDROID=y
+CONFIG_ESP_HOSTED_BLUEDROID_HCI_VHCI=y
+CONFIG_BT_CLASSIC_ENABLED=y
+CONFIG_BT_A2DP_ENABLE=y
+CONFIG_BT_HID_ENABLED=y
+CONFIG_BT_HID_HOST_ENABLED=y
+CONFIG_BT_BLE_ENABLED=y
+CONFIG_BT_GATTS_ENABLE=y
+CONFIG_BT_GATTC_ENABLE=y
+CONFIG_BT_BLE_SMP_ENABLE=y
+CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
+CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n
+CONFIG_BT_BLUEDROID_ESP_COEX_VSC=n
+CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=y
+CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY=y
+CONFIG_BT_GATT_MAX_SR_PROFILES=12
+CONFIG_BT_GATT_MAX_SR_ATTRIBUTES=300
+# Bluetooth gamepads: a failed encryption (a timeout at start-up) must not unpair a pad; lx_bt_pads.c decides
+# CONFIG_BT_BLE_SMP_REMOVE_BOND_ON_PAIR_FAIL_AS_CENTRAL is not set

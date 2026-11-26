@@ -159,6 +159,12 @@ typedef struct {
 esp_err_t bsp_power_read(bsp_power_t *out);
 esp_err_t bsp_set_charge(bool on);
 
+/* ── Pins for apps (the IRQ interface) ───────────────────────────────────────
+ * Bit n set = GPIO n is on a header or port and the board does not use it, so an app may drive it and take
+ * its interrupts. Asked at each app start (a board may leave out pins an add-on it found uses). Boards that
+ * don't define it give apps no pins (weak version in the launcher answers 0). */
+uint64_t bsp_app_gpio_mask(void);
+
 #ifdef __cplusplus
 }
 #endif

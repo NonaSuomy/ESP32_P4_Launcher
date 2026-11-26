@@ -36,6 +36,12 @@ void      lx_audio_master_volume(int percent);
 int       lx_audio_master_volume_get(void);
 void      lx_audio_hold(bool hold);     /* silence every stream; their rings keep what is queued */
 
+/* Output somewhere else (a Bluetooth speaker): the mixer hands each block (S16 stereo at
+ * lx_audio_output_rate(), master volume not applied) to `tap` and plays silence on the board, which
+ * still paces it. NULL: back to the board. tap runs on the mixer task and must not block. */
+typedef void (*lx_audio_tap_t)(const int16_t *frames, int n);
+void      lx_audio_set_tap(lx_audio_tap_t tap);
+
 lx_audio_stream_t *lx_audio_open(int rate, int channels, lx_audio_fmt_t fmt, int latency_ms);
 void   lx_audio_close(lx_audio_stream_t *s);
 void   lx_audio_close_all(void);        /* app teardown */

@@ -26,6 +26,7 @@ cd launcher; idf.py -B build_elecrow_p4_aio -DLX_BOARD=elecrow_p4_aio -p COMx bu
 | Wi-Fi / BLE | ESP32-C6 over SPI full duplex: MOSI 7, MISO 9, CLK 15, CS 14, data ready 10, handshake 11, reset GPIO 2 active high |
 | Flash / PSRAM | 16 MB QIO 80 MHz, 32 MB hex PSRAM at 200 MHz, chip rev v1.x (`ESP32P4_SELECTS_REV_LESS_V3`) |
 | RTC, battery | none |
+| DevLink | CH340 USB-UART bridge on UART0 at 115200 baud; `papp_dev.py` auto-detects it (for example `/dev/ttyUSB0`); use `python tools/papp_dev.py --port /dev/ttyUSB0 info` |
 
 The C6 runs esp_hosted over SPI full duplex, as on PR #2's kit (launcher 0.30.0 tried SDIO, the transport of
 Elecrow's own AI demo, and found no C6). The release's C6 firmware is built for SDIO, so Settings → Update offers

@@ -428,6 +428,15 @@ esp_err_t lx_app_launch(const char *path, int argc, const char *const *argv,
     return ESP_OK;
 }
 
+bool lx_app_fast_sram(uintptr_t *base, size_t *size)
+{
+    app_t *a = s_app;
+    if (!a || !a->fast_sram) return false;
+    *base = (uintptr_t)a->fast_sram;
+    *size = ALIGN_UP(a->hdr.fast_image_size + a->hdr.fast_bss_size, CACHE_LINE);
+    return true;
+}
+
 /* ── Teardown (App Manager task) ────────────────────────────────────────── */
 
 /* Delete the app's tasks (main + threads), but never while one of them is

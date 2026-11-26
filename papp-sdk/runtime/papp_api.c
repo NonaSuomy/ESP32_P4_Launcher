@@ -19,6 +19,7 @@ papp_import_t __papp_imports[] = {
     { PAPP_IF_USBH, 1, PAPP_IMPORT_OPTIONAL, 0 },            /* boards with a USB host port */
     { PAPP_IF_PWR, 1, PAPP_IMPORT_OPTIONAL, 0 },             /* battery and charging */
     { PAPP_IF_HIDD, 1, PAPP_IMPORT_OPTIONAL, 0 },            /* USB HID device on the device port */
+    { PAPP_IF_IRQ, 1, PAPP_IMPORT_OPTIONAL, 0 },             /* GPIO pins, timers, interrupts (0.35+) */
 };
 
 #define SYS ((const papp_if_sys_t *)__papp_imports[0].iface)
@@ -34,6 +35,7 @@ papp_import_t __papp_imports[] = {
 #define USBH ((const papp_if_usbh_t *)__papp_imports[10].iface)
 #define PWR  ((const papp_if_pwr_t *)__papp_imports[11].iface)
 #define HIDD ((const papp_if_hidd_t *)__papp_imports[12].iface)
+#define IRQ  ((const papp_if_irq_t *)__papp_imports[13].iface)
 
 const papp_if_sys_t *papp_if_sys(void) { return SYS; }
 const papp_if_mem_t *papp_if_mem(void) { return MEM; }
@@ -278,3 +280,31 @@ const papp_if_ble_t *papp_ble(void) { return BLE; }
 const papp_if_usbh_t *papp_usbh(void) { return USBH; }
 const papp_if_pwr_t *papp_pwr(void) { return PWR; }
 const papp_if_hidd_t *papp_hidd(void) { return HIDD; }
+const papp_if_irq_t  *papp_irq(void)  { return IRQ; }
+
+/* papp_irq_thread: a thread on the interrupt's core that calls fn per event until h is detached or the
+ * app is asked to exit */
+typedef struct { papp_irq_t *h; papp_irq_fn_t fn; void *arg; } irq_thr_t;
+
+static int irq_thread_main(void *p)
+{
+    irq_thr_t t = *(irq_thr_t *)p;
+    papp_free(p);
+    papp_irq_event_t ev;
+    int r;
+    while ((r = IRQ->wait(t.h, &ev, PAPP_WAIT_FOREVER)) == 1 || r == PAPP_E_TIMEOUT)
+        if (r == 1) t.fn(t.arg, &ev);
+    return 0;
+}
+
+papp_thread_t *papp_irq_thread(papp_irq_t *h, papp_irq_fn_t fn, void *arg, uint8_t prio)
+{
+    if (!IRQ || !h || !fn) return NULL;
+    irq_thr_t *t = papp_alloc(sizeof(*t), PAPP_MEM_FAST, 0);
+    if (!t) return NULL;
+    t->h = h; t->fn = fn; t->arg = arg;
+    papp_thread_cfg_t cfg = { .name = "papp_irq", .prio = prio, .core = (int8_t)IRQ->core(h) };
+    papp_thread_t *th = papp_thread_create(irq_thread_main, t, &cfg);
+    if (!th) papp_free(t);
+    return th;
+}

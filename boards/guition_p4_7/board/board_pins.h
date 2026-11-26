@@ -5,14 +5,11 @@
 #define BOARD_LCD_H_RES     1024
 #define BOARD_LCD_V_RES     600
 #define BOARD_LCD_BL_GPIO   23      /* PWM */
-/* The 2026 "New Panel" (rear label "V2"; every board with a rev v3.x chip has it) needs its own JD9165
- * table and timing and resets on GPIO 0. Only the v3 image (boards/guition_p4_7_v3) drives it. */
-#ifdef BOARD_CHIP_V3
-#define BOARD_PANEL_NEW     1
-#define BOARD_LCD_RST_GPIO  0
-#else
-#define BOARD_LCD_RST_GPIO  27
-#endif
+/* The 2026 "New Panel" (rear label "V2"; every board with a rev v3.x chip has it, some v1.x ones too)
+ * needs its own JD9165 table and timing and resets on GPIO 0; the V1 panel resets on GPIO 27.
+ * board_display.c tells them apart at start-up. */
+#define BOARD_LCD_RST_GPIO_V1   27
+#define BOARD_LCD_RST_GPIO_NEW  0
 #define BOARD_DSI_PHY_LDO_CHAN 3
 #define BOARD_DSI_PHY_LDO_MV   2500
 
@@ -23,8 +20,11 @@
 #define BOARD_I2S_BCLK      12
 #define BOARD_I2S_WS        10
 #define BOARD_I2S_DOUT      9
-#define BOARD_I2S_DIN       11
-#define BOARD_AUDIO_PA      20      /* NS4150 enable */
+/* NS4150 enable (high = on): GPIO 20 on the JC1060P470C_I_W, GPIO 11 on the newer JC1060P470C_I_W_Y
+ * (Guition's _Y BSP: there GPIO 20 is USB D+ and the microphone input moved from 11 to 48). Every board
+ * with the new panel is a _Y one (board_is_y). */
+#define BOARD_AUDIO_PA_I_W  20
+#define BOARD_AUDIO_PA_Y    11
 
 #define BOARD_SD_CLK        43
 #define BOARD_SD_CMD        44
