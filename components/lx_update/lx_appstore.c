@@ -6,10 +6,12 @@
  *
  * apps.json: {"format":1, "folders":{"Emulators":{"icon":url}, ...},
  *             "apps":[{"id","name","version","folder","dir","file","url","size","sha256","icon"}],
- *             "gamepads":{"url","size","sha256"},
+ *             "gamepads":{"url","size","sha256"}, "gamenames":{"url","size","sha256"},
  *             "community":[{the app fields, "author","description","license","source"}]}
  * gamepads is the controller mapping database (SDcard/config/gamepads.txt in the
  * repository): fetching the catalogue also brings the card's copy up to date.
+ * gamenames is the Neo Geo game name list (SDcard/roms/neogeo/gamenames.txt), the
+ * same way, on cards that have a /sd/roms/neogeo folder.
  * community lists apps shared without their source (community/ in the repository),
  * not reviewed: they come after the project's apps and always go to the Community folder.
  * category and description (launcher 0.26+) are what the Store shows. The apps' icons
@@ -39,6 +41,8 @@ static const char *TAG = "lx_appstore";
 #define CHUNK         8192
 #define MAX_FOLDERS   8
 #define GAMEPADS_FILE "/sd/config/gamepads.txt"
+#define NEOGEO_DIR    "/sd/roms/neogeo"
+#define GAMENAMES_FILE NEOGEO_DIR "/gamenames.txt"
 #define ICON_DIR      "/sd/launcher/store"
 
 static volatile lx_appstore_state_t s_state;
@@ -101,18 +105,29 @@ static void file_sha(const char *path, char hex[65])
     for (int i = 0; i < 32; i++) sprintf(hex + i * 2, "%02x", hash[i]);
 }
 
-/* The card's controller database, replaced when the catalogue has another one */
-static void gamepads_sync(cJSON *g)
+/* A data file on the card (catalogue entry {"url","size","sha256"}), replaced when
+ * the catalogue has another one; true if it was replaced */
+static bool data_sync(cJSON *g, const char *path, const char *what)
 {
     char url[192], sha[65], have[65];
     copy_str(url, sizeof(url), g, "url");
     copy_str(sha, sizeof(sha), g, "sha256");
     cJSON *size = cJSON_GetObjectItem(g, "size");
-    if (!url[0] || strlen(sha) != 64 || !cJSON_IsNumber(size)) return;
-    file_sha(GAMEPADS_FILE, have);
-    if (strcasecmp(have, sha) == 0) return;
-    s_pads_updated = download(url, GAMEPADS_FILE, sha, (long)size->valuedouble, false);
-    ESP_LOGI(TAG, "gamepad database %s", s_pads_updated ? "updated" : "did not download");
+    if (!url[0] || strlen(sha) != 64 || !cJSON_IsNumber(size)) return false;
+    file_sha(path, have);
+    if (strcasecmp(have, sha) == 0) return false;
+    bool ok = download(url, path, sha, (long)size->valuedouble, false);
+    ESP_LOGI(TAG, "%s %s", what, ok ? "updated" : "did not download");
+    return ok;
+}
+
+/* The controller database, and the Neo Geo names where there is a Neo Geo folder */
+static void data_files_sync(cJSON *j)
+{
+    s_pads_updated = data_sync(cJSON_GetObjectItem(j, "gamepads"), GAMEPADS_FILE, "gamepad database");
+    struct stat st;
+    if (stat(NEOGEO_DIR, &st) == 0 && S_ISDIR(st.st_mode))
+        data_sync(cJSON_GetObjectItem(j, "gamenames"), GAMENAMES_FILE, "Neo Geo game names");
 }
 
 /* One catalogue entry into s_apps; false if it is incomplete or names a path outside /sd/apps */
@@ -204,8 +219,7 @@ static void fetch_task(void *arg)
             s_nfolders++;
         }
         ESP_LOGI(TAG, "catalogue: %d apps, %d community", own, s_count - own);
-        s_pads_updated = false;
-        gamepads_sync(cJSON_GetObjectItem(j, "gamepads"));
+        data_files_sync(j);
         s_percent = 0;
         icons_sync();
         s_state = LX_APPSTORE_DONE;

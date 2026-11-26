@@ -277,7 +277,8 @@ unless `IDF_PATH` is already set:
 . .\tools\idf_env.ps1
 ```
 
-Connect the board's USB-Serial-JTAG port, and use your own COM port below.
+Connect the board's DevLink port and use its COM port below. Most boards use USB-Serial-JTAG;
+the Elecrow AIO uses the CH340 UART bridge (`--transport auto` detects it, e.g. `/dev/ttyUSB0`).
 
 ```powershell
 cd launcher
@@ -295,8 +296,12 @@ switch to the other board, add `reconfigure` once: `idf.py -B <folder> -DLX_BOAR
 The boards with a v3.x chip have their own board ids, `guition_p4_43_v3` and `guition_p4_7_v3` (same board code,
 built for v3 silicon; the 7" one also sets up the 2026 panel and runs the C6 link at 10 MHz).
 
-> On Windows, `papp_dev.py` needs the same COM port, so close any serial monitor first. Text logs go to
-> UART0. USB-Serial-JTAG belongs to DevLink.
+> On Windows, `papp_dev.py` needs the same COM port, so close any serial monitor first. The AIO's
+> CH340 carries DevLink and UART0 console output; while DevLink is connected, logs are framed so
+> they don't interfere with commands.
+
+On Linux, the Elecrow AIO can be addressed directly with `python tools/papp_dev.py --port /dev/ttyUSB0 info`.
+The tool uses reset-safe DTR/RTS handling when it opens the CH340 port.
 
 ### 3. Build the apps (optional)
 
@@ -390,7 +395,7 @@ own and are read as they are.
 | Quake | `id1/pak0.pak` to `/sd/roms/quake/id1/` | `pak0.pak`, the shareware episode |
 | Duke Nukem 3D | `DUKE3D.GRP` to `/sd/roms/duke3d/duke3d.grp` | not included (commercial); tested with the Atomic Edition file |
 | Game Boy Advance | the games to `/sd/roms/gba/`; optional BIOS `gba_bios.bin` there (a built-in replacement runs most games) | not included |
-| Neo Geo | `neogeo.zip` (BIOS) and the games to `/sd/roms/neogeo/` | `gngeo_data.zip`, the emulator's own data; the BIOS is not included |
+| Neo Geo | `neogeo.zip` (BIOS) and the games to `/sd/roms/neogeo/` | `gngeo_data.zip`, the emulator's own data, and `gamenames.txt`, the full game names the list shows; the BIOS is not included |
 
 Doom's `prboom.wad` is built into the app; you don't need to copy it.
 

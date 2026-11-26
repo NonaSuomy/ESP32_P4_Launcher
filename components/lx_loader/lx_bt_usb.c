@@ -10,6 +10,13 @@
  * Tested: a counterfeit CSR8510 A10 (0A12:0001, see fix_features) with an A2DP speaker. Broadcom BCM20702
  * should work as it comes; Realtek chips
  * (RTL8761B and others) want a firmware download that is not done here yet.
+ *
+ * Also the project's own ESP32 dongle (github.com/giltal/ESP32_BT_Dongle): a classic ESP32 dev board,
+ * controller-only firmware with HCI H4 on UART0, reached through the board's USB-serial chip (CH34x or
+ * CP210x, driven here with their vendor requests: 921600 8N1, DTR/RTS released). H4 keeps the type
+ * byte on the wire: packets go out as Bluedroid gives them and the byte stream coming in is cut into
+ * packets here (h4_feed). Such a chip is taken only after the dongle answers its identify command
+ * (0xFC7E, "LXBT"): any other serial gadget is left alone.
  */
 #include "sdkconfig.h"
 
@@ -32,7 +39,7 @@ static const char *TAG = "lx_bt_usb";
 #define H4_EVT   0x04
 #define N_CMD    2
 #define N_ACL    4
-#define N_BULKIN 2
+#define N_BULKIN 4              /* kept queued: a serial chip's FIFO is small (92 bytes/ms at 921600) */
 #define CMD_MAX  (3 + 255)
 #define ACL_MAX  1100           /* biggest ACL packet sent; dongles report ~1021 */
 #define BULK_IN  1024           /* a multiple of the 64-byte packet */
@@ -47,8 +54,14 @@ typedef struct {
     bool     cmd_busy[N_CMD], acl_busy[N_ACL];
     volatile int inflight;      /* transfers submitted, callback not yet run */
     volatile bool gone, failed;
+    volatile bool restarted;    /* serial: the ESP32 restarted by itself (junk on the line): reopen it */
+    uint8_t  serial;            /* 0 = USB Bluetooth dongle, else the ESP32 dongle's chip: SER_CH34X / SER_CP210X */
     char     name[40];
 } dongle_t;
+
+#define SER_CH34X  1
+#define SER_CP210X 2
+#define SER_BAUD   921600       /* the ESP32 dongle's boot rate */
 
 /* Transfers in flight: counted up by Bluedroid's HCI task and the lx_bt task, down by the client task */
 #define INF_INC() __atomic_add_fetch(&s_d.inflight, 1, __ATOMIC_RELAXED)
@@ -79,12 +92,16 @@ static uint8_t  s_ev[1 + 2 + 255];
 static int      s_ev_len;               /* bytes after the type byte */
 static uint8_t  s_acl[1 + ACL_BUF];
 static int      s_acl_len;
+static uint8_t  s_h4;                   /* serial: 0 = waiting for a type byte, H4_EVT / H4_ACL = in that packet */
+static volatile bool s_discard;         /* serial: drop what comes in (the ESP32's boot banner) */
+static uint32_t s_resync;               /* serial: bytes skipped looking for a packet start */
+static uint32_t s_rx;                   /* serial: bytes received while streaming */
 
 /* ── Up: events and ACL data to Bluedroid ───────────────────────────────── */
 
 static void deliver(uint8_t *p, int len)
 {
-    if (s_host_cb && s_streaming) s_host_cb->notify_host_recv(p, (uint16_t)len);
+    if (s_host_cb && s_streaming && !s_d.restarted) s_host_cb->notify_host_recv(p, (uint16_t)len);
 }
 
 /* Counterfeit CSR8510 dongles (0A12:0001, HCI revision = LMP subversion 0x1d86) answer Read Local
@@ -281,12 +298,46 @@ static void acl_feed(const uint8_t *p, int n)
     }
 }
 
+/* Serial (H4): a type byte, then an event or ACL packet; evt_feed / acl_feed take the bytes after it
+ * and are back at 0 when the packet is complete. Bytes that can't start a packet are skipped. */
+static void h4_feed(const uint8_t *p, int n)
+{
+    if (s_discard) return;
+    s_rx += n;
+    while (n > 0) {
+        if (!s_h4) {
+            if (*p == H4_EVT || *p == H4_ACL) s_h4 = *p;
+            else {
+                /* Not a packet start: the dongle never sends that. The ESP32 restarted (a crash, or a
+                 * power dip): its ROM banner comes at 115200, junk at this rate, and its controller has
+                 * forgotten the links Bluedroid still counts on. From here nothing reaches Bluedroid
+                 * (junk that looks like a packet would be taken for one: it crashed the stack). */
+                s_resync++;
+                if (s_streaming) s_d.restarted = true;
+            }
+            p++;
+            n--;
+            continue;
+        }
+        int want;
+        if (s_h4 == H4_EVT) want = s_ev_len < 2 ? 2 - s_ev_len : 2 + s_ev[2] - s_ev_len;
+        else want = s_acl_len < 4 ? 4 - s_acl_len : 4 + (s_acl[3] | s_acl[4] << 8) - s_acl_len;
+        int k = n < want ? n : want;
+        if (s_h4 == H4_EVT) evt_feed(p, k);
+        else acl_feed(p, k);
+        p += k;
+        n -= k;
+        if (s_h4 == H4_EVT ? s_ev_len == 0 : s_acl_len == 0) s_h4 = 0;    /* complete (or dropped) */
+    }
+}
+
 static void in_done(usb_transfer_t *t)
 {
     INF_DEC();
     bool evt = t == s_d.evt;
     if (t->status == USB_TRANSFER_STATUS_COMPLETED) {
-        if (evt) evt_feed(t->data_buffer, t->actual_num_bytes);
+        if (s_d.serial) h4_feed(t->data_buffer, t->actual_num_bytes);
+        else if (evt) evt_feed(t->data_buffer, t->actual_num_bytes);
         else acl_feed(t->data_buffer, t->actual_num_bytes);
     }
     if (s_d.gone || !s_streaming || t->status == USB_TRANSFER_STATUS_NO_DEVICE ||
@@ -318,12 +369,23 @@ static void out_done(usb_transfer_t *t)
     if (s_host_cb && s_host_cb->notify_host_send_available) s_host_cb->notify_host_send_available();
 }
 
-/* The dongle is gone but Bluedroid still talks: every command is refused (Command Status
- * "command disallowed", no parameters to parse), so the stack can shut down without waiting */
-static void refuse(const uint8_t *cmd)
+/* The dongle is gone (unplugged, or the ESP32 restarted) but Bluedroid still talks: every command is
+ * refused (Command Status "command disallowed", no parameters to parse), so the stack can shut down
+ * without waiting. Except Disconnect: shutting down with links up, Bluedroid disconnects each and waits
+ * for Disconnection Complete, and its fallback timer fired after the stack was gone (a crash in
+ * bta_sys_event). So a Disconnect is done here: accepted, then the link is reported closed. */
+static void refuse(const uint8_t *cmd, int len)
 {
+    if (!s_host_cb) return;
+    if (len >= 6 && cmd[1] == 0x06 && cmd[2] == 0x04) {
+        uint8_t st[] = { H4_EVT, 0x0F, 4, 0x00, 1, 0x06, 0x04 };
+        uint8_t dc[] = { H4_EVT, 0x05, 4, 0x00, cmd[4], cmd[5], 0x16 };   /* reason: local host terminated */
+        s_host_cb->notify_host_recv(st, sizeof(st));
+        s_host_cb->notify_host_recv(dc, sizeof(dc));
+        return;
+    }
     uint8_t r[] = { H4_EVT, 0x0F, 4, 0x0C, 1, cmd[1], cmd[2] };
-    if (s_host_cb) s_host_cb->notify_host_recv(r, sizeof(r));
+    s_host_cb->notify_host_recv(r, sizeof(r));
 }
 
 static bool probe_p(uint16_t op, const uint8_t *par, int n, int ms);
@@ -332,9 +394,9 @@ static void usb_send(uint8_t *data, uint16_t len)
 {
     if (len < 1) return;
     uint8_t type = data[0];
-    bool live = s_present && s_streaming && !s_d.gone;
+    bool live = s_present && s_streaming && !s_d.gone && !s_d.restarted;
     if (!live) {
-        if (type == H4_CMD && len >= 4) refuse(data);
+        if (type == H4_CMD && len >= 4) refuse(data, len);
         return;
     }
     /* A Bluetooth 2.x/3.0 dongle (no LE): Bluedroid, built with BLE, asserts without it, so its LE
@@ -383,6 +445,13 @@ static void usb_send(uint8_t *data, uint16_t len)
         for (int i = 0; i < N_CMD && !t; i++) if (!s_d.cmd_busy[i]) { s_d.cmd_busy[i] = true; t = s_d.cmd[i]; }
         xSemaphoreGive(s_mx);
         if (!t) return;
+        if (s_d.serial) {                   /* H4 on the bulk OUT endpoint, type byte and all */
+            memcpy(t->data_buffer, data, len);
+            t->num_bytes = len;
+            INF_INC();
+            if (usb_host_transfer_submit(t) != ESP_OK) out_done(t);
+            return;
+        }
         usb_setup_packet_t *s = (usb_setup_packet_t *)t->data_buffer;
         s->bmRequestType = 0x20;            /* host to device, class, device */
         s->bRequest = 0;
@@ -396,7 +465,7 @@ static void usb_send(uint8_t *data, uint16_t len)
     } else if (type == H4_ACL) {
         if (len >= 3) out_count((uint16_t)((data[1] | data[2] << 8) & 0x0FFF), 1);
         s_sent++;
-        if (len - 1 > ACL_MAX || !xSemaphoreTake(s_acl_free, pdMS_TO_TICKS(500))) {
+        if (len > ACL_MAX || !xSemaphoreTake(s_acl_free, pdMS_TO_TICKS(500))) {
             ESP_LOGW(TAG, "ACL packet dropped (%u bytes)", len);
             return;
         }
@@ -405,8 +474,9 @@ static void usb_send(uint8_t *data, uint16_t len)
         for (int i = 0; i < N_ACL && !t; i++) if (!s_d.acl_busy[i]) { s_d.acl_busy[i] = true; t = s_d.acl[i]; }
         xSemaphoreGive(s_mx);
         if (!t) return;
-        memcpy(t->data_buffer, data + 1, len - 1);
-        t->num_bytes = len - 1;
+        int skip = s_d.serial ? 0 : 1;      /* USB: the endpoint says it's ACL; serial: the type byte does */
+        memcpy(t->data_buffer, data + skip, len - skip);
+        t->num_bytes = len - skip;
         INF_INC();
         if (usb_host_transfer_submit(t) != ESP_OK) out_done(t);
     }
@@ -415,7 +485,7 @@ static void usb_send(uint8_t *data, uint16_t len)
 
 static bool usb_send_available(void)
 {
-    if (!(s_present && s_streaming && !s_d.gone)) return true;     /* refused at once */
+    if (!(s_present && s_streaming && !s_d.gone && !s_d.restarted)) return true;     /* refused at once */
     return uxSemaphoreGetCount(s_cmd_free) > 0 && uxSemaphoreGetCount(s_acl_free) > 0;
 }
 
@@ -433,6 +503,13 @@ static const esp_bluedroid_hci_driver_operations_t k_ops = {
 
 const esp_bluedroid_hci_driver_operations_t *lx_bt_usb_ops(void) { return &k_ops; }
 uint32_t lx_bt_usb_sent(void) { return s_sent; }
+bool lx_bt_usb_serial_stats(uint32_t *rx, uint32_t *skipped)
+{
+    if (!lx_bt_usb_present() || !s_d.serial) return false;
+    *rx = s_rx;
+    *skipped = s_resync;
+    return true;
+}
 bool lx_bt_usb_present(void) { return s_present && !s_d.gone; }
 const char *lx_bt_usb_name(void) { return s_d.name; }
 
@@ -468,12 +545,15 @@ static bool open_stream(void)
 {
     if (!lx_bt_usb_present()) return false;
     s_ev_len = s_acl_len = 0;
+    s_h4 = 0;
     s_streaming = true;
-    INF_INC();
-    if (usb_host_transfer_submit(s_d.evt) != ESP_OK) {
-        INF_DEC();
-        s_streaming = false;
-        return false;
+    if (s_d.evt) {
+        INF_INC();
+        if (usb_host_transfer_submit(s_d.evt) != ESP_OK) {
+            INF_DEC();
+            s_streaming = false;
+            return false;
+        }
     }
     for (int i = 0; i < N_BULKIN; i++) {
         INF_INC();
@@ -516,6 +596,7 @@ void lx_bt_usb_close(void)
     if (s_present && !s_d.gone) {
         uint8_t eps[] = { s_d.ep_evt, s_d.ep_in };
         for (int i = 0; i < 2; i++) {
+            if (!eps[i]) continue;          /* serial: no event endpoint */
             usb_host_endpoint_halt(s_d.dev, eps[i]);
             usb_host_endpoint_flush(s_d.dev, eps[i]);
             usb_host_endpoint_clear(s_d.dev, eps[i]);
@@ -554,24 +635,29 @@ static bool find_bt(const usb_config_desc_t *cfg, dongle_t *d, uint16_t *mps_in)
 
 static void free_all(dongle_t *d)
 {
-    usb_transfer_t **all[] = { &d->evt, &d->in[0], &d->in[1], &d->cmd[0], &d->cmd[1],
-                               &d->acl[0], &d->acl[1], &d->acl[2], &d->acl[3] };
-    for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); i++)
-        if (*all[i]) { usb_host_transfer_free(*all[i]); *all[i] = NULL; }
+    usb_transfer_t **all[1 + N_BULKIN + N_CMD + N_ACL], ***a = all;
+    *a++ = &d->evt;
+    for (int i = 0; i < N_BULKIN; i++) *a++ = &d->in[i];
+    for (int i = 0; i < N_CMD; i++) *a++ = &d->cmd[i];
+    for (int i = 0; i < N_ACL; i++) *a++ = &d->acl[i];
+    for (usb_transfer_t ***q = all; q < a; q++)
+        if (**q) { usb_host_transfer_free(**q); **q = NULL; }
 }
 
 static bool alloc_all(dongle_t *d, uint16_t mps_in)
 {
     int bulk = mps_in && BULK_IN % mps_in == 0 ? BULK_IN : (BULK_IN / (mps_in ? mps_in : 64) + 1) * (mps_in ? mps_in : 64);
-    bool ok = usb_host_transfer_alloc(d->mps_evt, 0, &d->evt) == ESP_OK;
+    bool ok = !d->mps_evt || usb_host_transfer_alloc(d->mps_evt, 0, &d->evt) == ESP_OK;  /* serial: no event endpoint */
     for (int i = 0; i < N_BULKIN && ok; i++) ok = usb_host_transfer_alloc(bulk, 0, &d->in[i]) == ESP_OK;
     for (int i = 0; i < N_CMD && ok; i++) ok = usb_host_transfer_alloc(sizeof(usb_setup_packet_t) + CMD_MAX, 0, &d->cmd[i]) == ESP_OK;
     for (int i = 0; i < N_ACL && ok; i++) ok = usb_host_transfer_alloc(ACL_MAX, 0, &d->acl[i]) == ESP_OK;
     if (!ok) return false;
-    d->evt->device_handle = d->dev;
-    d->evt->bEndpointAddress = d->ep_evt;
-    d->evt->callback = in_done;
-    d->evt->num_bytes = d->mps_evt;
+    if (d->evt) {
+        d->evt->device_handle = d->dev;
+        d->evt->bEndpointAddress = d->ep_evt;
+        d->evt->callback = in_done;
+        d->evt->num_bytes = d->mps_evt;
+    }
     for (int i = 0; i < N_BULKIN; i++) {
         d->in[i]->device_handle = d->dev;
         d->in[i]->bEndpointAddress = d->ep_in;
@@ -580,7 +666,7 @@ static bool alloc_all(dongle_t *d, uint16_t mps_in)
     }
     for (int i = 0; i < N_CMD; i++) {
         d->cmd[i]->device_handle = d->dev;
-        d->cmd[i]->bEndpointAddress = 0;
+        d->cmd[i]->bEndpointAddress = d->serial ? d->ep_out : 0;   /* serial: commands are bulk too */
         d->cmd[i]->callback = out_done;
     }
     for (int i = 0; i < N_ACL; i++) {
@@ -604,6 +690,163 @@ static void product(usb_device_handle_t dev, const usb_device_desc_t *dd, char *
     if (!n) snprintf(out, len, "USB Bluetooth %04X:%04X", dd->idVendor, dd->idProduct);
 }
 
+/* ── The ESP32 dongle behind a USB-serial chip ─────────────────────────── */
+
+/* CH340/CH341/CH9102 (1A86) or CP210x (10C4:EA60): the first interface's bulk endpoints */
+static bool find_serial(const usb_device_desc_t *dd, const usb_config_desc_t *cfg, dongle_t *d, uint16_t *mps_in)
+{
+    if (dd->idVendor == 0x1A86 && (dd->idProduct == 0x7523 || dd->idProduct == 0x5523 || dd->idProduct == 0x55D4))
+        d->serial = SER_CH34X;
+    else if (dd->idVendor == 0x10C4 && dd->idProduct == 0xEA60)
+        d->serial = SER_CP210X;
+    else
+        return false;
+    const uint8_t *p = (const uint8_t *)cfg, *end = p + cfg->wTotalLength;
+    bool found = false;
+    for (; p + 2 <= end && p[0]; p += p[0]) {
+        if (p[1] == USB_B_DESCRIPTOR_TYPE_INTERFACE) {
+            const usb_intf_desc_t *i = (const usb_intf_desc_t *)p;
+            if (found) break;
+            if (i->bAlternateSetting == 0) { d->iface = i->bInterfaceNumber; found = true; }
+        } else if (found && p[1] == USB_B_DESCRIPTOR_TYPE_ENDPOINT) {
+            const usb_ep_desc_t *e = (const usb_ep_desc_t *)p;
+            if ((e->bmAttributes & 0x03) != USB_TRANSFER_TYPE_BULK) continue;
+            if (e->bEndpointAddress & 0x80) { d->ep_in = e->bEndpointAddress; *mps_in = e->wMaxPacketSize & 0x7FF; }
+            else d->ep_out = e->bEndpointAddress;
+        }
+    }
+    if (!(found && d->ep_in && d->ep_out)) d->serial = 0;
+    return d->serial != 0;
+}
+
+/* A transfer from the client task, waited for here (callbacks run in usb_host_client_handle_events) */
+static volatile bool s_sync_done;
+static void sync_cb(usb_transfer_t *t) { (void)t; s_sync_done = true; }
+
+static bool sync_xfer(usb_transfer_t *t, bool control)
+{
+    usb_transfer_cb_t cb = t->callback;
+    t->callback = sync_cb;
+    s_sync_done = false;
+    esp_err_t e = control ? usb_host_transfer_submit_control(s_client, t) : usb_host_transfer_submit(t);
+    for (int i = 0; e == ESP_OK && !s_sync_done && i < 100; i++) usb_host_client_handle_events(s_client, pdMS_TO_TICKS(10));
+    bool ok = e == ESP_OK && s_sync_done && t->status == USB_TRANSFER_STATUS_COMPLETED;
+    if (s_sync_done || e != ESP_OK) t->callback = cb;      /* else it is still out: the device gets closed */
+    return ok;
+}
+
+/* A vendor control request to the serial chip (data in or out) */
+static bool ser_ctrl(uint8_t rt, uint8_t req, uint16_t val, uint16_t idx, void *data, uint16_t n)
+{
+    usb_transfer_t *t = s_d.cmd[0];
+    usb_setup_packet_t *s = (usb_setup_packet_t *)t->data_buffer;
+    s->bmRequestType = rt;
+    s->bRequest = req;
+    s->wValue = val;
+    s->wIndex = idx;
+    s->wLength = n;
+    if (!(rt & 0x80) && n) memcpy(t->data_buffer + sizeof(*s), data, n);
+    t->num_bytes = sizeof(*s) + n;
+    uint8_t ep = t->bEndpointAddress;
+    t->bEndpointAddress = 0;
+    bool ok = sync_xfer(t, true);
+    t->bEndpointAddress = ep;
+    if (ok && (rt & 0x80) && n) memcpy(data, t->data_buffer + sizeof(*s), n);
+    if (!ok) ESP_LOGW(TAG, "%s: request %02X failed", s_d.name, req);
+    return ok;
+}
+
+/* CH34x baud divisor, as in Linux (ch341.c): 48 MHz / prescaler / divisor; prescaler register in the
+ * low byte (fact bit 2, ps bits 0..1), 256 - divisor in the high byte */
+static uint16_t ch34x_divisor(uint32_t speed)
+{
+    const uint32_t clk = 48000000;
+    int ps, fact = 1;
+    for (ps = 3; ps > 0; ps--)
+        if (speed > clk / ((1u << (12 - 3 * ps - 1)) * 512)) break;
+    uint32_t clk_div = 1u << (12 - 3 * ps - fact);
+    uint32_t div = clk / (clk_div * speed);
+    if (div < 9 || div > 255) { div /= 2; clk_div *= 2; fact = 0; }
+    if (16 * clk / (clk_div * div) - 16 * speed >= 16 * speed - 16 * clk / (clk_div * (div + 1))) div++;
+    if (fact == 1 && div % 2 == 0) { div /= 2; fact = 0; }
+    return (uint16_t)((0x100 - div) << 8 | fact << 2 | ps);
+}
+
+/* 921600 8N1, no flow control, DTR and RTS released (on an ESP32 dev board they drive EN and IO0) */
+static bool serial_setup(void)
+{
+    if (s_d.serial == SER_CH34X) {
+        uint8_t ver[2] = { 0 };
+        if (!ser_ctrl(0xC0, 0x5F, 0, 0, ver, 2) || !ser_ctrl(0x40, 0xA1, 0, 0, NULL, 0)) return false;  /* version, init */
+        /* bit 7: pass on what came in at once, not 32 bytes at a time (CH341A) */
+        if (!ser_ctrl(0x40, 0x9A, 0x1312, ch34x_divisor(SER_BAUD) | 0x80, NULL, 0)) return false;
+        if (ver[0] >= 0x30 && !ser_ctrl(0x40, 0x9A, 0x2518, 0xC3, NULL, 0)) return false;              /* LCR: 8N1, RX + TX on */
+        return ser_ctrl(0x40, 0xA4, 0xFFFF, 0, NULL, 0);                    /* modem lines: inverted bits, all off */
+    }
+    uint32_t b = SER_BAUD;
+    uint8_t baud[4] = { b & 0xFF, b >> 8 & 0xFF, b >> 16 & 0xFF, b >> 24 };
+    uint16_t i = s_d.iface;
+    return ser_ctrl(0x41, 0x00, 1, i, NULL, 0) &&                           /* IFC_ENABLE */
+           ser_ctrl(0x41, 0x1E, 0, i, baud, 4) &&                           /* SET_BAUDRATE */
+           ser_ctrl(0x41, 0x03, 0x0800, i, NULL, 0) &&                      /* SET_LINE_CTL: 8N1 */
+           ser_ctrl(0x41, 0x07, 0x0300, i, NULL, 0);                        /* SET_MHS: DTR, RTS low */
+}
+
+/* RTS on or off (DTR stays off): on an ESP32 dev board RTS pulls EN low, a hardware reset */
+static bool ser_rts(bool on)
+{
+    if (s_d.serial == SER_CH34X) return ser_ctrl(0x40, 0xA4, on ? (uint16_t)~0x40 : 0xFFFF, 0, NULL, 0);
+    return ser_ctrl(0x41, 0x07, on ? 0x0302 : 0x0300, s_d.iface, NULL, 0);
+}
+
+/* Is it the ESP32 dongle? It is reset first (RTS pulse): a dongle that stayed powered while the board
+ * restarted still has its old links and keeps sending, and its stream would be joined mid-packet. After
+ * a reset the ROM prints its banner at 115200 and the controller is ready ~1 s later, so the first
+ * 1.2 s of input are dropped. Then the identify command (0xFC7E) answers "LXBT", protocol, firmware
+ * version, baud, flags, links. The stream stops again afterwards and starts with Bluedroid
+ * (open_stream). */
+static bool serial_identify(void)
+{
+    s_h4 = 0;
+    s_discard = true;
+    s_streaming = true;
+    for (int i = 0; i < N_BULKIN; i++) {
+        INF_INC();
+        if (usb_host_transfer_submit(s_d.in[i]) != ESP_OK) INF_DEC();
+    }
+    if (ser_rts(true)) {
+        for (int i = 0; i < 10 && !s_d.gone; i++) usb_host_client_handle_events(s_client, pdMS_TO_TICKS(10));
+        ser_rts(false);
+    }
+    for (int i = 0; i < 120 && !s_d.gone; i++) usb_host_client_handle_events(s_client, pdMS_TO_TICKS(10));
+    bool ok = false;
+    for (int a = 0; a < 3 && !ok && !s_d.gone; a++) {
+        s_discard = false;
+        s_h4 = 0;
+        s_ev_len = s_acl_len = 0;
+        s_probe_op = 0xFC7E;
+        s_probe = true;
+        usb_transfer_t *t = s_d.acl[0];
+        static const uint8_t c[] = { H4_CMD, 0x7E, 0xFC, 0 };
+        memcpy(t->data_buffer, c, sizeof(c));
+        t->num_bytes = sizeof(c);
+        if (!sync_xfer(t, false)) break;
+        for (int i = 0; i < 60 && s_probe; i++) usb_host_client_handle_events(s_client, pdMS_TO_TICKS(10));
+        ok = !s_probe && s_pev[2] >= 19 && !s_pev[6] && !memcmp(s_pev + 7, "LXBT", 4);
+    }
+    s_probe = false;
+    if (ok)
+        snprintf(s_d.name, sizeof(s_d.name), "ESP32 dongle %u.%u.%u (%s)", s_pev[12], s_pev[13], s_pev[14],
+                 s_d.serial == SER_CH34X ? "CH34x" : "CP210x");
+    s_streaming = false;
+    s_d.restarted = false;                  /* its own reset's banner doesn't count */
+    usb_host_endpoint_halt(s_d.dev, s_d.ep_in);
+    usb_host_endpoint_flush(s_d.dev, s_d.ep_in);
+    for (int i = 0; i < 20 && s_d.inflight > 0; i++) usb_host_client_handle_events(s_client, pdMS_TO_TICKS(10));
+    usb_host_endpoint_clear(s_d.dev, s_d.ep_in);
+    return ok;
+}
+
 static void open_dongle(uint8_t addr)
 {
     if (s_present) return;                  /* one dongle at a time */
@@ -614,11 +857,12 @@ static void open_dongle(uint8_t addr)
     dongle_t d = { .dev = dev, .addr = addr };
     uint16_t mps_in = 64;
     if (usb_host_get_active_config_descriptor(dev, &cfg) != ESP_OK || usb_host_get_device_descriptor(dev, &dd) != ESP_OK ||
-        !find_bt(cfg, &d, &mps_in)) {
+        (!find_bt(cfg, &d, &mps_in) && !find_serial(dd, cfg, (d = (dongle_t){ .dev = dev, .addr = addr }, &d), &mps_in))) {
         usb_host_device_close(s_client, dev);       /* not a Bluetooth controller */
         return;
     }
-    product(dev, dd, d.name, sizeof(d.name));
+    if (d.serial) snprintf(d.name, sizeof(d.name), "USB serial %04X:%04X", dd->idVendor, dd->idProduct);
+    else product(dev, dd, d.name, sizeof(d.name));
     if (usb_host_interface_claim(s_client, dev, d.iface, 0) != ESP_OK) {
         ESP_LOGW(TAG, "%s: cannot claim interface %d", d.name, d.iface);
         usb_host_device_close(s_client, dev);
@@ -637,8 +881,19 @@ static void open_dongle(uint8_t addr)
     while (xSemaphoreTake(s_acl_free, 0)) {}
     for (int i = 0; i < N_CMD; i++) xSemaphoreGive(s_cmd_free);
     for (int i = 0; i < N_ACL; i++) xSemaphoreGive(s_acl_free);
-    s_present = true;
     xSemaphoreGive(s_mx);
+    if (d.serial && !(serial_setup() && serial_identify())) {
+        ESP_LOGI(TAG, "%04X:%04X: a USB-serial chip, not the ESP32 Bluetooth dongle", dd->idVendor, dd->idProduct);
+        xSemaphoreTake(s_mx, portMAX_DELAY);
+        free_all(&s_d);
+        usb_host_interface_release(s_client, dev, s_d.iface);
+        usb_host_device_close(s_client, dev);
+        memset(&s_d, 0, sizeof(s_d));
+        xSemaphoreGive(s_mx);
+        return;
+    }
+    s_present = true;
+    d = s_d;
     ESP_LOGI(TAG, "%04X:%04X %s: Bluetooth controller (events 0x%02X, ACL 0x%02X/0x%02X)",
              dd->idVendor, dd->idProduct, d.name, d.ep_evt, d.ep_in, d.ep_out);
     if (dd->idVendor == 0x0BDA || dd->idVendor == 0x2357 || dd->idVendor == 0x0B05)
@@ -655,6 +910,7 @@ static void close_dongle(void)
     lx_bt_transport_lost();                 /* Bluedroid stops; its commands are refused meanwhile */
     uint8_t eps[] = { d->ep_evt, d->ep_in, d->ep_out };
     for (int i = 0; i < 3; i++) {
+        if (!eps[i]) continue;
         usb_host_endpoint_halt(d->dev, eps[i]);
         usb_host_endpoint_flush(d->dev, eps[i]);
     }
@@ -692,21 +948,34 @@ static void client_task(void *arg)
         usb_host_client_handle_events(s_client, pdMS_TO_TICKS(50));
         while (s_nnew) open_dongle(s_new[--s_nnew]);
         if (s_present && s_d.gone && s_d.dev) close_dongle();
+        else if (s_present && s_d.restarted) {
+            /* As if unplugged and plugged in again: Bluedroid stops, the dongle is reset and
+             * identified again, the stack restarts on it and the speaker and pads reconnect */
+            uint8_t addr = s_d.addr;
+            ESP_LOGW(TAG, "%s restarted by itself: starting it again", s_d.name);
+            close_dongle();
+            for (int i = 0; i < 100 && lx_bt_running(); i++) vTaskDelay(pdMS_TO_TICKS(30));
+            open_dongle(addr);
+        }
         else if (s_present && s_d.failed) {
             /* A failed IN transfer halts its endpoint: clear it and go on */
             s_d.failed = false;
             uint8_t eps[] = { s_d.ep_evt, s_d.ep_in };
             for (int i = 0; i < 2; i++) {
+                if (!eps[i]) continue;
                 usb_host_endpoint_halt(s_d.dev, eps[i]);
                 usb_host_endpoint_flush(s_d.dev, eps[i]);
             }
             for (int i = 0; i < 10 && s_d.inflight > 0; i++) usb_host_client_handle_events(s_client, pdMS_TO_TICKS(10));
-            for (int i = 0; i < 2; i++) usb_host_endpoint_clear(s_d.dev, eps[i]);
+            for (int i = 0; i < 2; i++) if (eps[i]) usb_host_endpoint_clear(s_d.dev, eps[i]);
             ESP_LOGW(TAG, "restarted after a transfer error");
             if (s_streaming) {
                 s_ev_len = s_acl_len = 0;
-                INF_INC();
-                if (usb_host_transfer_submit(s_d.evt) != ESP_OK) INF_DEC();
+                s_h4 = 0;
+                if (s_d.evt) {
+                    INF_INC();
+                    if (usb_host_transfer_submit(s_d.evt) != ESP_OK) INF_DEC();
+                }
                 for (int i = 0; i < N_BULKIN; i++) {
                     INF_INC();
                     if (usb_host_transfer_submit(s_d.in[i]) != ESP_OK) INF_DEC();
@@ -721,6 +990,7 @@ void lx_bt_usb_init(void)
     s_mx = xSemaphoreCreateMutex();
     s_cmd_free = xSemaphoreCreateCounting(N_CMD, 0);
     s_acl_free = xSemaphoreCreateCounting(N_ACL, 0);
+    if (!s_probe_sem) s_probe_sem = xSemaphoreCreateBinary();   /* evt_feed gives it (serial_identify) */
     const usb_host_client_config_t cfg = {
         .is_synchronous = false,
         .max_num_event_msg = 8,

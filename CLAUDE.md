@@ -19,7 +19,7 @@ boards/<id>/board/        BSP implementation (component "board", pins esp_hosted
                           rev v3.x chips, BOARD_CHIP_V3 picks the id), guition_p4_7 (7" 1024x600; guition_p4_7_v3 = v3.x chip, which comes with
                           the 2026 "New Panel" (rear label V2; some v1.x boards have it too: guition_p4_7 detects it at a power-on, kept in RTC memory
                           over restarts): other JD9165 table/timing (Guition's V2 demo: RGB565, 52 MHz) + COLMOD 0x55 (without it faint
-                          vertical lines), reset GPIO 0,
+                          vertical lines), reset GPIO 0; such boards are the newer JC1060P470C_I_W_Y: speaker amp on GPIO 11, not 20 (board_is_y),
                           C6 SDIO 10 MHz on both 7" images), m5stack_tab5 (720x1280,
                           power rails on two PI4IOE5V6408 I2C expanders, esp_hosted 2.12.13 (Tab5 preset, C6 reset active high;
                           runs M5Stack's 1.4.1 C6 firmware too, Settings > Update offers 2.12.13, #48); INA226 battery + charging (board_power.c,
@@ -46,7 +46,10 @@ components/lx_loader/     App Manager: loader, relocation, imports, services (SY
                           task, internal stack; users = app + speaker; controller = a USB Bluetooth dongle when plugged in and LE-capable,
                           else the C6 over esp_hosted VHCI (LE only; lx_bt.c fakes the C6's missing 0x1005/0x1004 replies); bonds in
                           Bluedroid's NVS store). lx_bt_usb.c = USB HCI transport (class E0/01/01: commands as control transfers,
-                          events on interrupt IN, ACL on bulk); a dongle without LE (Bluetooth 1.x-3.0) gets LE answered by the transport
+                          events on interrupt IN, ACL on bulk); also the project's own ESP32 dongle (giltal/ESP32_BT_Dongle,
+                          classic ESP32, controller-only, H4 on UART0) behind its CH34x/CP210x: 921600 8N1 set with the chip's
+                          vendor requests, DTR/RTS off, H4 over the bulk endpoints (h4_feed), taken only after identify 0xFC7E
+                          answers "LXBT" (other serial gadgets left alone); speaker + DualShock 4 together work; a dongle without LE (Bluetooth 1.x-3.0) gets LE answered by the transport
                           (Classic only; an old genuine CSR also gets its unknown start-up commands answered), answers features page 1
                           for counterfeit CSR8510s (0A12:0001, last page 0), board = master of every accepted link; the counterfeit
                           CSR8510 can't run a speaker + Classic pad together (an old genuine CSR does); Realtek dongles need a firmware
@@ -87,7 +90,8 @@ components/lx_comp/       compositor: app surfaces → PPA scale/rotate → pane
                           present is async with 2 buffers (task "lx_present" scales + flips while the app runs;
                           present_ext copies the app's frame into the spare buffer first), synchronous with 1 buffer
 components/lx_audio/      audio engine: per-stream rings → resample → mix → BSP codec (fixed rate)
-components/lx_ui/         launcher-drawn screens for apps: content browser (pick_file) + message box; UI v4 wifi() = Wi-Fi picker
+components/lx_ui/         launcher-drawn screens for apps: content browser (pick_file; <root>/gamenames.txt "mslug=Metal Slug" = the
+                          names shown, sorted and searched: the Neo Geo set, SDcard/roms/neogeo, downloaded by the Store) + message box; UI v4 wifi() = Wi-Fi picker
                           (scan list, password keyboard, joins with lx_net_connect = saved to wifi.txt; lx_net_restore on fail/cancel)
 components/lx_input/      input manager: USB HID gamepads/keyboards, XInput (Xbox 360) pads (lx_input_xinput) + board buttons (merged into P1) → players + event queue; HOME chord;
                           USB hubs (CONFIG_USB_HOST_HUBS_SUPPORTED, every board): no TT in IDF, so lx_input_usb.c wraps hcd_port_command

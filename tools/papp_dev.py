@@ -3,7 +3,7 @@
 papp_dev.py — DevLink host tool for the ESP32-P4 Launcher.
 
 Talks the framed DevLink protocol (components/lx_devlink/include/devlink_proto.h)
-over the USB-Serial-JTAG port.
+over USB-Serial-JTAG or, on the Elecrow AIO, its CH340 UART bridge.
 
   python tools/papp_dev.py [--port COM9] info
   python tools/papp_dev.py ls /sd/apps
@@ -21,7 +21,8 @@ over the USB-Serial-JTAG port.
 app exits (or timeout → force stop) and exits with the app's return code
 (124 on timeout, 125 on DevLink error) — so it can be used from scripts/CI.
 
-Port: --port, else $PAPP_PORT, else auto-detect the Espressif USB-Serial-JTAG (VID 303A).
+Port: --port, else $PAPP_PORT, else auto-detect Espressif USB-Serial-JTAG (VID 303A)
+or a CH340 (VID 1A86). Use --transport uart for another USB-UART bridge.
 """
 
 import argparse
@@ -102,26 +103,39 @@ def find_port():
     for p in serial.tools.list_ports.comports():
         if p.vid == 0x303A:
             return p.device
-    raise DevLinkError("no Espressif USB-Serial-JTAG port found; use --port")
+    for p in serial.tools.list_ports.comports():
+        if p.vid == 0x1A86 and p.pid in (0x7522, 0x7523, 0x5523, 0x55D4):
+            return p.device
+    raise DevLinkError("no Espressif USB-Serial-JTAG or CH340 port found; use --port")
+
+
+def is_ch340(port):
+    return any(p.device == port and p.vid == 0x1A86 and
+               p.pid in (0x7522, 0x7523, 0x5523, 0x55D4)
+               for p in serial.tools.list_ports.comports())
 
 
 class DevLink:
     """Frame-level client. A reader thread splits the byte stream into frames;
     responses go to a queue keyed by seq, LOG/EVENT frames to callbacks."""
 
-    def __init__(self, port, on_log=None, on_event=None):
+    def __init__(self, port, on_log=None, on_event=None, uart_transport=False):
         self.ser = serial.Serial()
         self.ser.port = port
         self.ser.baudrate = 115200
         self.ser.timeout = 0.05
         # Don't toggle DTR/RTS on open: on USB-Serial-JTAG RTS high with DTR low resets the chip.
-        if os.name == "nt":
+        if uart_transport and os.name == "nt":
+            # Keep the CH340's default DTR/RTS levels stable across open; they
+            # are commonly wired to the target's auto-reset circuit.
+            self.ser.open()
+        elif os.name == "nt":
             self.ser.dtr = False
             self.ser.rts = False
             self.ser.open()
         else:
-            # Linux/macOS raise both lines on open; pyserial would then drop DTR before RTS
-            # (a reset). Keep both high through open, then drop RTS first.
+            # Linux/macOS raise both lines on open; keep that sequence, then
+            # drop RTS before DTR so CH340 auto-reset circuitry won't reset the target.
             self.ser.open()
             self.ser.rts = False
             self.ser.dtr = False
@@ -490,6 +504,8 @@ def main():
             stream.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description="DevLink host tool")
     ap.add_argument("--port")
+    ap.add_argument("--transport", choices=("auto", "usb", "uart"), default="auto",
+                    help="serial transport (auto detects CH340; force UART for other USB-UART bridges)")
     ap.add_argument("--no-time", action="store_true", help="don't set the board's clock from this PC")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("info")
@@ -530,7 +546,9 @@ def main():
     args = ap.parse_args()
 
     try:
-        dl = DevLink(args.port or find_port(), on_log=print_log,
+        port = args.port or find_port()
+        uart_transport = args.transport == "uart" or (args.transport == "auto" and is_ch340(port))
+        dl = DevLink(port, on_log=print_log, uart_transport=uart_transport,
                      on_event=lambda ev: print(f"EVENT {json.dumps(ev)}", file=sys.stderr))
     except (DevLinkError, serial.SerialException) as e:
         print(f"error: {e}", file=sys.stderr)

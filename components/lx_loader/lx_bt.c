@@ -416,8 +416,12 @@ static const char *dl_status(void)
     if (ba) OUT("%02X:%02X:%02X:%02X:%02X:%02X", ba[0], ba[1], ba[2], ba[3], ba[4], ba[5]);
     char un[96];
     int unacked = lx_bt_usb_present() ? lx_bt_usb_unacked(un, sizeof(un)) : 0;
-    OUT("\", \"wifi_channel_avoided\": %d, \"acl_unacked\": %d, \"acl_links\": \"%s\",\n \"speaker\": {\"name\": ",
+    OUT("\", \"wifi_channel_avoided\": %d, \"acl_unacked\": %d, \"acl_links\": \"%s\"",
         s_afh_chan > 0 ? s_afh_chan : 0, unacked, unacked ? un : "");
+    uint32_t rx, skipped;
+    if (lx_bt_usb_serial_stats(&rx, &skipped))          /* ESP32 dongle: bytes in, bytes skipped resyncing */
+        OUT(", \"serial_rx\": %lu, \"serial_skipped\": %lu", (unsigned long)rx, (unsigned long)skipped);
+    OUT(",\n \"speaker\": {\"name\": ");
     json_str(&o, end, lx_bt_speaker_name());
     lx_bt_spk_state_t st = lx_bt_speaker_state();
     OUT(", \"state\": \"%s\", \"on\": %d, \"frames_taken\": %lu, \"acl_sent\": %lu, \"error\": ",
