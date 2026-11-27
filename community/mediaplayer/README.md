@@ -4,4 +4,4 @@ Native PAPP2 media player using the PAX FFmpeg 7.1.5 port. It browses `/sd/video
 
 The PAPP2 manifest keeps the app ID `video` so NetSurf's existing media-link handoff can find it. The launcher displays the name **Mediaplayer**. Still images stay open until the user exits and scale to fit while preserving aspect ratio. The package is hosted as a version-pinned binary because it is larger than the repository's 4 MB inline community-app limit.
 
-Version 0.5.5 continues MPEG-TS playback when FFmpeg stream analysis exhausts the app heap but PAT/PMT program metadata is available. The included build should be tested on-device with `.ts`, `.mts`, and `.m2ts` samples.
+Version 0.5.6 improves MPEG-TS startup after a partial FFmpeg probe: it logs discovered PAT/PMT streams and recovers audio/video types from codec IDs when FFmpeg cannot finish stream analysis. This build still needs on-device validation with `.ts`, `.mts`, and `.m2ts` samples.
