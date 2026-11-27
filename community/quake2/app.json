@@ -1,0 +1,8 @@
+{
+  "author": "id Software / PAX port",
+  "description": "Quake II software-rendered engine with gamepad, keyboard, audio, and music support. Bring your own baseq2 data.",
+  "license": "GPL-2.0",
+  "source": "https://github.com/alexkid77/ESP32_QUAKE2/tree/0c37920e0af6c01bb88d1e8c4a0fcf148be5e57e",
+  "category": "emulators",
+  "version": "0.2.0"
+}
