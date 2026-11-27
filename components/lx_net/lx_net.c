@@ -283,8 +283,6 @@ static void join(void);
 static bool radio_start(void)
 {
     if (s_started) return true;
-    esp_netif_init();
-    esp_event_loop_create_default();
     /* A failed start (no answer from the C6) is retried by the next scan or join: the interface and
      * the driver are made only once, esp_netif_create_default_wifi_sta asserts on a second STA. */
     static bool s_wifi_inited;
@@ -588,6 +586,18 @@ static void net_task(void *arg)
 
 esp_err_t lx_net_init(void)
 {
+    /* The TCP DevLink listener may create a socket before Wi-Fi is enabled. Initialize lwIP and
+     * the default event loop synchronously so socket() never reaches an unstarted tcpip thread. */
+    esp_err_t err = esp_netif_init();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "network stack init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = esp_event_loop_create_default();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "default event loop init failed: %s", esp_err_to_name(err));
+        return err;
+    }
     creds_load();
     if (k_zones[s_tz].posix) {
         setenv("TZ", k_zones[s_tz].posix, 1);

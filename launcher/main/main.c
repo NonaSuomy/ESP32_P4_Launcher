@@ -124,12 +124,12 @@ void app_main(void)
     ESP_ERROR_CHECK(lx_app_init(lx_devlink_app_log, on_app_exit));
     if (lx_input_init(on_system_input) != ESP_OK)
         ESP_LOGE(TAG, "input init failed — DevLink injection only");
+    if (lx_net_init() != ESP_OK) ESP_LOGE(TAG, "network init failed");
     ESP_ERROR_CHECK(lx_devlink_start());
     if (bsp_info()->caps & BSP_CAP_AUDIO) {
         play_chime();               /* straight to the BSP, before the mixer owns it */
         if (lx_audio_init() != ESP_OK) ESP_LOGE(TAG, "audio mixer init failed");
     }
-    if (lx_net_init() != ESP_OK) ESP_LOGE(TAG, "network init failed");
     lx_bt_init();               /* USB Bluetooth dongles + the Bluetooth speaker (after the USB host) */
     if (home_start() != ESP_OK)
         ESP_LOGE(TAG, "home screen failed to start");

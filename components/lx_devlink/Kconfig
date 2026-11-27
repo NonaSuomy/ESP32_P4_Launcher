@@ -11,7 +11,7 @@ config LX_DEVLINK_UART
 config LX_DEVLINK_TCP
 	bool "Enable authenticated DevLink over Wi-Fi"
 	default y
-	depends on LWIP
+	depends on LWIP_ENABLE
 	help
 	  Expose the DevLink protocol on TCP port LX_DEVLINK_TCP_PORT. The service
 	  uses a device-specific pairing PIN stored in NVS and printed to the local
