@@ -399,9 +399,11 @@ it**: put an app on the SD card, run it, watch its logs, see the screen, press b
 reports, iterate. It replaces and extends the reference `PAPU`/`RUNR` serial protocol. It is always on
 in development builds and can be switched off in release builds.
 
-**Transport**: USB-Serial-JTAG on most boards. The Elecrow AIO selects UART0 for its CH340 bridge;
-when a host is connected, console logs are sent as DevLink frames so they cannot corrupt commands.
-The framing is transport-independent.
+**Transport**: USB-Serial-JTAG on most boards, UART0 for the Elecrow AIO's CH340 bridge, or
+authenticated TCP on the configured Wi-Fi interface (port 3234 by default). TCP uses a device
+pairing PIN stored in NVS and printed to the local serial console at boot. Network DevLink keeps
+Wi-Fi available while an app runs, so a host can continue to monitor or control it. Only enable it
+on trusted networks; the existing serial transports remain available.
 
 **Framing** (binary, CRC-protected, so logs and data never get mixed up):
 
@@ -415,7 +417,7 @@ when no host is reading they are dropped (never block the device).
 
 | Command | Purpose |
 |---|---|
-| `PING` / `INFO` | launcher version, ABI version, board id + caps, free memory, uptime, app state |
+| `AUTH` (TCP only), `PING` / `INFO` | pair to the device; launcher version, ABI version, board id + caps, free memory, uptime, app state |
 | `LS`, `STAT`, `MKDIR`, `RM`, `RENAME` | SD card file management |
 | `PUT` (begin / data chunks / end + CRC32) | upload any file; written to a temp name and renamed only after the CRC matches |
 | `GET` | download a file (saves, logs, screenshots, crash files) |
@@ -423,12 +425,24 @@ when no host is reading they are dropped (never block the device).
 | `SHOT` | capture the composited screen (RGB565, optionally PNG) — lets the host *see* what the app draws |
 | `INPUT` | inject gamepad buttons / key presses / touch points into the input manager |
 | `CRASH` | last crash record (+ core dump from the `coredump` partition) |
-| `REBOOT`, `OTA` | reboot (normal / into download mode); upload a new launcher image (A/B) |
+| `REBOOT` | reboot; for launcher updates, upload `/sd/update/launcher.bin` with `PUT` and use the normal updater prompt |
 
-**Host tool** `tools/papp_dev.py`: `info`, `ls`, `put`, `get`, `rm`, `run`, `stop`, `log`, `shot`,
+**Host tool** `tools/papp_dev.py`: every command works over serial or TCP (`--host IP`): `info`, `ls`, `put`, `get`, `rm`, `run`, `stop`, `log`, `shot`,
 `input`, `crash`, `reboot`, and **`deploy`** = build-output → `PUT` → `RUN` → stream logs until the app
 exits or a timeout, returning the app's exit code as the process exit code. This makes the
 edit → build → deploy → observe loop scriptable end to end, which is what allows autonomous work.
+
+For example, read the PIN over a serial connection once, then use any command over Wi-Fi:
+
+```sh
+python tools/papp_dev.py --port /dev/ttyUSB0 pin
+python tools/papp_dev.py --host 192.168.1.50 --token 123456 info
+python tools/papp_dev.py --host 192.168.1.50 --token 123456 deploy build/apps/hello/hello.papp
+```
+
+Set `PAPP_DEVLINK_TOKEN` to avoid putting the PIN in shell history; when neither is supplied, the
+tool prompts for it. To reset the PIN, erase the launcher's NVS partition. The TCP listener accepts
+one client at a time and applies a one-minute lockout after five failed PIN attempts.
 
 ---
 

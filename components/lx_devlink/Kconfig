@@ -8,4 +8,19 @@ config LX_DEVLINK_UART
 	  on boards whose USB-UART bridge (for example, CH340) is wired to UART0.
 	  The UART console remains available until a DevLink host connects.
 
+config LX_DEVLINK_TCP
+	bool "Enable authenticated DevLink over Wi-Fi"
+	default y
+	depends on LWIP
+	help
+	  Expose the DevLink protocol on TCP port LX_DEVLINK_TCP_PORT. The service
+	  uses a device-specific pairing PIN stored in NVS and printed to the local
+	  console at boot. Keep this enabled only on trusted networks.
+
+config LX_DEVLINK_TCP_PORT
+	int "DevLink TCP port"
+	default 3234
+	range 1024 65535
+	depends on LX_DEVLINK_TCP
+
 endmenu

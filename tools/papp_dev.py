@@ -6,6 +6,7 @@ Talks the framed DevLink protocol (components/lx_devlink/include/devlink_proto.h
 over USB-Serial-JTAG or, on the Elecrow AIO, its CH340 UART bridge.
 
   python tools/papp_dev.py [--port COM9] info
+  python tools/papp_dev.py --host 192.168.1.50 info
   python tools/papp_dev.py ls /sd/apps
   python tools/papp_dev.py put build/apps/hello/hello.papp /sd/apps/hello/hello.papp
   python tools/papp_dev.py get /sd/data/x.txt local.txt
@@ -22,12 +23,15 @@ app exits (or timeout → force stop) and exits with the app's return code
 (124 on timeout, 125 on DevLink error) — so it can be used from scripts/CI.
 
 Port: --port, else $PAPP_PORT, else auto-detect Espressif USB-Serial-JTAG (VID 303A)
-or a CH340 (VID 1A86). Use --transport uart for another USB-UART bridge.
+or a CH340 (VID 1A86). For Wi-Fi, use --host IP and provide the PIN printed to the
+device's local serial console at boot (or set PAPP_DEVLINK_TOKEN).
 """
 
 import argparse
+import getpass
 import json
 import os
+import socket
 import struct
 import sys
 import threading
@@ -38,7 +42,7 @@ try:
     import serial
     import serial.tools.list_ports
 except ImportError:
-    sys.exit("pyserial missing: pip install pyserial")
+    serial = None
 
 SOF = b"\xA5\x44"
 HDR = struct.Struct("<BBHI")            # type, flags, seq, len
@@ -46,6 +50,7 @@ F_ERROR, F_APP = 0x01, 0x02
 CHUNK = 16 * 1024
 
 PING, INFO, TIME = 0x01, 0x02, 0x03
+AUTH = 0x04
 LS, STAT, MKDIR, RM, RENAME = 0x10, 0x11, 0x12, 0x13, 0x14
 PUT_BEGIN, PUT_DATA, PUT_END, GET = 0x20, 0x21, 0x22, 0x28
 RUN, STOP, STATUS = 0x30, 0x31, 0x32
@@ -98,6 +103,8 @@ class DevLinkError(Exception):
 
 
 def find_port():
+    if serial is None:
+        raise DevLinkError("pyserial missing: pip install pyserial (or use --host for TCP)")
     if os.environ.get("PAPP_PORT"):
         return os.environ["PAPP_PORT"]
     for p in serial.tools.list_ports.comports():
@@ -110,6 +117,8 @@ def find_port():
 
 
 def is_ch340(port):
+    if serial is None:
+        return False
     return any(p.device == port and p.vid == 0x1A86 and
                p.pid in (0x7522, 0x7523, 0x5523, 0x55D4)
                for p in serial.tools.list_ports.comports())
@@ -119,47 +128,81 @@ class DevLink:
     """Frame-level client. A reader thread splits the byte stream into frames;
     responses go to a queue keyed by seq, LOG/EVENT frames to callbacks."""
 
-    def __init__(self, port, on_log=None, on_event=None, uart_transport=False):
-        self.ser = serial.Serial()
-        self.ser.port = port
-        self.ser.baudrate = 115200
-        self.ser.timeout = 0.05
-        # Don't toggle DTR/RTS on open: on USB-Serial-JTAG RTS high with DTR low resets the chip.
-        if uart_transport and os.name == "nt":
-            # Keep the CH340's default DTR/RTS levels stable across open; they
-            # are commonly wired to the target's auto-reset circuit.
-            self.ser.open()
-        elif os.name == "nt":
-            self.ser.dtr = False
-            self.ser.rts = False
-            self.ser.open()
+    def __init__(self, port=None, host=None, tcp_port=3234, token=None,
+                 on_log=None, on_event=None, uart_transport=False):
+        self.ser = None
+        self.sock = None
+        if host:
+            try:
+                self.sock = socket.create_connection((host, tcp_port), timeout=5.0)
+                self.sock.settimeout(0.1)
+            except OSError as e:
+                raise DevLinkError(f"could not connect to DevLink at {host}:{tcp_port}: {e}") from e
         else:
-            # Linux/macOS raise both lines on open; keep that sequence, then
-            # drop RTS before DTR so CH340 auto-reset circuitry won't reset the target.
-            self.ser.open()
-            self.ser.rts = False
-            self.ser.dtr = False
+            if serial is None:
+                raise DevLinkError("pyserial missing: pip install pyserial (or use --host for TCP)")
+            self.ser = serial.Serial()
+            self.ser.port = port
+            self.ser.baudrate = 115200
+            self.ser.timeout = 0.05
+            # Don't toggle DTR/RTS on open: USB-Serial-JTAG RTS can reset the chip.
+            if uart_transport and os.name == "nt":
+                self.ser.open()
+            elif os.name == "nt":
+                self.ser.dtr = False
+                self.ser.rts = False
+                self.ser.open()
+            else:
+                # Linux/macOS raise DTR and RTS when open; keep that sequence, then
+                # drop RTS before DTR so auto-reset circuitry won't reset the target.
+                self.ser.open()
+                self.ser.rts = False
+                self.ser.dtr = False
         self.on_log = on_log or (lambda app, text: None)
         self.on_event = on_event or (lambda ev: None)
         self.seq = 0
+        self.tx_lock = threading.Lock()
         self.pending = {}
         self.cond = threading.Condition()
         self.alive = True
         self.reader = threading.Thread(target=self._read_loop, daemon=True)
         self.reader.start()
+        if self.sock:
+            try:
+                if not token or len(token) != 6 or not token.isdigit():
+                    raise DevLinkError("TCP DevLink needs its six-digit PIN (use --token or PAPP_DEVLINK_TOKEN)")
+                self.request(AUTH, token.encode("ascii"), timeout=5.0)
+            except (DevLinkError, UnicodeEncodeError):
+                self.close()
+                raise
 
     def close(self):
         self.alive = False
+        if self.sock:
+            try:
+                self.sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
         self.reader.join(timeout=1)
-        self.ser.close()
+        if self.sock:
+            self.sock.close()
+        if self.ser:
+            self.ser.close()
 
     # ── RX ────────────────────────────────────────────────────────────────
     def _read_loop(self):
         buf = bytearray()
         while self.alive:
             try:
-                data = self.ser.read(4096)
-            except serial.SerialException:
+                data = self.sock.recv(4096) if self.sock else self.ser.read(4096)
+            except socket.timeout:
+                continue
+            except OSError:
+                self.alive = False
+                with self.cond:
+                    self.cond.notify_all()
+                return
+            if self.sock and not data:
                 self.alive = False
                 with self.cond:
                     self.cond.notify_all()
@@ -205,11 +248,19 @@ class DevLink:
 
     # ── TX ────────────────────────────────────────────────────────────────
     def request(self, typ, payload=b"", timeout=5.0):
-        self.seq = (self.seq % 0xFFFF) + 1
-        seq = self.seq
-        body = HDR.pack(typ, 0, seq, len(payload)) + payload
-        frame = SOF + body + struct.pack("<I", zlib.crc32(body) & 0xFFFFFFFF)
-        self.ser.write(frame)
+        try:
+            with self.tx_lock:
+                self.seq = (self.seq % 0xFFFF) + 1
+                seq = self.seq
+                body = HDR.pack(typ, 0, seq, len(payload)) + payload
+                frame = SOF + body + struct.pack("<I", zlib.crc32(body) & 0xFFFFFFFF)
+                if self.sock:
+                    self.sock.sendall(frame)
+                else:
+                    self.ser.write(frame)
+        except OSError as e:
+            self.alive = False
+            raise DevLinkError(f"DevLink transport closed: {e}") from e
         deadline = time.time() + timeout
         with self.cond:
             while seq not in self.pending:
@@ -504,11 +555,15 @@ def main():
             stream.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description="DevLink host tool")
     ap.add_argument("--port")
-    ap.add_argument("--transport", choices=("auto", "usb", "uart"), default="auto",
-                    help="serial transport (auto detects CH340; force UART for other USB-UART bridges)")
+    ap.add_argument("--host", help="connect over Wi-Fi to a DevLink TCP device")
+    ap.add_argument("--tcp-port", type=int, default=3234, help="DevLink TCP port (default: 3234)")
+    ap.add_argument("--token", default=os.environ.get("PAPP_DEVLINK_TOKEN"), help="six-digit Wi-Fi DevLink PIN")
+    ap.add_argument("--transport", choices=("auto", "usb", "uart", "tcp"), default="auto",
+                    help="transport; --host selects authenticated TCP, otherwise serial")
     ap.add_argument("--no-time", action="store_true", help="don't set the board's clock from this PC")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("info")
+    sub.add_parser("pin", help="read the Wi-Fi DevLink PIN over a serial connection")
     p = sub.add_parser("net", help="network self-test on the board"); p.add_argument("--quick", action="store_true", help="link and gateway ping only"); p.add_argument("--scan", action="store_true", help="also list networks")
     sub.add_parser("ping")
     p = sub.add_parser("ls"); p.add_argument("path", nargs="?", default="/sd")
@@ -546,11 +601,20 @@ def main():
     args = ap.parse_args()
 
     try:
-        port = args.port or find_port()
-        uart_transport = args.transport == "uart" or (args.transport == "auto" and is_ch340(port))
-        dl = DevLink(port, on_log=print_log, uart_transport=uart_transport,
-                     on_event=lambda ev: print(f"EVENT {json.dumps(ev)}", file=sys.stderr))
-    except (DevLinkError, serial.SerialException) as e:
+        use_tcp = bool(args.host) or args.transport == "tcp"
+        if use_tcp:
+            if not args.host:
+                raise DevLinkError("--transport tcp requires --host")
+            token = args.token or getpass.getpass("Wi-Fi DevLink PIN: ")
+            dl = DevLink(host=args.host, tcp_port=args.tcp_port, token=token,
+                         on_log=print_log,
+                         on_event=lambda ev: print(f"EVENT {json.dumps(ev)}", file=sys.stderr))
+        else:
+            port = args.port or find_port()
+            uart_transport = args.transport == "uart" or (args.transport == "auto" and is_ch340(port))
+            dl = DevLink(port, on_log=print_log, uart_transport=uart_transport,
+                         on_event=lambda ev: print(f"EVENT {json.dumps(ev)}", file=sys.stderr))
+    except (DevLinkError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 125
     try:
@@ -563,7 +627,9 @@ def main():
 
     try:
         c = args.cmd
-        if c == "info":
+        if c == "pin":
+            print(dl.request(AUTH, timeout=2.0).decode("ascii", "replace"))
+        elif c == "info":
             print(json.dumps(dl.json(INFO), indent=2))
         elif c == "net":
             r = dl.request(NET, bytes([3 if args.scan else 2 if args.quick else 1])).decode("utf-8", "replace")

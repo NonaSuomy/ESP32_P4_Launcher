@@ -151,7 +151,7 @@ Two rules keep this portable: apps only see the ABI, and the launcher core only 
 - Audio engine: up to 8 streams at any rate from 4 to 192 kHz, resampled and mixed
 - Input manager: USB HID gamepads and keyboards for up to 4 players, board buttons and touch
 - Content browser with folders, Favorites, Recent, search, and per-ROM Run/Resume/Restart/Delete save
-- DevLink: a USB protocol to upload, run, log, screenshot, inject input and read crash reports
+- DevLink: a serial or authenticated Wi-Fi protocol to upload, run, log, screenshot, inject input and read crash reports
 - Self-update from the SD card or from GitHub Releases (Settings → Update), with automatic rollback if a new
   version doesn't start. Each board only ever installs its own launcher. It also updates the Wi-Fi chip
   (ESP32-C6) firmware to the version the launcher is built for, from the release or from `/sd/update/c6.bin`
@@ -736,7 +736,10 @@ and fast. `tests/host/test_reloc.py` checks that a relocated image matches a rea
 
 ## Developing without touching the board
 
-`tools/papp_dev.py` talks to the launcher over USB, so you can run the whole edit-build-test loop from the PC.
+`tools/papp_dev.py` talks to the launcher over USB serial or authenticated Wi-Fi, so you can run the
+whole edit-build-test loop from the PC. Wi-Fi DevLink uses port 3234 and a device PIN stored in NVS.
+Read the PIN through serial with `pin`, or from the local serial boot log. Use it only on trusted
+networks; after five bad attempts, the listener locks out new connections for one minute.
 
 ```powershell
 python tools/papp_dev.py --port COM9 deploy build/apps/hello/hello.papp --timeout 20 -- arg1
@@ -744,7 +747,12 @@ python tools/papp_dev.py --port COM9 shot screen.png                     # save 
 python tools/papp_dev.py --port COM9 crash --elf build/apps/hello/hello.elf   # symbolized crash report
 python tools/papp_dev.py --port COM9 input pad A+START --hold 200        # press buttons
 python tools/papp_dev.py --port COM9 input text "hi"                     # type
+python tools/papp_dev.py --port COM9 pin                                 # read Wi-Fi PIN
+python tools/papp_dev.py --host 192.168.1.50 --token 123456 info          # same commands over Wi-Fi
+python tools/papp_dev.py --host 192.168.1.50 --token 123456 shot screen.png
 ```
+
+Set `PAPP_DEVLINK_TOKEN` to avoid putting the PIN in shell history; the tool prompts for it if omitted.
 
 | Group | Commands |
 |---|---|

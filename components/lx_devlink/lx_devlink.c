@@ -35,8 +35,11 @@
 #include "ff.h"
 #include "diskio_sdmmc.h"
 #include "esp_core_dump.h"
+#include "nvs.h"
 #include "driver/usb_serial_jtag.h"
 #include "driver/uart.h"
+#include "lwip/sockets.h"
+#include "lwip/netdb.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -46,15 +49,32 @@ static const char *TAG = "devlink";
 #define HOST_ALIVE_US      (10 * 1000 * 1000)
 #define RX_TIMEOUT_MS      2000
 
+typedef enum { DL_TRANSPORT_SERIAL, DL_TRANSPORT_TCP } dl_transport_t;
 static SemaphoreHandle_t s_tx_lock;
+static SemaphoreHandle_t s_dispatch_lock;
 static vprintf_like_t    s_orig_vprintf;
-static volatile int64_t  s_last_host_us = -HOST_ALIVE_US;
+static volatile int64_t  s_last_serial_host_us = -HOST_ALIVE_US;
+#if CONFIG_LX_DEVLINK_TCP
+static SemaphoreHandle_t s_tcp_tx_lock;
+static volatile int64_t  s_last_tcp_host_us = -HOST_ALIVE_US;
+static volatile int      s_tcp_fd = -1;
+static volatile bool     s_tcp_authenticated;
+static uint32_t          s_tcp_pin;
+#endif
 static volatile bool     s_paused;    /* an app has USB-C (lx_usbd): nothing goes to the serial/JTAG unit */
+static volatile dl_transport_t s_reply_transport = DL_TRANSPORT_SERIAL;
 static uint8_t          *s_rx;        /* request payload  */
 static char             *s_tx;        /* response scratch */
 
 #if CONFIG_LX_DEVLINK_UART
 #define DEVLINK_UART UART_NUM_0
+#endif
+#if CONFIG_LX_DEVLINK_TCP
+#define DEVLINK_TCP_PORT CONFIG_LX_DEVLINK_TCP_PORT
+#define TCP_AUTH_MAX_FAILURES 5
+#define TCP_AUTH_LOCKOUT_US (60 * 1000 * 1000LL)
+static unsigned s_tcp_auth_failures;
+static int64_t s_tcp_auth_block_until;
 #endif
 
 /* PUT state */
@@ -64,37 +84,58 @@ static uint32_t s_put_size, s_put_crc, s_put_done, s_put_crc_run;
 
 /* ── Framing ────────────────────────────────────────────────────────────── */
 
-static bool host_alive(void)
+static bool serial_host_alive(void)
 {
+    int64_t now = esp_timer_get_time();
 #if CONFIG_LX_DEVLINK_UART
-    return !s_paused && esp_timer_get_time() - s_last_host_us < HOST_ALIVE_US;
+    return !s_paused && now - s_last_serial_host_us < HOST_ALIVE_US;
 #else
     return !s_paused && usb_serial_jtag_is_connected() &&
-           esp_timer_get_time() - s_last_host_us < HOST_ALIVE_US;
+           now - s_last_serial_host_us < HOST_ALIVE_US;
 #endif
 }
 
-static bool write_all(const void *p, size_t len, TickType_t to)
+static bool tcp_host_alive(void)
+{
+#if CONFIG_LX_DEVLINK_TCP
+    return s_tcp_authenticated && s_tcp_fd >= 0 &&
+           esp_timer_get_time() - s_last_tcp_host_us < HOST_ALIVE_US;
+#else
+    return false;
+#endif
+}
+
+static bool serial_write_all(const void *p, size_t len, TickType_t to)
 {
     const uint8_t *b = p;
-#if CONFIG_LX_DEVLINK_UART
-    (void)to;
-#endif
     while (len) {
 #if CONFIG_LX_DEVLINK_UART
+        (void)to;
         int n = uart_write_bytes(DEVLINK_UART, b, len > 4096 ? 4096 : len);
 #else
-        /* The driver queues into a 16 KB ring buffer: an item larger than that never fits */
         int n = usb_serial_jtag_write_bytes(b, len > 4096 ? 4096 : len, to);
 #endif
         if (n <= 0) return false;
-        b += n; len -= n;
+        b += n;
+        len -= n;
     }
     return true;
 }
 
-static bool dl_send(uint8_t type, uint8_t flags, uint16_t seq,
-                    const void *payload, uint32_t len, TickType_t lock_to)
+static bool tcp_write_all(int fd, const void *p, size_t len)
+{
+    const uint8_t *b = p;
+    while (len) {
+        int n = send(fd, b, len, 0);
+        if (n <= 0) return false;
+        b += n;
+        len -= (size_t)n;
+    }
+    return true;
+}
+
+static bool dl_send_on(dl_transport_t transport, uint8_t type, uint8_t flags, uint16_t seq,
+                       const void *payload, uint32_t len, TickType_t lock_to)
 {
     uint8_t hdr[DL_HDR_SIZE] = {
         DL_SOF0, DL_SOF1, type, flags, seq & 0xFF, seq >> 8,
@@ -103,13 +144,39 @@ static bool dl_send(uint8_t type, uint8_t flags, uint16_t seq,
     uint32_t crc = lx_crc32(0, hdr + 2, DL_HDR_SIZE - 2);
     crc = lx_crc32(crc, payload, len);
 
-    if (s_paused || xSemaphoreTake(s_tx_lock, lock_to) != pdTRUE) return false;
-    TickType_t to = pdMS_TO_TICKS(1000);
-    bool ok = write_all(hdr, sizeof(hdr), to) &&
-              (!len || write_all(payload, len, to)) &&
-              write_all(&crc, 4, to);
-    xSemaphoreGive(s_tx_lock);
+    if (transport == DL_TRANSPORT_SERIAL) {
+        if (s_paused || xSemaphoreTake(s_tx_lock, lock_to) != pdTRUE) return false;
+        TickType_t to = pdMS_TO_TICKS(1000);
+        bool ok = serial_write_all(hdr, sizeof(hdr), to) &&
+                  (!len || serial_write_all(payload, len, to)) &&
+                  serial_write_all(&crc, 4, to);
+        xSemaphoreGive(s_tx_lock);
+        return ok;
+    }
+#if CONFIG_LX_DEVLINK_TCP
+    if (xSemaphoreTake(s_tcp_tx_lock, lock_to) != pdTRUE) return false;
+    int fd = s_tcp_fd;
+    bool ok = fd >= 0 && tcp_write_all(fd, hdr, sizeof(hdr)) &&
+              (!len || tcp_write_all(fd, payload, len)) &&
+              tcp_write_all(fd, &crc, 4);
+    xSemaphoreGive(s_tcp_tx_lock);
     return ok;
+#else
+    return false;
+#endif
+}
+
+static bool dl_send(uint8_t type, uint8_t flags, uint16_t seq,
+                    const void *payload, uint32_t len, TickType_t lock_to)
+{
+    return dl_send_on(s_reply_transport, type, flags, seq, payload, len, lock_to);
+}
+
+static void dl_send_async(uint8_t type, uint8_t flags, uint16_t seq,
+                          const void *payload, uint32_t len, TickType_t lock_to)
+{
+    if (serial_host_alive()) dl_send_on(DL_TRANSPORT_SERIAL, type, flags, seq, payload, len, lock_to);
+    if (tcp_host_alive()) dl_send_on(DL_TRANSPORT_TCP, type, flags, seq, payload, len, lock_to);
 }
 
 static void reply(uint8_t req, uint16_t seq, const void *p, uint32_t len)
@@ -168,7 +235,7 @@ static int dl_vprintf(const char *fmt, va_list ap)
     va_copy(ap2, ap);
     /* UART0 is shared with the AIO's CH340. Once DevLink is active, route logs
      * as frames so console text cannot corrupt the protocol stream. */
-    bool active = host_alive();
+    bool active = serial_host_alive();
     int r;
 #if CONFIG_LX_DEVLINK_UART
     if (active) {
@@ -176,7 +243,7 @@ static int dl_vprintf(const char *fmt, va_list ap)
         int n = vsnprintf(buf, sizeof(buf), fmt, ap2);
         r = n;
         if (n > 0 && xSemaphoreGetMutexHolder(s_tx_lock) != xTaskGetCurrentTaskHandle())
-            dl_send(DL_LOG, 0, 0, buf, n < (int)sizeof(buf) ? n : sizeof(buf) - 1, pdMS_TO_TICKS(20));
+            dl_send_on(DL_TRANSPORT_SERIAL, DL_LOG, 0, 0, buf, n < (int)sizeof(buf) ? n : sizeof(buf) - 1, pdMS_TO_TICKS(20));
     } else {
         r = s_orig_vprintf(fmt, ap);
     }
@@ -185,16 +252,25 @@ static int dl_vprintf(const char *fmt, va_list ap)
     if (active && xSemaphoreGetMutexHolder(s_tx_lock) != xTaskGetCurrentTaskHandle()) {
         char buf[256];
         int n = vsnprintf(buf, sizeof(buf), fmt, ap2);
-        if (n > 0) dl_send(DL_LOG, 0, 0, buf, n < (int)sizeof(buf) ? n : sizeof(buf) - 1, pdMS_TO_TICKS(20));
+        if (n > 0) dl_send_on(DL_TRANSPORT_SERIAL, DL_LOG, 0, 0, buf, n < (int)sizeof(buf) ? n : sizeof(buf) - 1, pdMS_TO_TICKS(20));
     }
 #endif
+    if (tcp_host_alive() && xSemaphoreGetMutexHolder(s_tcp_tx_lock) != xTaskGetCurrentTaskHandle()) {
+        va_list tcp_ap;
+        va_copy(tcp_ap, ap);
+        char buf[256];
+        int n = vsnprintf(buf, sizeof(buf), fmt, tcp_ap);
+        va_end(tcp_ap);
+        if (n > 0) dl_send_on(DL_TRANSPORT_TCP, DL_LOG, 0, 0, buf,
+                              n < (int)sizeof(buf) ? n : sizeof(buf) - 1, pdMS_TO_TICKS(20));
+    }
     va_end(ap2);
     return r;
 }
 
 void lx_devlink_app_log(const char *text, size_t len)
 {
-    if (host_alive()) dl_send(DL_LOG, DL_F_APP, 0, text, len, pdMS_TO_TICKS(50));
+    dl_send_async(DL_LOG, DL_F_APP, 0, text, len, pdMS_TO_TICKS(50));
 }
 
 /* ── JSON helpers ───────────────────────────────────────────────────────── */
@@ -596,6 +672,19 @@ static void dispatch(uint8_t type, uint16_t seq, uint8_t *p, uint32_t len)
 
     switch (type) {
     case DL_PING:   reply_str(type, seq, "pong"); break;
+    case DL_AUTH:
+#if CONFIG_LX_DEVLINK_TCP
+        if (s_reply_transport == DL_TRANSPORT_SERIAL && len == 0) {
+            char pin[7];
+            snprintf(pin, sizeof(pin), "%06lu", (unsigned long)s_tcp_pin);
+            reply_str(type, seq, pin);
+        } else {
+            reply_err(type, seq, "AUTH is only available over serial for PIN recovery");
+        }
+#else
+        reply_err(type, seq, "Wi-Fi DevLink is disabled");
+#endif
+        break;
     case DL_TIME:
         if (len >= 8) {
             /* Boards without RTC/network get the clock from the host: its local
@@ -650,7 +739,11 @@ static void dispatch(uint8_t type, uint16_t seq, uint8_t *p, uint32_t len)
     case DL_STATUS: h_status(seq); break;
     case DL_REBOOT:
         reply_str(type, seq, "rebooting");
-        usb_serial_jtag_wait_tx_done(pdMS_TO_TICKS(200));
+#if CONFIG_LX_DEVLINK_UART
+        if (s_reply_transport == DL_TRANSPORT_SERIAL) uart_wait_tx_done(DEVLINK_UART, pdMS_TO_TICKS(200));
+#else
+        if (s_reply_transport == DL_TRANSPORT_SERIAL) usb_serial_jtag_wait_tx_done(pdMS_TO_TICKS(200));
+#endif
         vTaskDelay(pdMS_TO_TICKS(50));
         esp_restart();
         break;
@@ -690,6 +783,49 @@ static void dispatch(uint8_t type, uint16_t seq, uint8_t *p, uint32_t len)
         reply_err(type, seq, "command 0x%02x not implemented", type);
         break;
     }
+}
+
+static void handle_frame(dl_transport_t transport, uint8_t type, uint16_t seq,
+                         uint8_t *payload, uint32_t len, bool crc_ok)
+{
+    xSemaphoreTake(s_dispatch_lock, portMAX_DELAY);
+    s_reply_transport = transport;
+    if (!crc_ok) {
+        reply_err(type, seq, "frame CRC mismatch");
+    } else if (transport == DL_TRANSPORT_TCP) {
+#if CONFIG_LX_DEVLINK_TCP
+        if (!s_tcp_authenticated) {
+            char expected[7];
+            snprintf(expected, sizeof(expected), "%06lu", (unsigned long)s_tcp_pin);
+            if (type == DL_AUTH && len == 6 && memcmp(payload, expected, 6) == 0) {
+                s_tcp_authenticated = true;
+                s_last_tcp_host_us = esp_timer_get_time();
+                s_tcp_auth_failures = 0;
+                s_tcp_auth_block_until = 0;
+                reply_str(type, seq, "ok");
+            } else {
+                s_tcp_auth_failures++;
+                reply_err(type, seq, type == DL_AUTH ? "invalid DevLink PIN" : "authenticate first");
+                if (s_tcp_auth_failures >= TCP_AUTH_MAX_FAILURES) {
+                    s_tcp_auth_block_until = esp_timer_get_time() + TCP_AUTH_LOCKOUT_US;
+                    s_tcp_auth_failures = 0;
+                }
+            }
+        } else if (type == DL_AUTH) {
+            reply_err(type, seq, "TCP DevLink is already authenticated");
+        } else {
+            s_last_tcp_host_us = esp_timer_get_time();
+            dispatch(type, seq, payload, len);
+        }
+#else
+        reply_err(type, seq, "TCP DevLink is disabled");
+#endif
+    } else {
+        s_last_serial_host_us = esp_timer_get_time();
+        dispatch(type, seq, payload, len);
+    }
+    s_reply_transport = DL_TRANSPORT_SERIAL;
+    xSemaphoreGive(s_dispatch_lock);
 }
 
 /* ── RX task ────────────────────────────────────────────────────────────── */
@@ -732,28 +868,145 @@ static void devlink_task(void *arg)
         uint32_t crc;
         if (!read_exact(s_rx, len, RX_TIMEOUT_MS) || !read_exact((uint8_t *)&crc, 4, RX_TIMEOUT_MS)) continue;
         uint32_t calc = lx_crc32(lx_crc32(0, hdr + 2, DL_HDR_SIZE - 2), s_rx, len);
-        if (calc != crc) {
-            reply_err(type, seq, "frame CRC mismatch");
-            continue;
-        }
-        s_last_host_us = esp_timer_get_time();
-        dispatch(type, seq, s_rx, len);
+        handle_frame(DL_TRANSPORT_SERIAL, type, seq, s_rx, len, calc == crc);
     }
 }
+
+#if CONFIG_LX_DEVLINK_TCP
+static bool tcp_read_exact(int fd, uint8_t *buf, size_t len)
+{
+    while (len) {
+        int n = recv(fd, buf, len, 0);
+        if (n <= 0) return false;
+        buf += n;
+        len -= (size_t)n;
+    }
+    return true;
+}
+
+static void tcp_disconnect(int fd)
+{
+    xSemaphoreTake(s_tcp_tx_lock, portMAX_DELAY);
+    if (s_tcp_fd == fd) {
+        s_tcp_fd = -1;
+        s_tcp_authenticated = false;
+        shutdown(fd, SHUT_RDWR);
+        close(fd);
+    }
+    xSemaphoreGive(s_tcp_tx_lock);
+    s_last_tcp_host_us = -HOST_ALIVE_US;
+}
+
+static void tcp_client_task(int fd, uint8_t *payload)
+{
+    uint8_t hdr[DL_HDR_SIZE];
+    while (s_tcp_fd == fd) {
+        uint8_t c;
+        if (!tcp_read_exact(fd, &c, 1)) break;
+        if (c != DL_SOF0 || !tcp_read_exact(fd, &c, 1) || c != DL_SOF1) continue;
+        hdr[0] = DL_SOF0;
+        hdr[1] = DL_SOF1;
+        if (!tcp_read_exact(fd, hdr + 2, DL_HDR_SIZE - 2)) break;
+        uint8_t type = hdr[2];
+        uint16_t seq = hdr[4] | ((uint16_t)hdr[5] << 8);
+        uint32_t len = hdr[6] | ((uint32_t)hdr[7] << 8) | ((uint32_t)hdr[8] << 16) |
+                       ((uint32_t)hdr[9] << 24);
+        if (len > DL_MAX_PAYLOAD) break;
+        uint32_t crc;
+        if (!tcp_read_exact(fd, payload, len) || !tcp_read_exact(fd, (uint8_t *)&crc, sizeof(crc))) break;
+        uint32_t calc = lx_crc32(lx_crc32(0, hdr + 2, DL_HDR_SIZE - 2), payload, len);
+        handle_frame(DL_TRANSPORT_TCP, type, seq, payload, len, calc == crc);
+        if (s_tcp_auth_block_until > esp_timer_get_time()) break;
+    }
+    tcp_disconnect(fd);
+}
+
+static esp_err_t load_tcp_pin(void)
+{
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open("devlink", NVS_READWRITE, &nvs);
+    if (err != ESP_OK) return err;
+    err = nvs_get_u32(nvs, "wifi_pin", &s_tcp_pin);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        s_tcp_pin = 100000 + esp_random() % 900000;
+        err = nvs_set_u32(nvs, "wifi_pin", s_tcp_pin);
+        if (err == ESP_OK) err = nvs_commit(nvs);
+    }
+    nvs_close(nvs);
+    if (err == ESP_OK)
+        ESP_LOGW(TAG, "Wi-Fi DevLink PIN: %06lu (shown on the local serial console)",
+                 (unsigned long)s_tcp_pin);
+    return err;
+}
+
+static void devlink_tcp_task(void *arg)
+{
+    uint8_t *payload = heap_caps_malloc(DL_MAX_PAYLOAD + 1, MALLOC_CAP_SPIRAM);
+    if (!payload) {
+        ESP_LOGE(TAG, "TCP DevLink has no PSRAM for its receive buffer");
+        vTaskDelete(NULL);
+        return;
+    }
+    int server = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+    if (server < 0) {
+        ESP_LOGE(TAG, "TCP DevLink socket failed: errno %d", errno);
+        heap_caps_free(payload);
+        vTaskDelete(NULL);
+        return;
+    }
+    int reuse = 1;
+    setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    struct sockaddr_in addr = { .sin_family = AF_INET, .sin_port = htons(DEVLINK_TCP_PORT),
+                                .sin_addr.s_addr = htonl(INADDR_ANY) };
+    if (bind(server, (struct sockaddr *)&addr, sizeof(addr)) != 0 || listen(server, 1) != 0) {
+        ESP_LOGE(TAG, "TCP DevLink bind/listen on %u failed: errno %d", DEVLINK_TCP_PORT, errno);
+        close(server);
+        heap_caps_free(payload);
+        vTaskDelete(NULL);
+        return;
+    }
+    ESP_LOGI(TAG, "DevLink TCP listening on port %u", DEVLINK_TCP_PORT);
+
+    for (;;) {
+        struct sockaddr_in peer;
+        socklen_t peer_len = sizeof(peer);
+        int fd = accept(server, (struct sockaddr *)&peer, &peer_len);
+        if (fd < 0) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+        if (s_tcp_auth_block_until > esp_timer_get_time()) {
+            shutdown(fd, SHUT_RDWR);
+            close(fd);
+            continue;
+        }
+        struct timeval timeout = { .tv_sec = 30, .tv_usec = 0 };
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+        xSemaphoreTake(s_tcp_tx_lock, portMAX_DELAY);
+        s_tcp_fd = fd;
+        s_tcp_authenticated = false;
+        xSemaphoreGive(s_tcp_tx_lock);
+        char ip[INET_ADDRSTRLEN] = {0};
+        inet_ntoa_r(peer.sin_addr, ip, sizeof(ip));
+        ESP_LOGI(TAG, "TCP host connected from %s", ip);
+        tcp_client_task(fd, payload);
+    }
+}
+#endif
 
 /* ── App exit event ─────────────────────────────────────────────────────── */
 
 void lx_devlink_app_exited(const char *path, int code, bool forced,
                            uint32_t leaked_allocs, uint32_t leaked_files)
 {
-    if (!host_alive()) return;
     char buf[300];
     jbuf_t j = { .buf = buf, .cap = sizeof(buf) };
     jcat(&j, "{\"ev\":\"app_exit\",\"path\":");
     jstr(&j, path);
     jcat(&j, ",\"code\":%d,\"forced\":%s,\"leaked_allocs\":%lu,\"leaked_files\":%lu}", code,
          forced ? "true" : "false", (unsigned long)leaked_allocs, (unsigned long)leaked_files);
-    dl_send(DL_EVENT, 0, 0, j.buf, j.len, pdMS_TO_TICKS(200));
+    dl_send_async(DL_EVENT, 0, 0, j.buf, j.len, pdMS_TO_TICKS(200));
 }
 
 /* ── Pause ──────────────────────────────────────────────────────────────────
@@ -780,9 +1033,18 @@ void lx_devlink_pause(bool pause)
     } else {
         usb_serial_jtag_ll_clr_intsts_mask(USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY | USB_SERIAL_JTAG_INTR_SERIAL_OUT_RECV_PKT);
         usb_serial_jtag_ll_ena_intr_mask(USB_SERIAL_JTAG_INTR_SERIAL_OUT_RECV_PKT | USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY);
-        s_last_host_us = -HOST_ALIVE_US;   /* the host says hello again before anything is sent */
+        s_last_serial_host_us = -HOST_ALIVE_US;   /* the host says hello again before anything is sent */
         s_paused = false;
     }
+#endif
+}
+
+bool lx_devlink_network_enabled(void)
+{
+#if CONFIG_LX_DEVLINK_TCP
+    return true;
+#else
+    return false;
 #endif
 }
 
@@ -825,11 +1087,28 @@ esp_err_t lx_devlink_start(void)
     s_rx = heap_caps_malloc(DL_MAX_PAYLOAD + 1, MALLOC_CAP_SPIRAM);
     s_tx = heap_caps_malloc(DL_MAX_PAYLOAD, MALLOC_CAP_SPIRAM);
     s_tx_lock = xSemaphoreCreateMutex();
-    if (!s_rx || !s_tx || !s_tx_lock) return ESP_ERR_NO_MEM;
+    s_dispatch_lock = xSemaphoreCreateMutex();
+#if CONFIG_LX_DEVLINK_TCP
+    s_tcp_tx_lock = xSemaphoreCreateMutex();
+#endif
+    if (!s_rx || !s_tx || !s_tx_lock || !s_dispatch_lock
+#if CONFIG_LX_DEVLINK_TCP
+        || !s_tcp_tx_lock
+#endif
+        ) return ESP_ERR_NO_MEM;
 
     s_orig_vprintf = esp_log_set_vprintf(dl_vprintf);
     if (xTaskCreatePinnedToCore(devlink_task, "devlink", 8192, NULL, 4, NULL, 1) != pdPASS)
         return ESP_ERR_NO_MEM;
+#if CONFIG_LX_DEVLINK_TCP
+    esp_err_t pin_err = load_tcp_pin();
+    if (pin_err != ESP_OK) {
+        ESP_LOGE(TAG, "TCP DevLink disabled: cannot load pairing PIN from NVS: %s",
+                 esp_err_to_name(pin_err));
+    } else if (xTaskCreatePinnedToCore(devlink_tcp_task, "devlink_tcp", 6144, NULL, 4, NULL, 1) != pdPASS) {
+        ESP_LOGE(TAG, "TCP DevLink task creation failed");
+    }
+#endif
 #if CONFIG_LX_DEVLINK_UART
     ESP_LOGI(TAG, "DevLink ready on UART0 (CH340)");
 #else

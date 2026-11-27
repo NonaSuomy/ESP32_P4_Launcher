@@ -13,13 +13,16 @@
 extern "C" {
 #endif
 
-/* Installs the USB-Serial-JTAG driver, hooks ESP_LOG output and starts the
- * command task. Call after the SD card is mounted and lx_app_init(). */
+/* Installs the configured DevLink transport(s), hooks ESP_LOG output, and
+ * starts the command task(s). Call after SD mount and lx_app_init(). */
 /* First thing in app_main: keep the boot log for DL_BOOTLOG */
 void lx_devlink_early_init(void);
 esp_err_t lx_devlink_start(void);
 /* Stops (true) and restarts (false) DevLink while an app has USB-C as a device of its own (lx_usbd). */
 void lx_devlink_pause(bool pause);
+/* True when the network transport is compiled in; keep Wi-Fi available while
+ * apps run so a host can continue to monitor or stop them over TCP. */
+bool lx_devlink_network_enabled(void);
 
 /* Counts changes to /sd/apps made over DevLink (put, rm, mkdir, rename): the home screen rescans */
 uint32_t lx_devlink_app_changes(void);

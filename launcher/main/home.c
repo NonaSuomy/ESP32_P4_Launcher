@@ -3048,7 +3048,7 @@ static void home_task(void *arg)
             if (s_dimmed) dim_tick();
             screenshot_tick();
             if (!was_running) {
-                lx_net_pause(true);
+                if (!lx_devlink_network_enabled()) lx_net_pause(true);
                 char p[128];                              /* also apps started over DevLink */
                 snprintf(p, sizeof(p), "%s", lx_app_path());
                 if (p[0] && strcmp(p, s_last) != 0) remember_last(p);

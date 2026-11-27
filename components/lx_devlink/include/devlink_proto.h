@@ -22,6 +22,7 @@ enum {
     DL_PING        = 0x01,
     DL_INFO        = 0x02,
     DL_TIME        = 0x03,   /* i64 local wall-clock seconds (the host's)        */
+    DL_AUTH        = 0x04,   /* TCP: six-digit PIN; serial with empty payload reads the PIN */
     DL_LS          = 0x10,   /* path                         -> JSON list        */
     DL_STAT        = 0x11,   /* path                         -> JSON             */
     DL_MKDIR       = 0x12,   /* path (mkdir -p)                                  */
