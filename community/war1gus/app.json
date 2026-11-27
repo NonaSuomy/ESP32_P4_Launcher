@@ -1,0 +1,7 @@
+{
+  "author": "PAX / Stratagus",
+  "description": "WarCraft: Orcs & Humans engine port. Requires converted original game data on the SD card; no game data is included.",
+  "category": "games",
+  "license": "GPL-2.0-or-later",
+  "source": "https://github.com/Wargus/stratagus/tree/3d87c93f7fd8c0b62ee1be5df0a6d9efc72ca6cc"
+}
