@@ -4,7 +4,7 @@
   "license": "LGPL-2.1",
   "source": "https://github.com/FFmpeg/FFmpeg/tree/3a0867c2bfda4a4d4309ca1a8cbdc6175e67f587",
   "category": "tools",
-  "url": "https://raw.githubusercontent.com/NonaSuomy/ESP32_P4_Launcher/bc42bcf5ec8a87f22f734f26da2105f894014091/papp-assets/mediaplayer.papp",
-  "sha256": "2ef0bc1abe2aa0db14cec0465d5d9b70c4566f7b50e68c8bec79eabcc7604803",
+  "url": "https://raw.githubusercontent.com/NonaSuomy/ESP32_P4_Launcher/5ad28cbae401d358ed2fb25e3e4dd3335dd396be/papp-assets/mediaplayer.papp",
+  "sha256": "17c5a527b0b4dd931ec036eeb3d070338486a2a863c74f47f6fc42d4153a0319",
   "size": 4574608
 }
