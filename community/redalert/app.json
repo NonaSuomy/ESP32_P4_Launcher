@@ -1,0 +1,7 @@
+{
+  "author": "NonaSuomy",
+  "description": "Command & Conquer: Red Alert, native PAPP2 port with network play. Game data not included.",
+  "category": "games",
+  "license": "GPL-3.0-or-later",
+  "source": "https://github.com/NonaSuomy/Vanilla-Conquer/tree/bcce972e66b95b86a6dfd7e17697ca296bc66486/redalert"
+}
