@@ -1,10 +1,11 @@
 {
   "author": "PAX port / FFmpeg developers",
-  "description": "Play video, music, and still images from SD or HTTP(S) using FFmpeg on the P4.",
+  "description": "Play local video, music, and still images from SD or HTTP(S) using FFmpeg, including MPEG-TS, MTS, and M2TS streams.",
   "license": "LGPL-2.1",
   "source": "https://github.com/FFmpeg/FFmpeg/tree/3a0867c2bfda4a4d4309ca1a8cbdc6175e67f587",
   "category": "tools",
-  "url": "https://raw.githubusercontent.com/NonaSuomy/ESP32_P4_Launcher/bc034910b4c683fb66b1d91b388b8fe968665bba/papp-assets/mediaplayer.papp",
-  "sha256": "53e9c60b4355674e42275d4571835b40c743105a2dd3e43435ac8c3e345b22e5",
-  "size": 4574608
+  "url": "https://raw.githubusercontent.com/NonaSuomy/ESP32_P4_Launcher/41e67d035eddf98367fb16a2ebf1d08bf514e72f/papp-assets/mediaplayer.papp",
+  "sha256": "2674c4b699c69352057ab8489431a0ebeac2712e1aff60b25a788b10ca2a8e6b",
+  "size": 4574608,
+  "version": "0.5.5"
 }
