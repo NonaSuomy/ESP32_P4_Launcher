@@ -1,0 +1,7 @@
+{
+  "author": "NonaSuomy",
+  "description": "Spear of Destiny and its mission packs. Native PAPP2 build; requires original game data, not included.",
+  "category": "emulators",
+  "license": "GPL-2.0-or-later",
+  "source": "https://github.com/NonaSuomy/RetroESP32-P4/tree/d0a449f9e2252881ab1ac297d05353f5bc58c046/components/psram_app_loader"
+}
