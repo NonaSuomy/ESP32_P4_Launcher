@@ -1,0 +1,7 @@
+{
+  "author": "XProger / alexkid77 / PAX port",
+  "description": "OpenLara Tomb Raider 1 engine. Requires the user's original Tomb Raider 1 PC DATA files on SD.",
+  "category": "emulators",
+  "license": "BSD-2-Clause",
+  "source": "https://github.com/alexkid77/openlara_esp32p4/tree/da3d43138f3a9eae6778c96adbdd7a6579e42979"
+}
