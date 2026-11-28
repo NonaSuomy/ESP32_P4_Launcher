@@ -16,11 +16,11 @@ PAPP_MANIFEST(.id = "tool.sd_speedtest", .name = "SD Card Speed Test",
 #define SEQ_LARGE_BYTES (1024u * 1024u)
 #define IO_4K_BYTES 4096u
 #define RANDOM_OPS 256u
-#define TEST_REPEATS 3u
+#define MAX_TEST_PASSES 3u
 #define MAX_TEST_BLOCKS (TEST_BYTES_LARGE / IO_4K_BYTES)
 
 enum { ST_IDLE, ST_WRITE, ST_READ, ST_DONE, ST_ERROR, ST_CANCELLED };
-enum { ACT_RUN = 1, ACT_SIZE };
+enum { ACT_RUN = 1, ACT_SIZE, ACT_PASSES };
 
 typedef struct {
     int state;
@@ -42,6 +42,7 @@ static volatile int s_quit;
 static uint32_t s_prev_buttons;
 static bool s_prev_enter;
 static uint32_t s_test_bytes = TEST_BYTES_QUICK;
+static unsigned s_test_passes = MAX_TEST_PASSES;
 
 static screen_state_t snapshot(void);
 
@@ -53,10 +54,11 @@ static void update_state(int state, int progress)
     papp_mutex_unlock(s_lock);
 }
 
-static void update_progress(int state, unsigned stage, unsigned done, unsigned total)
+static void update_progress(int state, unsigned stage, unsigned done, unsigned total,
+                            unsigned pass_count)
 {
     int progress = (int)(((uint64_t)stage * 1000u + (uint64_t)done * 1000u / total) /
-                         (6u * TEST_REPEATS));
+                         (6u * pass_count));
     update_state(state, progress);
 }
 
@@ -123,7 +125,7 @@ static void refresh_volume_info(void)
 }
 
 static bool benchmark_pass(const papp_if_fs_t *fs, uint8_t *buffer, uint32_t *order,
-                           uint32_t test_bytes, unsigned repeat,
+                           uint32_t test_bytes, unsigned repeat, unsigned pass_count,
                            double read_rate[3], double write_rate[3])
 {
     papp_file_t *file = NULL;
@@ -150,7 +152,7 @@ static bool benchmark_pass(const papp_if_fs_t *fs, uint8_t *buffer, uint32_t *or
     for (uint32_t offset = 0; offset < test_bytes; offset += SEQ_LARGE_BYTES) {
         CHECK_CANCEL();
         if (fs->write(file, buffer, SEQ_LARGE_BYTES) != SEQ_LARGE_BYTES) FAIL("SD write failed or was incomplete");
-        update_progress(ST_WRITE, stage_base + 0u, offset + SEQ_LARGE_BYTES, test_bytes);
+        update_progress(ST_WRITE, stage_base + 0u, offset + SEQ_LARGE_BYTES, test_bytes, pass_count);
     }
     if (fs->close(file) != 0) { file = NULL; FAIL("Could not finish writing the test file"); }
     file = NULL;
@@ -167,7 +169,7 @@ static bool benchmark_pass(const papp_if_fs_t *fs, uint8_t *buffer, uint32_t *or
         if (got != SEQ_LARGE_BYTES) FAIL("SD read failed or ended early");
         for (size_t i = 0; i < SEQ_LARGE_BYTES; i++)
             if (buffer[i] != expected_byte(offset + (uint32_t)i)) FAIL("Readback check failed; card data differs");
-        update_progress(ST_READ, stage_base + 1u, offset + SEQ_LARGE_BYTES, test_bytes);
+        update_progress(ST_READ, stage_base + 1u, offset + SEQ_LARGE_BYTES, test_bytes, pass_count);
     }
     if (fs->close(file) != 0) { file = NULL; FAIL("Could not close the read test file"); }
     file = NULL;
@@ -183,7 +185,7 @@ static bool benchmark_pass(const papp_if_fs_t *fs, uint8_t *buffer, uint32_t *or
         int64_t t0 = papp_time_us();
         if (fs->write(file, buffer, IO_4K_BYTES) != IO_4K_BYTES) FAIL("4 KiB sequential write failed");
         write_elapsed += papp_time_us() - t0;
-        if ((offset & 0x1FFFFu) == 0) update_progress(ST_WRITE, stage_base + 2u, offset + IO_4K_BYTES, test_bytes);
+        if ((offset & 0x1FFFFu) == 0) update_progress(ST_WRITE, stage_base + 2u, offset + IO_4K_BYTES, test_bytes, pass_count);
     }
     int64_t close_started = papp_time_us();
     if (fs->close(file) != 0) { file = NULL; FAIL("Could not close the 4 KiB write test"); }
@@ -202,7 +204,7 @@ static bool benchmark_pass(const papp_if_fs_t *fs, uint8_t *buffer, uint32_t *or
         if (got != IO_4K_BYTES) FAIL("4 KiB sequential read failed");
         for (size_t i = 0; i < IO_4K_BYTES; i++)
             if (buffer[i] != expected_byte(offset + (uint32_t)i)) FAIL("4 KiB readback differs");
-        if ((offset & 0x1FFFFu) == 0) update_progress(ST_READ, stage_base + 3u, offset + IO_4K_BYTES, test_bytes);
+        if ((offset & 0x1FFFFu) == 0) update_progress(ST_READ, stage_base + 3u, offset + IO_4K_BYTES, test_bytes, pass_count);
     }
     if (fs->close(file) != 0) { file = NULL; FAIL("Could not close the 4 KiB read test"); }
     file = NULL;
@@ -222,7 +224,7 @@ static bool benchmark_pass(const papp_if_fs_t *fs, uint8_t *buffer, uint32_t *or
         if (got != IO_4K_BYTES) FAIL("Random 4 KiB read failed");
         for (size_t j = 0; j < IO_4K_BYTES; j++)
             if (buffer[j] != expected_byte(offset + (uint32_t)j)) FAIL("Random readback differs");
-        update_progress(ST_READ, stage_base + 4u, i + 1u, RANDOM_OPS);
+        update_progress(ST_READ, stage_base + 4u, i + 1u, RANDOM_OPS, pass_count);
     }
     if (fs->close(file) != 0) { file = NULL; FAIL("Could not close random read test"); }
     file = NULL;
@@ -239,7 +241,7 @@ static bool benchmark_pass(const papp_if_fs_t *fs, uint8_t *buffer, uint32_t *or
         if (fs->seek(file, (long)offset, SEEK_SET) != 0 || fs->write(file, buffer, IO_4K_BYTES) != IO_4K_BYTES)
             FAIL("Random 4 KiB write failed");
         write_elapsed += papp_time_us() - t0;
-        update_progress(ST_WRITE, stage_base + 5u, i + 1u, RANDOM_OPS);
+        update_progress(ST_WRITE, stage_base + 5u, i + 1u, RANDOM_OPS, pass_count);
     }
     close_started = papp_time_us();
     if (fs->close(file) != 0) { file = NULL; FAIL("Could not close random write test"); }
@@ -279,6 +281,7 @@ static int benchmark_worker(void *unused)
     uint8_t *buffer = papp_alloc(SEQ_LARGE_BYTES, PAPP_MEM_LARGE, 64);
     uint32_t *order = papp_alloc(MAX_TEST_BLOCKS * sizeof(*order), PAPP_MEM_LARGE, 4);
     uint32_t test_bytes = s_test_bytes;
+    unsigned pass_count = s_test_passes;
     int final_state = ST_ERROR;
 
     if (!fs || !fs->open || !fs->close || !fs->read || !fs->write || !fs->seek ||
@@ -302,7 +305,7 @@ static int benchmark_worker(void *unused)
     }
 
     unsigned blocks = test_bytes / IO_4K_BYTES;
-    for (unsigned repeat = 0; repeat < TEST_REPEATS; repeat++) {
+    for (unsigned repeat = 0; repeat < pass_count; repeat++) {
         for (unsigned i = 0; i < blocks; i++) order[i] = i;
         uint32_t seed = 0x51DCA4D3u ^ repeat;
         for (unsigned i = blocks - 1; i > 0; i--) {
@@ -311,7 +314,8 @@ static int benchmark_worker(void *unused)
             uint32_t t = order[i]; order[i] = order[j]; order[j] = t;
         }
         double read_rate[3] = { 0 }, write_rate[3] = { 0 };
-        if (!benchmark_pass(fs, buffer, order, test_bytes, repeat, read_rate, write_rate)) {
+        if (!benchmark_pass(fs, buffer, order, test_bytes, repeat, pass_count,
+                            read_rate, write_rate)) {
             final_state = cancelled() ? ST_CANCELLED : ST_ERROR;
             goto finish;
         }
@@ -363,6 +367,11 @@ static void act(int id, int x)
         if (!is_running(r.state)) s_test_bytes = s_test_bytes == TEST_BYTES_QUICK ? TEST_BYTES_LARGE : TEST_BYTES_QUICK;
         return;
     }
+    if (id == ACT_PASSES) {
+        screen_state_t r = snapshot();
+        if (!is_running(r.state)) s_test_passes = s_test_passes == 1u ? MAX_TEST_PASSES : 1u;
+        return;
+    }
     if (id == ACT_RUN) {
         screen_state_t r = snapshot();
         if (is_running(r.state)) { s_cancel = 1; return; }
@@ -392,8 +401,9 @@ static const char *state_label(const screen_state_t *r)
     case ST_ERROR: return r->error[0] ? r->error : "Benchmark failed";
     case ST_CANCELLED: return "Cancelled; temporary file cleaned up";
     default:
-        snprintf(ready, sizeof(ready), "Ready • %lu MiB • 3-run averages • seq/random 4 KiB I/O",
-                 (unsigned long)(s_test_bytes / (1024u * 1024u)));
+        snprintf(ready, sizeof(ready), "Ready • %lu MiB • %s • seq/random 4 KiB I/O",
+                 (unsigned long)(s_test_bytes / (1024u * 1024u)),
+                 s_test_passes == 1u ? "single pass" : "3-run average");
         return ready;
     }
 }
@@ -409,7 +419,7 @@ static const char *sd_bus_label(void)
 static void draw_screen(void)
 {
     screen_state_t r = snapshot();
-    char value[48], total[24], free_space[24], volume_line[112], size_label[80];
+    char value[48], total[24], free_space[24], volume_line[112], size_label[48], passes_label[48];
     static const char *const names[] = {
         "Sequential 1 MiB (Q1T1)",
         "Sequential 4 KiB (Q1T1)",
@@ -443,9 +453,12 @@ static void draw_screen(void)
         ui_text_c(ui_small, 684, y + 20, value, C_OUT);
     }
 
-    snprintf(size_label, sizeof(size_label), "Test: %lu MiB • 3 runs (tap or Left/Right)",
+    snprintf(size_label, sizeof(size_label), "Size: %lu MiB (Left/Right)",
              (unsigned long)(s_test_bytes / (1024u * 1024u)));
-    ui_button(110, 326, 580, 34, size_label, C_RAISED, ACT_SIZE);
+    snprintf(passes_label, sizeof(passes_label), "Runs: %s (Up)",
+             s_test_passes == 1u ? "1 pass" : "3-pass average");
+    ui_button(80, 326, 310, 34, size_label, C_RAISED, ACT_SIZE);
+    ui_button(410, 326, 310, 34, passes_label, C_RAISED, ACT_PASSES);
     ui_rrect(48, 370, 632, 16, 8, C_RAISED);
     int filled = (r.progress * 632) / 1000;
     if (filled > 0) ui_rrect(48, 370, filled, 16, 8, C_BLUE);
@@ -454,7 +467,7 @@ static void draw_screen(void)
 
     ui_button(292, 402, 216, 48, is_running(r.state) ? "Cancel" : "Run Test",
               is_running(r.state) ? C_RED : C_BLUE, ACT_RUN);
-    ui_text_c(ui_small, 400, 460, "A / Touch: Start   •   B: Cancel   •   X: Exit", C_DIM);
+    ui_text_c(ui_small, 400, 460, "A/Touch: Run • ←/→ Size • ↑ Passes • B Cancel • X Exit", C_DIM);
     ui_end(s_surface);
 }
 
@@ -483,6 +496,7 @@ int main(void)
         if (pressed & PAPP_BTN_B) s_cancel = 1;
         if (pressed & PAPP_BTN_X) s_quit = 1;
         if (pressed & (PAPP_BTN_LEFT | PAPP_BTN_RIGHT)) act(ACT_SIZE, 0);
+        if (pressed & PAPP_BTN_UP) act(ACT_PASSES, 0);
         bool enter = papp_input_key_down(0x28);
         if (enter && !s_prev_enter) act(ACT_RUN, 0);
         s_prev_enter = enter;
