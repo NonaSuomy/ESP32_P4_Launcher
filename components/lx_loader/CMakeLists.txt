@@ -3,7 +3,7 @@ idf_component_register(
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "."
     REQUIRES papp_abi esp_mm
-    PRIV_REQUIRES lx_common bsp lx_comp lx_audio lx_input esp_timer heap esp_system lx_ui lx_net lwip mbedtls esp_hw_support bt espressif__esp_hosted usb lx_usbd esp_driver_gpio esp_driver_gptimer esp_hid esp_driver_jpeg espressif__esp_audio_codec
+    PRIV_REQUIRES lx_common bsp lx_comp lx_audio lx_input esp_timer heap esp_system lx_ui lx_net lwip mbedtls esp_hw_support bt espressif__esp_hosted usb lx_usbd fatfs esp_driver_gpio esp_driver_gptimer esp_hid esp_driver_jpeg espressif__esp_audio_codec
 )
 
 # BLE: esp_hosted 2.x starts the C6's controller on request; 1.4 (Tab5) runs it from the C6's boot

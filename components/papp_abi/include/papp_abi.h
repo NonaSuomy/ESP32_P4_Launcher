@@ -205,7 +205,7 @@ typedef struct {
 /* ── FS interface ───────────────────────────────────────────────────────── */
 
 #define PAPP_IF_FS        PAPP_FOURCC('F', 'S', ' ', ' ')
-#define PAPP_IF_FS_VER    2      /* v2: stat, rename, rmdir, directories */
+#define PAPP_IF_FS_VER    3      /* v2: stat, rename, rmdir, directories; v3: volume_info */
 
 typedef struct papp_file papp_file_t;
 typedef struct papp_dir  papp_dir_t;
@@ -225,6 +225,21 @@ typedef struct {
 
 #define PAPP_FS_MAX_DIRS 8               /* open at once; closed with the app       */
 
+enum {
+    PAPP_FS_TYPE_UNKNOWN = 0,
+    PAPP_FS_TYPE_FAT12 = 1,
+    PAPP_FS_TYPE_FAT16 = 2,
+    PAPP_FS_TYPE_FAT32 = 3,
+    PAPP_FS_TYPE_EXFAT = 4,
+};
+
+typedef struct {
+    uint64_t total_bytes;
+    uint64_t free_bytes;
+    uint32_t type;                       /* PAPP_FS_TYPE_* */
+    uint32_t reserved;
+} papp_fs_volume_info_t;
+
 typedef struct {
     papp_iface_hdr_t hdr;
     papp_file_t *(*open)(const char *path, const char *mode);
@@ -243,6 +258,7 @@ typedef struct {
     papp_dir_t *(*opendir)(const char *path);            /* NULL: missing / no slot */
     int     (*readdir)(papp_dir_t *d, papp_dirent_t *out);   /* 1 an entry, 0 the end ("." and ".." left out) */
     void    (*closedir)(papp_dir_t *d);
+    int     (*volume_info)(const char *mount_path, papp_fs_volume_info_t *out); /* v3: mounted FAT volume */
 } papp_if_fs_t;
 
 /* ── DISP interface ─────────────────────────────────────────────────────── */

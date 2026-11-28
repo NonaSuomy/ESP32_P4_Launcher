@@ -26,6 +26,8 @@
 #include "esp_timer.h"
 #include "esp_chip_info.h"
 #include "esp_log.h"
+#include "esp_vfs_fat.h"
+#include "ff.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -754,6 +756,27 @@ static void fs_closedir(papp_dir_t *d)
     SVC_LEAVE();
 }
 
+static int fs_volume_info(const char *mount_path, papp_fs_volume_info_t *out)
+{
+    if (!mount_path || !out) return -1;
+    uint8_t fat_type = 0;
+    memset(out, 0, sizeof(*out));
+    SVC_ENTER();
+    esp_err_t err = esp_vfs_fat_info(mount_path, &out->total_bytes, &out->free_bytes);
+    if (err == ESP_OK) err = esp_vfs_fat_get_type(mount_path, &fat_type);
+    if (err == ESP_OK) {
+        switch (fat_type) {
+        case FS_FAT12: out->type = PAPP_FS_TYPE_FAT12; break;
+        case FS_FAT16: out->type = PAPP_FS_TYPE_FAT16; break;
+        case FS_FAT32: out->type = PAPP_FS_TYPE_FAT32; break;
+        case FS_EXFAT: out->type = PAPP_FS_TYPE_EXFAT; break;
+        default: out->type = PAPP_FS_TYPE_UNKNOWN; break;
+        }
+    }
+    SVC_LEAVE();
+    return err == ESP_OK ? 0 : -1;
+}
+
 static const papp_if_fs_t s_if_fs = {
     .hdr = { PAPP_IF_FS, PAPP_IF_FS_VER, sizeof(papp_if_fs_t) },
     .open   = fs_open,
@@ -771,6 +794,7 @@ static const papp_if_fs_t s_if_fs = {
     .opendir  = fs_opendir,
     .readdir  = fs_readdir,
     .closedir = fs_closedir,
+    .volume_info = fs_volume_info,
 };
 
 /* â”€â”€ Registry & run bookkeeping â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
