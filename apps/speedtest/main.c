@@ -8,6 +8,7 @@
  * replacement for the Speedtest.net browser test.
  */
 #include <ctype.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,7 +65,14 @@ static server_t s_selected_server;
 static int s_server_count, s_selected_index;
 static bool s_selected_valid;
 static bool s_show_server = true;
-static int s_focus_control;
+enum {
+    FOCUS_START = 0,
+    FOCUS_CHANGE_SERVER,
+    FOCUS_SERVER_LABEL,
+    FOCUS_CLOSE,
+    FOCUS_COUNT,
+};
+static int s_focus_control = FOCUS_START;
 static char s_server[96];
 static char s_status[96] = "Ready to test";
 static papp_thread_t *s_worker;
@@ -548,9 +556,9 @@ static int test_thread(void *arg)
 static void act(int id, int x)
 {
     (void)x;
-    if (id == UI_ID_CLOSE) s_quit = true;
+    if (id == UI_ID_CLOSE) { s_quit = true; s_focus_control = FOCUS_CLOSE; }
     else if (id == ACT_START) {
-        s_focus_control = 0;
+        s_focus_control = FOCUS_START;
         if (!s_worker) {
             s_cancel = 0;
             s_worker = papp_thread_create(test_thread, NULL,
@@ -558,7 +566,7 @@ static void act(int id, int x)
             if (!s_worker) set_status(ST_ERROR, 0, "Could not start the test worker");
         }
     } else if (id == ACT_CHANGE) {
-        s_focus_control = 1;
+        s_focus_control = FOCUS_CHANGE_SERVER;
         if (!s_worker) {
             s_cancel = 0;
             s_worker = papp_thread_create(change_server_thread, NULL,
@@ -567,13 +575,41 @@ static void act(int id, int x)
         }
     } else if (id == ACT_TOGGLE_SERVER) {
         s_show_server = !s_show_server;
-        s_focus_control = 2;
+        s_focus_control = FOCUS_SERVER_LABEL;
     } else if (id == ACT_CANCEL && s_worker) {
         s_cancel = 1;
         if (s_result_lock) papp_mutex_lock(s_result_lock);
         snprintf(s_status, sizeof(s_status), "Cancelling after current request...");
         if (s_result_lock) papp_mutex_unlock(s_result_lock);
     }
+}
+
+static void move_focus(uint32_t direction, bool running)
+{
+    static const int center_x[FOCUS_COUNT] = { 146, 639, 712, 760 };
+    static const int center_y[FOCUS_COUNT] = { 444, 444, 400, 32 };
+    if (direction != PAPP_BTN_LEFT && direction != PAPP_BTN_RIGHT &&
+        direction != PAPP_BTN_UP && direction != PAPP_BTN_DOWN) return;
+
+    int current = s_focus_control;
+    int best = -1;
+    long best_distance = LONG_MAX;
+    for (int candidate = 0; candidate < FOCUS_COUNT; candidate++) {
+        if (candidate == current || (running && candidate == FOCUS_CHANGE_SERVER)) continue;
+        int dx = center_x[candidate] - center_x[current];
+        int dy = center_y[candidate] - center_y[current];
+        int primary, lateral;
+        if (direction == PAPP_BTN_LEFT) { if (dx >= 0) continue; primary = -dx; lateral = dy; }
+        else if (direction == PAPP_BTN_RIGHT) { if (dx <= 0) continue; primary = dx; lateral = dy; }
+        else if (direction == PAPP_BTN_UP) { if (dy >= 0) continue; primary = -dy; lateral = dx; }
+        else { if (dy <= 0) continue; primary = dy; lateral = dx; }
+
+        /* Favor the requested direction while still choosing the nearest
+         * target when controls are staggered (for example Server → Close). */
+        long distance = (long)primary * primary + 4L * lateral * lateral;
+        if (distance < best_distance) { best = candidate; best_distance = distance; }
+    }
+    if (best >= 0) s_focus_control = best;
 }
 
 static void draw_history_graph(int x, int y, int w, int h, const double *samples, unsigned count, uint16_t tint)
@@ -668,6 +704,20 @@ static void draw_round_outline(int x, int y, int w, int h, uint16_t color)
     ui_disc(left + radius, top, 1.5f, color, 255);
 }
 
+static void draw_close_outline(uint16_t color)
+{
+    float previous_x = 760 + 27;
+    float previous_y = 32;
+    for (int i = 1; i <= 32; i++) {
+        float angle = (float)i * (6.28318530718f / 32.0f);
+        float x = 760 + cosf(angle) * 27;
+        float y = 32 + sinf(angle) * 27;
+        ui_line(previous_x, previous_y, x, y, 2, color);
+        previous_x = x;
+        previous_y = y;
+    }
+}
+
 static void draw_screen(void)
 {
     if (!s_surface) return;
@@ -716,11 +766,13 @@ static void draw_screen(void)
     else ui_button(36, 420, 220, 48, "Cancel", C_RED, ACT_CANCEL);
     ui_button(514, 420, 250, 48, "Change Server", C_RAISED, ACT_CHANGE);
     ui_text_c(ui_small, 385, 440, "D-pad + A", C_DIM);
-    if (!running && s_focus_control == 0) {
+    if (s_focus_control == FOCUS_CLOSE) {
+        draw_close_outline(C_ORANGE);
+    } else if (!running && s_focus_control == FOCUS_START) {
         draw_round_outline(36, 420, 220, 48, C_ORANGE);
-    } else if (!running && s_focus_control == 1) {
+    } else if (!running && s_focus_control == FOCUS_CHANGE_SERVER) {
         draw_round_outline(514, 420, 250, 48, C_ORANGE);
-    } else if (!running && s_focus_control == 2) {
+    } else if (s_focus_control == FOCUS_SERVER_LABEL) {
         draw_round_outline(660, 382, 104, 36, C_ORANGE);
     }
     ui_end(s_surface);
@@ -745,10 +797,16 @@ int main(int argc, char **argv)
         uint32_t pressed = buttons & ~s_prev_pad_buttons;
         s_prev_pad_buttons = buttons;
         bool running = s_state == ST_DISCOVER || s_state == ST_LATENCY || s_state == ST_DOWNLOAD || s_state == ST_UPLOAD;
-        if (!running && (pressed & (PAPP_BTN_LEFT | PAPP_BTN_RIGHT | PAPP_BTN_UP | PAPP_BTN_DOWN)))
-            s_focus_control = (s_focus_control + 1) % 3;
-        if (pressed & PAPP_BTN_A)
-            act(s_focus_control == 0 ? ACT_START : s_focus_control == 1 ? ACT_CHANGE : ACT_TOGGLE_SERVER, 0);
+        if (pressed & PAPP_BTN_LEFT) move_focus(PAPP_BTN_LEFT, running);
+        else if (pressed & PAPP_BTN_RIGHT) move_focus(PAPP_BTN_RIGHT, running);
+        else if (pressed & PAPP_BTN_UP) move_focus(PAPP_BTN_UP, running);
+        else if (pressed & PAPP_BTN_DOWN) move_focus(PAPP_BTN_DOWN, running);
+        if (pressed & PAPP_BTN_A) {
+            if (s_focus_control == FOCUS_CLOSE) act(UI_ID_CLOSE, 0);
+            else if (s_focus_control == FOCUS_START) act(running ? ACT_CANCEL : ACT_START, 0);
+            else if (s_focus_control == FOCUS_CHANGE_SERVER && !running) act(ACT_CHANGE, 0);
+            else if (s_focus_control == FOCUS_SERVER_LABEL) act(ACT_TOGGLE_SERVER, 0);
+        }
         if (pressed & PAPP_BTN_B) act(ACT_CANCEL, 0);
         if (pressed & PAPP_BTN_X) s_quit = true;
         if (pressed & PAPP_BTN_Y) act(ACT_CHANGE, 0);
