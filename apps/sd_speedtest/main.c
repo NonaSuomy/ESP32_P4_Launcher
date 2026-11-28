@@ -241,23 +241,26 @@ static void draw_screen(void)
         ui_text_c(ui_large, 209, 224, value, C_OUT);
         snprintf(value, sizeof(value), "%.2f MiB/s", r.read_mib_s);
         ui_text_c(ui_large, 591, 224, value, C_GREEN);
+        snprintf(value, sizeof(value), "%u MiB written", (unsigned)(r.verified_bytes / (1024u * 1024u)));
+        ui_text_c(ui_small, 209, 286, value, C_DIM);
         snprintf(value, sizeof(value), "%u MiB verified", (unsigned)(r.verified_bytes / (1024u * 1024u)));
-        ui_text_c(ui_small, 400, 286, value, C_DIM);
+        ui_text_c(ui_small, 591, 286, value, C_DIM);
     } else {
         ui_text_c(ui_large, 209, 224, "—", C_OUT);
         ui_text_c(ui_large, 591, 224, "—", C_GREEN);
-        ui_text_c(ui_small, 400, 286, "Results appear here when the test completes", C_DIM);
+        ui_text_c(ui_small, 209, 286, "Write speed", C_DIM);
+        ui_text_c(ui_small, 591, 286, "Read speed", C_DIM);
     }
 
-    ui_rrect(48, 350, 704, 18, 9, C_RAISED);
-    int filled = (r.progress * 704) / 1000;
+    ui_rrect(48, 350, 632, 18, 9, C_RAISED);
+    int filled = (r.progress * 632) / 1000;
     if (filled > 0) ui_rrect(48, 350, filled, 18, 9, C_BLUE);
     snprintf(value, sizeof(value), "%d%%", r.progress / 10);
-    ui_text_c(ui_small, 400, 389, value, C_TEXT);
+    ui_text_r(ui_small, 752, 359, value, C_TEXT);
 
-    ui_button(292, 414, 216, 50, is_running(r.state) ? "Cancel" : "Run Test",
+    ui_button(292, 396, 216, 50, is_running(r.state) ? "Cancel" : "Run Test",
               is_running(r.state) ? C_RED : C_BLUE, ACT_RUN);
-    ui_text_c(ui_small, 400, 402, "A / touch: start   •   B: cancel   •   X: exit", C_DIM);
+    ui_text_c(ui_small, 400, 460, "A / touch: start   •   B: cancel   •   X: exit", C_DIM);
     ui_end(s_surface);
 }
 
