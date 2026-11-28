@@ -688,6 +688,7 @@ static void draw_screen(void)
 
     ui_begin(s_surface);
     ui_text_l(ui_large, 36, 48, "Network Speedtest", C_TEXT);
+    ui_button(720, 16, 44, 40, "X", C_RAISED, UI_ID_CLOSE);
     ui_text_l(ui_small, 38, 92, "Ookla-compatible server - one connection per direction", C_DIM);
     ui_text_n(ui_small, 38, ui_line_top(ui_small, 120), r.status, (int)strlen(r.status),
               r.state == ST_ERROR ? C_RED : C_IN, 760);
